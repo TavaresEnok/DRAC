@@ -220,7 +220,7 @@ export class CamerasService {
     }
 
     let status: CameraStatus = CameraStatus.OFFLINE;
-    if ((rtspReachableAny || rtspReachable) && onvifReachable && (input.username ? rtspAuthOk : true)) {
+    if (rtspReachable && onvifReachable && (input.username ? selectedRtspPortAuthOk : true)) {
       status = CameraStatus.ONLINE;
     }
 
@@ -431,18 +431,29 @@ export class CamerasService {
             ],
             { stdio: ['ignore', 'pipe', 'pipe'] },
           );
+          let settled = false;
+          const finish = (value: { ok: boolean; error: string | null }) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(killTimer);
+            resolve(value);
+          };
+          const killTimer = setTimeout(() => {
+            proc.kill('SIGKILL');
+            finish({ ok: false, error: 'ffprobe timeout' });
+          }, 7000);
           let stderr = '';
           proc.stderr.on('data', (chunk) => {
             stderr += chunk.toString();
           });
-          proc.on('error', (error) => resolve({ ok: false, error: error.message }));
+          proc.on('error', (error) => finish({ ok: false, error: error.message }));
           proc.on('close', (code) => {
             if (code === 0) {
-              resolve({ ok: true, error: null });
+              finish({ ok: true, error: null });
               return;
             }
             const clean = stderr.trim();
-            resolve({ ok: false, error: clean.length ? clean.slice(0, 300) : `ffprobe exit ${code ?? -1}` });
+            finish({ ok: false, error: clean.length ? clean.slice(0, 300) : `ffprobe exit ${code ?? -1}` });
           });
         });
 

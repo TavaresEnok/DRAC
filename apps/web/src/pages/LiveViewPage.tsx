@@ -288,7 +288,7 @@ export default function LiveViewPage() {
               </div>
 
               <div className="grid grid-cols-[1fr_112px] gap-1.5">
-                <Select value={zoneFilter} onValueChange={setZonaFilter}>
+                <Select value={zoneFilter} onValueChange={setZoneFilter}>
                   <SelectTrigger className="h-8 text-[10px]">
                     <Filter className="w-3 h-3 mr-1.5 text-[hsl(var(--muted-foreground))]" />
                     <SelectValue />
