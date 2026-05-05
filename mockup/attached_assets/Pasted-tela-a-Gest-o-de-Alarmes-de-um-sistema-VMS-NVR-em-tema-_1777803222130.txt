@@ -1,0 +1,94 @@
+tela é a Gestão de Alarmes de um sistema VMS/NVR, em tema escuro, voltada para operação de segurança em tempo real.
+
+Ela é dividida em duas áreas principais:
+
+1. Painel lateral de alarmes
+
+À esquerda existe uma coluna fixa com a lista de ocorrências. No topo aparece o caminho:
+
+Operações > Alarmes > Gestão de Alarmes
+
+Logo abaixo há três abas de filtro:
+
+Ativos, Reconhecidos e Resolvidos.
+
+A aba Ativos está selecionada em azul. A lista mostra vários alarmes em cards verticais, cada um com:
+
+nível de severidade, como Crítico, Alto e Médio;
+código do alarme, como ALM-001;
+tempo decorrido ou horário;
+título da ocorrência;
+câmera ou área relacionada.
+
+O primeiro item está selecionado com destaque visual:
+
+Intrusão Detectada
+CAM-035 • Perímetro Sul - Setor 4
+
+Os outros exemplos exibidos são:
+
+Temperatura Crítica do Servidor
+Sabotagem Detectada
+Acesso Não Autorizado
+Movimento em Área Restrita
+Perda de Sinal de Vídeo
+
+A coluna lateral tem aparência operacional, com fundo escuro, bordas discretas e badges coloridos para indicar prioridade.
+
+2. Área principal de detalhes do alarme
+
+No centro da tela aparece o detalhe do alarme selecionado.
+
+O título principal é:
+
+Intrusão Detectada
+
+Ao lado há um selo vermelho:
+
+CRÍTICO
+
+Abaixo aparecem os metadados:
+
+ALM-001 • 03/05/2026, 03:06:11
+
+No canto superior direito existem dois botões de ação:
+
+Reconhecer — botão azul, ação principal.
+Escalar — botão escuro secundário.
+
+Em seguida há um card com a descrição da ocorrência:
+
+Movimento detectado no perímetro sul fora do horário comercial.
+
+Depois aparece a seção Câmera Associada, com um link para Ver Gravação.
+
+O card da câmera mostra:
+
+Câmera 35 (CAM-035)
+Perímetro Sul - Setor 4
+Status ONLINE com ponto verde.
+
+Abaixo há um grande preview de vídeo em formato widescreen, simulando a câmera ao vivo ou gravação. O feed está escuro, com grade discreta, identificação da câmera, horário UTC e indicadores como REC e PTZ.
+
+3. Log de atividades
+
+Na parte inferior há um card chamado:
+
+Log de Atividades do Alarme
+
+Ele registra o histórico da ocorrência. O primeiro evento mostra:
+
+03:06:11 — Alarme acionado automaticamente pelo sistema de VDA.
+
+Estilo visual
+
+A interface usa um visual dark, técnico e operacional, com bastante contraste, tipografia compacta e componentes densos. Parece uma tela feita para um operador de segurança acompanhar eventos críticos rapidamente.
+
+A estética lembra sistemas de monitoramento profissional, com foco em:
+
+alarmes ativos;
+priorização por severidade;
+ação rápida de reconhecimento;
+acesso à câmera vinculada;
+histórico da ocorrência;
+operação em tempo real.

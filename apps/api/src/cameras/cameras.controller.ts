@@ -1,0 +1,435 @@
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { UserRole, CameraStatus } from '@prisma/client';
+import { type Request, type Response } from 'express';
+import { AccessControlService } from '../access-control/access-control.service';
+import { AuditService } from '../audit/audit.service';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { type AuthUser } from '../common/types/auth-user.type';
+import { AlarmsService } from '../alarms/alarms.service';
+import { CamerasService } from './cameras.service';
+import { CreateCameraDto } from './dto/create-camera.dto';
+import { TestCameraConnectionDto } from './dto/test-camera-connection.dto';
+import { UpdateCameraDto } from './dto/update-camera.dto';
+import { Public } from '../auth/decorators/public.decorator';
+import { ServiceTokenGuard } from '../auth/guards/service-token.guard';
+
+@Controller('cameras')
+export class CamerasController {
+  constructor(
+    private readonly camerasService: CamerasService,
+    private readonly alarmsService: AlarmsService,
+    private readonly accessControlService: AccessControlService,
+    private readonly auditService: AuditService,
+  ) {}
+
+  private async withCapabilities(user: AuthUser, camera: Record<string, unknown> & { id: string }) {
+    if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
+      return { ...camera, canView: true, canControl: true, canRecord: true, canAdmin: true };
+    }
+    const [canView, canControl, canRecord, canAdmin] = await Promise.all([
+      this.accessControlService.canViewCamera(user, camera.id),
+      this.accessControlService.canControlCamera(user, camera.id),
+      this.accessControlService.canRecordCamera(user, camera.id),
+      this.accessControlService.canAdminCamera(user, camera.id),
+    ]);
+    return { ...camera, canView, canControl, canRecord, canAdmin };
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Post()
+  async create(@CurrentUser() user: AuthUser, @Body() dto: CreateCameraDto, @Req() req: Request) {
+    const camera = await this.camerasService.create(dto);
+    await this.auditService.log(user.id, 'camera.create', 'Camera', camera.id, { name: camera.name }, req);
+    return camera;
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('test-connection-draft')
+  async testConnectionDraft(@CurrentUser() user: AuthUser, @Body() dto: TestCameraConnectionDto, @Req() req: Request) {
+    const result = await this.camerasService.testConnectionDraft(dto);
+    await this.auditService.log(user.id, 'camera.test_connection_draft', 'Camera', null, result, req);
+    return result;
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get()
+  async findAll(@CurrentUser() user: AuthUser) {
+    const cameras =
+      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
+        ? await this.camerasService.findAll()
+        : await this.camerasService.findAll(await this.accessControlService.getAccessibleCameraIds(user));
+
+    return Promise.all(cameras.map((camera: any) => this.withCapabilities(user, camera)));
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('events')
+  async listEvents(@CurrentUser() user: AuthUser, @Query('cameraId') cameraId?: string, @Query('limit') limit?: string) {
+    if (cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, cameraId);
+    }
+    const ids = cameraId ? [cameraId] : await this.accessControlService.getAccessibleCameraIds(user);
+    return this.camerasService.listEvents(ids, limit ? parseInt(limit, 10) : 50);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('events-feed')
+  async listEventsFeed(
+    @CurrentUser() user: AuthUser,
+    @Query('cameraId') cameraId?: string,
+    @Query('type') type?: string,
+    @Query('severity') severity?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    if (cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, cameraId);
+    }
+    const accessibleCameraIds =
+      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
+        ? (await this.camerasService.findAll()).map((c: any) => c.id)
+        : await this.accessControlService.getAccessibleCameraIds(user);
+    return this.camerasService.listEventsFeed({
+      accessibleCameraIds,
+      cameraId,
+      type,
+      severity,
+      from,
+      to,
+      limit: limit ? parseInt(limit, 10) : 100,
+      offset: offset ? parseInt(offset, 10) : 0,
+    });
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('overview')
+  async getOverview(@CurrentUser() user: AuthUser) {
+    if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
+      return this.camerasService.getOverview();
+    }
+    const ids = await this.accessControlService.getAccessibleCameraIds(user);
+    return this.camerasService.getOverview(ids);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('incidents')
+  async listIncidents(
+    @CurrentUser() user: AuthUser,
+    @Query('cameraId') cameraId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('acknowledged') acknowledged?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, cameraId);
+    }
+    const accessibleCameraIds =
+      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
+        ? (await this.camerasService.findAll()).map((c: any) => c.id)
+        : await this.accessControlService.getAccessibleCameraIds(user);
+
+    const ack =
+      acknowledged === undefined ? undefined : ['1', 'true', 'yes', 'sim'].includes(acknowledged.toLowerCase());
+
+    return this.camerasService.listIncidents({
+      accessibleCameraIds,
+      cameraId,
+      from,
+      to,
+      acknowledged: ack,
+      limit: limit ? parseInt(limit, 10) : 50,
+    });
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('alarms')
+  async listAlarms(
+    @CurrentUser() user: AuthUser,
+    @Query('cameraId') cameraId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('status') status?: 'OPEN' | 'ACKED' | 'RESOLVED',
+    @Query('limit') limit?: string,
+  ) {
+    if (cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, cameraId);
+    }
+    const accessibleCameraIds =
+      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
+        ? (await this.camerasService.findAll()).map((c: any) => c.id)
+        : await this.accessControlService.getAccessibleCameraIds(user);
+
+    return this.alarmsService.list({
+      accessibleCameraIds,
+      cameraId,
+      from,
+      to,
+      status,
+      limit: limit ? parseInt(limit, 10) : 100,
+    });
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('incidents/:eventId/ack')
+  async acknowledgeIncident(
+    @CurrentUser() user: AuthUser,
+    @Param('eventId') eventId: string,
+    @Body() body: { note?: string },
+    @Req() req: Request,
+  ) {
+    const incident = await this.camerasService.ensureIncidentExists(eventId);
+    await this.accessControlService.assertCanViewCamera(user, incident.cameraId);
+    const event = await this.camerasService.acknowledgeIncident(eventId, { id: user.id, name: user.name }, body.note);
+    await this.auditService.log(user.id, 'incident.ack', 'CameraEvent', eventId, { cameraId: event.cameraId }, req);
+    return event;
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('alarms/:eventId/ack')
+  async acknowledgeAlarm(
+    @CurrentUser() user: AuthUser,
+    @Param('eventId') eventId: string,
+    @Body() body: { note?: string },
+    @Req() req: Request,
+  ) {
+    const alarm = await this.alarmsService.ensureExists(eventId);
+    if (alarm.cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, alarm.cameraId);
+    }
+    const updated = await this.alarmsService.acknowledge(eventId, { id: user.id, name: user.name }, body.note);
+    await this.auditService.log(user.id, 'alarm.ack', 'AlarmInstance', eventId, { cameraId: updated.cameraId }, req);
+    return updated;
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('alarms/:eventId/resolve')
+  async resolveAlarm(
+    @CurrentUser() user: AuthUser,
+    @Param('eventId') eventId: string,
+    @Body() body: { note?: string },
+    @Req() req: Request,
+  ) {
+    const alarm = await this.alarmsService.ensureExists(eventId);
+    if (alarm.cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, alarm.cameraId);
+    }
+    const updated = await this.alarmsService.resolve(eventId, { id: user.id, name: user.name }, body.note);
+    await this.auditService.log(user.id, 'alarm.resolve', 'AlarmInstance', eventId, { cameraId: updated.cameraId }, req);
+    return updated;
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('incidents/ack/bulk')
+  async acknowledgeIncidentsBulk(
+    @CurrentUser() user: AuthUser,
+    @Body() body: { eventIds: string[]; note?: string },
+    @Req() req: Request,
+  ) {
+    const eventIds = Array.isArray(body.eventIds) ? [...new Set(body.eventIds)].slice(0, 200) : [];
+    const results: Array<{ eventId: string; status: 'acked' | 'skipped'; reason?: string }> = [];
+    for (const eventId of eventIds) {
+      try {
+        const incident = await this.camerasService.ensureIncidentExists(eventId);
+        await this.accessControlService.assertCanViewCamera(user, incident.cameraId);
+        await this.camerasService.acknowledgeIncident(eventId, { id: user.id, name: user.name }, body.note);
+        await this.auditService.log(user.id, 'incident.ack.bulk', 'CameraEvent', eventId, { cameraId: incident.cameraId }, req);
+        results.push({ eventId, status: 'acked' });
+      } catch (error) {
+        results.push({ eventId, status: 'skipped', reason: (error as Error).message });
+      }
+    }
+    return {
+      totalRequested: eventIds.length,
+      acked: results.filter((item) => item.status === 'acked').length,
+      skipped: results.filter((item) => item.status === 'skipped').length,
+      results,
+    };
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('incidents/export.csv')
+  async exportIncidentsCsv(
+    @CurrentUser() user: AuthUser,
+    @Query('cameraId') cameraId: string | undefined,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Query('acknowledged') acknowledged: string | undefined,
+    @Res() res: Response,
+  ) {
+    if (cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, cameraId);
+    }
+    const accessibleCameraIds =
+      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
+        ? (await this.camerasService.findAll()).map((c: any) => c.id)
+        : await this.accessControlService.getAccessibleCameraIds(user);
+
+    const ack =
+      acknowledged === undefined ? undefined : ['1', 'true', 'yes', 'sim'].includes(acknowledged.toLowerCase());
+    const csv = await this.camerasService.exportIncidentsCsv({
+      accessibleCameraIds,
+      cameraId,
+      from,
+      to,
+      acknowledged: ack,
+      limit: 5000,
+    });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="incidents-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(csv);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('health-scores')
+  async getHealthScores(@CurrentUser() user: AuthUser) {
+    if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
+      return this.camerasService.getHealthScores();
+    }
+    const ids = await this.accessControlService.getAccessibleCameraIds(user);
+    return this.camerasService.getHealthScores(ids);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('reliability')
+  async getReliability(@CurrentUser() user: AuthUser, @Query('days') days?: string) {
+    const safeDays = days ? parseInt(days, 10) : 7;
+    if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
+      return this.camerasService.getReliabilityReport(safeDays);
+    }
+    const ids = await this.accessControlService.getAccessibleCameraIds(user);
+    return this.camerasService.getReliabilityReport(safeDays, ids);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('reliability-trend')
+  async getReliabilityTrend(
+    @CurrentUser() user: AuthUser,
+    @Query('days') days?: string,
+    @Query('cameraId') cameraId?: string,
+  ) {
+    const safeDays = days ? parseInt(days, 10) : 30;
+    if (cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, cameraId);
+    }
+    if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
+      return this.camerasService.getReliabilityTrend(safeDays, undefined, cameraId);
+    }
+    const ids = await this.accessControlService.getAccessibleCameraIds(user);
+    return this.camerasService.getReliabilityTrend(safeDays, ids, cameraId);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('alerts')
+  async getAlerts(@CurrentUser() user: AuthUser) {
+    if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
+      return this.camerasService.getAlerts();
+    }
+    const ids = await this.accessControlService.getAccessibleCameraIds(user);
+    return this.camerasService.getAlerts(ids);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get(':id/diagnostics')
+  async getDiagnostics(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    await this.accessControlService.assertCanViewCamera(user, id);
+    return this.camerasService.getDiagnostics(id);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get(':id')
+  async findOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    await this.accessControlService.assertCanViewCamera(user, id);
+    const camera = await this.camerasService.findOne(id);
+    return this.withCapabilities(user, camera);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Patch(':id')
+  async update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: UpdateCameraDto, @Req() req: Request) {
+    await this.accessControlService.assertCanAdminCamera(user, id);
+    const camera = await this.camerasService.update(id, dto);
+    await this.auditService.log(
+      user.id,
+      'camera.update',
+      'Camera',
+      camera.id,
+      { name: camera.name, siteId: camera.siteId, areaId: camera.areaId, groupId: camera.groupId },
+      req,
+    );
+    return camera;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Delete(':id')
+  async remove(@CurrentUser() user: AuthUser, @Param('id') id: string, @Req() req: Request) {
+    await this.accessControlService.assertCanAdminCamera(user, id);
+    const camera = await this.camerasService.remove(id);
+    await this.auditService.log(user.id, 'camera.delete', 'Camera', camera.id, { name: camera.name }, req);
+    return camera;
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post(':id/test-connection')
+  async testConnection(@CurrentUser() user: AuthUser, @Param('id') id: string, @Req() req: Request) {
+    if (user.role === UserRole.OPERATOR) {
+      const canRecord = await this.accessControlService.canRecordCamera(user, id);
+      const canAdmin = await this.accessControlService.canAdminCamera(user, id);
+      if (!canRecord && !canAdmin) {
+        await this.accessControlService.assertCanRecordCamera(user, id);
+      }
+    }
+    const result = await this.camerasService.testConnection(id);
+    await this.auditService.log(user.id, 'camera.test_connection', 'Camera', id, { status: result.status }, req);
+    return result;
+  }
+
+  @Public()
+  @UseGuards(ServiceTokenGuard)
+  @Post('internal/:id/status')
+  async internalUpdateStatus(
+    @Param('id') id: string,
+    @Body() dto: { status: CameraStatus; lastSeenAt?: string },
+  ) {
+    return this.camerasService.updateStatus(id, dto.status, dto.lastSeenAt);
+  }
+
+  @Public()
+  @UseGuards(ServiceTokenGuard)
+  @Post('internal/:id/events')
+  async internalRegisterEvent(
+    @Param('id') id: string,
+    @Body() dto: { type: string; severity?: string; message?: string; metadata?: any; value?: string | number; occurredAt?: string },
+  ) {
+    const metadata = {
+      ...(dto.metadata ?? {}),
+      ...(dto.value !== undefined ? { value: dto.value } : {}),
+    };
+    return this.camerasService.registerEvent(
+      id,
+      dto.type,
+      dto.severity ?? 'INFO',
+      dto.message ?? `Evento ${dto.type} detectado`,
+      metadata,
+      dto.occurredAt ? new Date(dto.occurredAt) : undefined,
+    );
+  }
+
+  @Public()
+  @UseGuards(ServiceTokenGuard)
+  @Get('internal/list')
+  async internalList() {
+    return this.camerasService.findAllInternal();
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get(':id/status')
+  async getStatus(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    await this.accessControlService.assertCanViewCamera(user, id);
+    return this.camerasService.getStatus(id);
+  }
+
+}

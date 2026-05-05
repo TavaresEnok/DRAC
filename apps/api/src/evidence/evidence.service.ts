@@ -1,0 +1,126 @@
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createHash, createHmac } from 'crypto';
+
+@Injectable()
+export class EvidenceService {
+  private readonly hmacSecret: string;
+  private readonly hmacKeyId: string;
+
+  constructor(private readonly configService: ConfigService) {
+    this.hmacSecret = this.configService.get<string>('evidenceHmacSecret') ?? '';
+    this.hmacKeyId = this.configService.get<string>('evidenceHmacKeyId') ?? 'local-v1';
+  }
+
+  signPackage(payload: Record<string, unknown>) {
+    this.assertSecretConfigured();
+
+    const payloadCanonical = this.stableStringify(payload);
+    if (payloadCanonical.length > 10_000_000) {
+      throw new ServiceUnavailableException('Payload de evidência excede o tamanho permitido para assinatura.');
+    }
+
+    const packageHashValue = this.sha256Hex(payloadCanonical);
+    const signatureValue = this.hmacSha256Hex(packageHashValue);
+
+    return {
+      packageHash: {
+        algorithm: 'SHA-256',
+        value: packageHashValue,
+      },
+      signature: {
+        algorithm: 'HMAC-SHA-256',
+        value: signatureValue,
+        keyId: this.hmacKeyId,
+      },
+      signedAt: new Date().toISOString(),
+    };
+  }
+
+  verifyPackage(evidencePackage: Record<string, unknown>) {
+    this.assertSecretConfigured();
+
+    const packageHashEntry = this.extractObject(evidencePackage.packageHash);
+    const signatureEntry = this.extractObject(evidencePackage.signature);
+
+    const payloadBase = this.omitInternalFields(evidencePackage);
+    const canonical = this.stableStringify(payloadBase);
+    const computedHash = this.sha256Hex(canonical);
+    const computedSignature = this.hmacSha256Hex(computedHash);
+
+    const providedHash = typeof packageHashEntry?.value === 'string' ? packageHashEntry.value : null;
+    const providedSignature = typeof signatureEntry?.value === 'string' ? signatureEntry.value : null;
+
+    const hashValid = Boolean(providedHash && providedHash === computedHash);
+    const signatureValid = Boolean(providedSignature && providedSignature === computedSignature);
+
+    return {
+      ok: hashValid && signatureValid,
+      hashValid,
+      signatureValid,
+      details: [
+        hashValid ? 'Hash SHA-256 válido.' : 'Hash SHA-256 inválido.',
+        signatureValid ? 'Assinatura HMAC válida.' : 'Assinatura HMAC inválida ou ausente.',
+      ],
+      expected: {
+        packageHash: {
+          algorithm: 'SHA-256',
+          value: computedHash,
+        },
+        signature: {
+          algorithm: 'HMAC-SHA-256',
+          value: computedSignature,
+          keyId: this.hmacKeyId,
+        },
+      },
+      provided: {
+        packageHash: providedHash,
+        signature: providedSignature,
+      },
+      verifiedAt: new Date().toISOString(),
+    };
+  }
+
+  private omitInternalFields(value: Record<string, unknown>) {
+    const { packageHash: _packageHash, signature: _signature, signedAt: _signedAt, ...base } = value;
+    return base;
+  }
+
+  private assertSecretConfigured() {
+    if (!this.hmacSecret || this.hmacSecret.length < 16) {
+      throw new ServiceUnavailableException('EVIDENCE_HMAC_SECRET não configurado ou inválido.');
+    }
+  }
+
+  private sha256Hex(value: string) {
+    return createHash('sha256').update(value).digest('hex');
+  }
+
+  private hmacSha256Hex(value: string) {
+    return createHmac('sha256', this.hmacSecret).update(value).digest('hex');
+  }
+
+  private stableStringify(value: unknown): string {
+    return JSON.stringify(this.normalizeForStableJson(value));
+  }
+
+  private normalizeForStableJson(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.normalizeForStableJson(item));
+    }
+
+    if (value && typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => [key, this.normalizeForStableJson(item)] as const);
+      return Object.fromEntries(entries);
+    }
+
+    return value;
+  }
+
+  private extractObject(value: unknown) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+  }
+}

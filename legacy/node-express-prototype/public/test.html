@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Teste Camera IP</title>
+</head>
+<body>
+    <h1>Teste de Conexão - Camera IP 172.20.0.219 (Dahua)</h1>
+    <p>Nota: O navegador pode pedir credenciais. Use admin / 112233ajust</p>
+    
+    <h2>Teste 1: mjpg/video.cgi (stream MJPEG)</h2>
+    <img src="http://172.20.0.219/cgi-bin/mjpg/video.cgi" width="320" height="240" onerror="this.style.display='none'; document.getElementById('err1').style.display='block'">
+    <p id="err1" style="display:none; color:red;">Falha ao conectar mjpg/video.cgi</p>
+    
+    <h2>Teste 2: video.cgi</h2>
+    <img src="http://172.20.0.219/cgi-bin/video.cgi" width="320" height="240" onerror="this.style.display='none'; document.getElementById('err2').style.display='block'">
+    <p id="err2" style="display:none; color:red;">Falha ao conectar video.cgi</p>
+    
+    <h2>Teste 3: snapshot.cgi (imagem estática)</h2>
+    <img src="http://172.20.0.219/cgi-bin/snapshot.cgi" width="320" height="240" onerror="this.style.display='none'; document.getElementById('err3').style.display='block'">
+    <p id="err3" style="display:none; color:red;">Falha ao conectar snapshot.cgi</p>
+    
+    <h2>Teste 4: Via proxy (com Digest Auth)</h2>
+    <img src="/camera-stream" width="320" height="240" onerror="this.style.display='none'; document.getElementById('err4').style.display='block'">
+    <p id="err4" style="display:none; color:red;">Falha ao conectar via proxy</p>
+    
+    <h2>Links diretos para testar no navegador:</h2>
+    <ul>
+        <li><a href="http://172.20.0.219/cgi-bin/mjpg/video.cgi" target="_blank">http://172.20.0.219/cgi-bin/mjpg/video.cgi</a></li>
+        <li><a href="http://172.20.0.219/cgi-bin/video.cgi" target="_blank">http://172.20.0.219/cgi-bin/video.cgi</a></li>
+        <li><a href="http://172.20.0.219/cgi-bin/snapshot.cgi" target="_blank">http://172.20.0.219/cgi-bin/snapshot.cgi</a></li>
+        <li><a href="http://172.20.0.219/" target="_blank">http://172.20.0.219/ (interface web)</a></li>
+    </ul>
+</body>
+</html>

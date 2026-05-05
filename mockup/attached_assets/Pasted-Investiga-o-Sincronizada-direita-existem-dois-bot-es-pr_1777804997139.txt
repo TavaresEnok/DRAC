@@ -1,0 +1,104 @@
+Investigação Sincronizada
+
+À direita existem dois botões principais:
+
+Salvar Workspace — para guardar a configuração atual da investigação.
+Exportar Evidência — ação principal, em azul, para exportar trechos de vídeo ou evidências da investigação.
+
+A tela tem foco total em análise operacional. O conteúdo é quase todo ocupado pelos vídeos e pela timeline.
+
+Área principal de câmeras
+
+A maior parte da página é composta por um grid 2x2 com quatro câmeras:
+
+CAM-001 - Câmera 1
+CAM-002 - Câmera 2
+CAM-003 - Câmera 3
+CAM-004 - Câmera 4
+
+Cada bloco de câmera ocupa bastante espaço e tem aparência de feed de vídeo. O fundo é preto com uma grade discreta, simulando a área de reprodução.
+
+Em cada câmera aparecem informações sobrepostas:
+
+No canto superior esquerdo:
+
+código da câmera;
+nome da câmera;
+horário UTC.
+
+No canto superior direito:
+
+indicador vermelho REC;
+indicação PTZ.
+
+Visualmente, os feeds estão bem alinhados, separados por bordas finas. A tela lembra uma estação de análise de CFTV ou sala de monitoramento.
+
+Barra de playback
+
+Abaixo do grid de câmeras há uma barra de controle de reprodução.
+
+Ela contém:
+
+botão de voltar;
+botão de play em destaque azul;
+botão de avançar;
+horário atual da reprodução: 14:23:45;
+controles de velocidade: 0.25x, 0.5x, 1x, 2x, 4x;
+botões extras de marcação/anotação ou comentário.
+
+A velocidade 1x está selecionada em azul.
+
+Essa área funciona como o controle central da investigação, permitindo revisar os vídeos sincronizados.
+
+Timeline sincronizada
+
+Logo abaixo dos controles há uma timeline horizontal, indo aproximadamente de 14:00 até 15:00.
+
+Ela mostra faixas coloridas:
+
+azul: gravação contínua ou período normal;
+amarelo/laranja: trecho de evento ou atenção;
+vermelho: trecho crítico ou alarme;
+marcador vertical azul: ponto exato da reprodução atual.
+
+A timeline parece representar múltiplas câmeras sincronizadas, com eventos sobrepostos no tempo. Isso ajuda o operador a identificar rapidamente em que momento houve ocorrência relevante.
+
+Rodapé operacional
+
+Na parte inferior existe uma barra de status do sistema.
+
+À esquerda aparece:
+
+8 Alarmes Ativos
+
+Em vermelho, indicando que há ocorrências abertas.
+
+No centro/direita aparecem indicadores técnicos:
+
+CPU: 34%
+RAM: 67%
+STR: 78%
+
+Também há tráfego de rede:
+
+↑ 850 Mbps
+↓ 120 Mbps
+
+No canto direito aparece o horário do sistema:
+
+2026-05-03 10:41:36 UTC
+
+Esse rodapé reforça o caráter on-premise e operacional da plataforma, mostrando o estado do servidor local e da infraestrutura.
+
+Estilo visual
+
+O layout usa tema dark operacional, com fundo preto/cinza escuro, linhas finas, texto claro e botões azuis.
+
+A estética é mais próxima de um sistema técnico de segurança, com foco em:
+
+análise de vídeo;
+investigação forense;
+reprodução sincronizada;
+exportação de evidências;
+acompanhamento de alarmes;
+monitoramento de desempenho do servidor.

@@ -1,0 +1,14 @@
+{
+  "name": "vms-platform",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "corepack pnpm -r --parallel dev",
+    "dev:api": "corepack pnpm --filter api dev",
+    "dev:web": "corepack pnpm --filter web dev",
+    "docker:up": "docker compose -f infra/docker-compose.yml up -d",
+    "docker:down": "docker compose -f infra/docker-compose.yml down",
+    "db:migrate": "corepack pnpm --filter api prisma migrate deploy",
+    "db:studio": "corepack pnpm --filter api prisma studio"
+  }
+}

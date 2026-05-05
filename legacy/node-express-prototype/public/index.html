@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Câmera IP · Monitoramento ao Vivo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:       #0d1117;
+            --surface:  #161b22;
+            --border:   #30363d;
+            --text:     #e6edf3;
+            --muted:    #8b949e;
+            --green:    #3fb950;
+            --blue:     #58a6ff;
+            --red:      #f85149;
+            --yellow:   #d29922;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px 16px 40px;
+        }
+
+        /* ── Header ── */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            max-width: 960px;
+            width: 100%;
+            margin-bottom: 20px;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .header-left { display: flex; align-items: center; gap: 10px; }
+
+        .status-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: var(--green);
+            animation: pulse 2s infinite;
+            flex-shrink: 0;
+        }
+        .status-dot.err { background: var(--red); animation: none; }
+        .status-dot.warn { background: var(--yellow); }
+
+        @keyframes pulse {
+            0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(63,185,80,.4); }
+            50%      { opacity:.8; box-shadow: 0 0 0 6px rgba(63,185,80,0); }
+        }
+
+        header h1 { font-size: 16px; font-weight: 600; }
+        header h1 span { color: var(--muted); font-weight: 400; }
+
+        /* badges */
+        .badges { display: flex; gap: 6px; flex-wrap: wrap; }
+        .badge {
+            font-size: 11px; font-weight: 500;
+            padding: 3px 9px;
+            border-radius: 20px;
+            border: 1px solid;
+            white-space: nowrap;
+        }
+        .badge-green  { color: var(--green);  border-color: rgba(63,185,80,.4);  background: rgba(63,185,80,.08); }
+        .badge-red    { color: var(--red);    border-color: rgba(248,81,73,.4);   background: rgba(248,81,73,.08); }
+        .badge-yellow { color: var(--yellow); border-color: rgba(210,153,34,.4);  background: rgba(210,153,34,.08); }
+        .badge-blue   { color: var(--blue);   border-color: rgba(88,166,255,.4);  background: rgba(88,166,255,.08); }
+
+        /* ── Main layout ── */
+        .main-panel {
+            display: flex;
+            gap: 16px;
+            max-width: 960px;
+            width: 100%;
+            align-items: flex-start;
+        }
+
+        /* ── Video ── */
+        .video-wrapper {
+            position: relative;
+            flex: 1;
+            min-width: 0;
+            background: #0a0e14;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            aspect-ratio: 16/9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .video-wrapper img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+            cursor: grab;
+            transition: transform 0.15s ease;
+        }
+        .video-wrapper img:active { cursor: grabbing; }
+
+        .video-label {
+            position: absolute;
+            top: 10px; left: 10px;
+            background: rgba(0,0,0,.65);
+            border: 1px solid rgba(255,255,255,.1);
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 11px; font-weight: 600;
+            color: var(--green);
+            letter-spacing: .05em;
+        }
+
+        .video-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            background: rgba(13,17,23,.85);
+            font-size: 13px;
+            color: var(--muted);
+            display: none;
+        }
+        .video-overlay.show { display: flex; }
+        .video-overlay .spinner {
+            width: 32px; height: 32px;
+            border: 3px solid var(--border);
+            border-top-color: var(--blue);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── PTZ Panel ── */
+        .ptz-panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px;
+            width: 200px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .ptz-panel h2 {
+            font-size: 11px; font-weight: 600;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: .08em;
+        }
+
+        .dpad {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 5px;
+        }
+
+        .dpad-center {
+            display: flex; align-items: center; justify-content: center;
+            background: #1c2129;
+            border-radius: 8px;
+            color: #3d444d;
+            font-size: 14px;
+            aspect-ratio: 1;
+        }
+
+        .ptz-btn {
+            aspect-ratio: 1;
+            background: #21262d;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 16px;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: background .1s, transform .1s, border-color .1s;
+            user-select: none;
+            touch-action: none;
+        }
+        .ptz-btn:hover               { background: #2d333b; border-color: var(--blue); }
+        .ptz-btn:active, .ptz-btn.active {
+            background: rgba(56,139,253,.15);
+            border-color: #388bfd;
+            color: var(--blue);
+            transform: scale(.93);
+        }
+        .ptz-btn:disabled {
+            opacity: .35;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        #btn-up    { grid-column: 2; grid-row: 1; }
+        #btn-left  { grid-column: 1; grid-row: 2; }
+        #btn-right { grid-column: 3; grid-row: 2; }
+        #btn-down  { grid-column: 2; grid-row: 3; }
+
+        hr.divider { border: none; border-top: 1px solid var(--border); }
+
+        .zoom-row { display: flex; gap: 5px; }
+        .zoom-btn {
+            flex: 1;
+            padding: 9px 4px;
+            background: #21262d;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 12px; font-weight: 600;
+            cursor: pointer;
+            transition: background .1s, border-color .1s;
+            user-select: none; touch-action: none;
+        }
+        .zoom-btn:hover               { background: #2d333b; border-color: var(--blue); }
+        .zoom-btn:active, .zoom-btn.active {
+            background: rgba(56,139,253,.15);
+            border-color: #388bfd;
+            color: var(--blue);
+        }
+        .zoom-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+        .ptz-status {
+            font-size: 11px;
+            color: var(--muted);
+            text-align: center;
+            min-height: 30px;
+            line-height: 1.4;
+            transition: color .3s;
+        }
+        .ptz-status.ok   { color: var(--green); }
+        .ptz-status.err  { color: var(--red); }
+        .ptz-status.warn { color: var(--yellow); }
+
+        /* ── Info bar ── */
+        .info-bar {
+            max-width: 960px;
+            width: 100%;
+            margin-top: 14px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px 16px;
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            font-size: 11px;
+            color: var(--muted);
+        }
+        .info-bar .info-item { display: flex; flex-direction: column; gap: 2px; }
+        .info-bar .info-label { font-weight: 600; text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
+        .info-bar .info-value { color: var(--text); font-family: monospace; font-size: 12px; }
+
+        footer {
+            margin-top: 20px;
+            font-size: 11px;
+            color: #484f58;
+        }
+
+        @media (max-width: 640px) {
+            .main-panel { flex-direction: column; }
+            .ptz-panel  { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="header-left">
+        <div class="status-dot" id="stream-dot"></div>
+        <h1>Câmera IP <span id="cam-ip">168.194.15.82</span></h1>
+    </div>
+    <div class="badges">
+        <span class="badge badge-blue" id="badge-rtsp">RTSP :51488</span>
+        <span class="badge badge-yellow" id="badge-onvif">ONVIF verificando...</span>
+    </div>
+</header>
+
+<div class="main-panel">
+    <!-- Video -->
+    <div class="video-wrapper" id="video-wrapper">
+        <span class="video-label">🔴 AO VIVO</span>
+        <img src="/video_feed" alt="Camera Feed" id="camera-feed" draggable="false">
+        <div class="video-overlay" id="overlay">
+            <div class="spinner"></div>
+            <span id="overlay-msg">Conectando ao stream...</span>
+        </div>
+    </div>
+
+    <!-- PTZ -->
+    <div class="ptz-panel">
+        <h2>Controle PTZ</h2>
+        <div class="dpad">
+            <button class="ptz-btn" id="btn-up"    data-dir="Up"   >▲</button>
+            <button class="ptz-btn" id="btn-left"  data-dir="Left" >◀</button>
+            <div class="dpad-center">✛</div>
+            <button class="ptz-btn" id="btn-right" data-dir="Right">▶</button>
+            <button class="ptz-btn" id="btn-down"  data-dir="Down" >▼</button>
+        </div>
+        <hr class="divider">
+        <div class="zoom-row">
+            <button class="zoom-btn" id="btn-zoom-in"  data-dir="ZoomIn" >🔍 +</button>
+            <button class="zoom-btn" id="btn-zoom-out" data-dir="ZoomOut">🔍 −</button>
+        </div>
+        <p class="ptz-status" id="ptz-status">Aguardando...</p>
+    </div>
+</div>
+
+<!-- Info bar -->
+<div class="info-bar">
+    <div class="info-item">
+        <span class="info-label">IP</span>
+        <span class="info-value" id="info-ip">168.194.15.82</span>
+    </div>
+    <div class="info-item">
+        <span class="info-label">RTSP Port</span>
+        <span class="info-value" id="info-rtsp">51488</span>
+    </div>
+    <div class="info-item">
+        <span class="info-label">ONVIF Port</span>
+        <span class="info-value" id="info-onvif">—</span>
+    </div>
+    <div class="info-item">
+        <span class="info-label">Zoom Digital</span>
+        <span class="info-value" id="info-zoom">100%</span>
+    </div>
+</div>
+
+<footer>Câmera IP · RTSP via OpenCV · ONVIF PTZ</footer>
+
+<script>
+// ── Estado ────────────────────────────────────────────────────────────────────
+const feed       = document.getElementById('camera-feed');
+const overlay    = document.getElementById('overlay');
+const overlayMsg = document.getElementById('overlay-msg');
+const dot        = document.getElementById('stream-dot');
+const ptzStatus  = document.getElementById('ptz-status');
+const badgeRtsp  = document.getElementById('badge-rtsp');
+const badgeOnvif = document.getElementById('badge-onvif');
+const infoOnvif  = document.getElementById('info-onvif');
+const infoZoom   = document.getElementById('info-zoom');
+
+let onvifAvailable = false;
+let activeDir      = null;
+let zoomLevel      = 1.0;
+const MIN_ZOOM = 1.0, MAX_ZOOM = 4.0, ZOOM_STEP = 0.15;
+let panX = 0, panY = 0, isPanning = false, startX = 0, startY = 0;
+
+// ── Poll /status a cada 8s ───────────────────────────────────────────────────
+function pollStatus() {
+    fetch('/status')
+        .then(r => r.json())
+        .then(d => {
+            // RTSP badge
+            if (d.rtsp_reachable) {
+                badgeRtsp.className = 'badge badge-green';
+                badgeRtsp.textContent = `RTSP :${d.rtsp_port} ✓`;
+            } else {
+                badgeRtsp.className = 'badge badge-red';
+                badgeRtsp.textContent = `RTSP :${d.rtsp_port} ✗`;
+            }
+
+            // ONVIF badge
+            onvifAvailable = d.onvif_available;
+            if (d.onvif_available) {
+                badgeOnvif.className = 'badge badge-green';
+                badgeOnvif.textContent = `ONVIF :${d.onvif_port} ✓`;
+                infoOnvif.textContent = `:${d.onvif_port}`;
+                enablePTZ(true);
+            } else {
+                badgeOnvif.className = 'badge badge-red';
+                badgeOnvif.textContent = 'ONVIF indisponível';
+                infoOnvif.textContent = 'bloqueado';
+                enablePTZ(false);
+                if (ptzStatus.textContent === 'Aguardando...') {
+                    ptzStatus.textContent = 'PTZ indisponível\n(ONVIF bloqueado na porta 80)';
+                    ptzStatus.className = 'ptz-status warn';
+                }
+            }
+
+            // Stream dot
+            if (d.stream_active) {
+                dot.className = 'status-dot';
+            } else if (d.rtsp_reachable) {
+                dot.className = 'status-dot warn';
+            } else {
+                dot.className = 'status-dot err';
+            }
+        })
+        .catch(() => {});
+}
+
+pollStatus();
+setInterval(pollStatus, 8000);
+
+// ── PTZ enable/disable ───────────────────────────────────────────────────────
+function enablePTZ(yes) {
+    document.querySelectorAll('.ptz-btn').forEach(b => b.disabled = !yes);
+}
+
+// ── Video error / reconnect ──────────────────────────────────────────────────
+feed.addEventListener('error', () => {
+    overlay.classList.add('show');
+    overlayMsg.textContent = 'Stream perdido. Reconectando...';
+    dot.className = 'status-dot err';
+    setTimeout(() => {
+        feed.src = '/video_feed?t=' + Date.now();
+    }, 3000);
+});
+feed.addEventListener('load', () => {
+    overlay.classList.remove('show');
+    dot.className = 'status-dot';
+});
+
+// ── Zoom digital ─────────────────────────────────────────────────────────────
+function applyZoom() {
+    feed.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
+    infoZoom.textContent = Math.round(zoomLevel * 100) + '%';
+}
+
+feed.addEventListener('wheel', e => {
+    e.preventDefault();
+    if (e.deltaY < 0) zoomLevel = Math.min(MAX_ZOOM, zoomLevel + ZOOM_STEP);
+    else              zoomLevel = Math.max(MIN_ZOOM, zoomLevel - ZOOM_STEP);
+    if (zoomLevel <= MIN_ZOOM) { panX = 0; panY = 0; }
+    applyZoom();
+}, { passive: false });
+
+feed.addEventListener('mousedown', e => {
+    if (zoomLevel <= 1) return;
+    isPanning = true;
+    startX = e.clientX - panX;
+    startY = e.clientY - panY;
+    feed.style.transition = 'none';
+});
+document.addEventListener('mousemove', e => {
+    if (!isPanning) return;
+    panX = e.clientX - startX;
+    panY = e.clientY - startY;
+    applyZoom();
+});
+document.addEventListener('mouseup', () => {
+    isPanning = false;
+    feed.style.transition = 'transform 0.15s ease';
+});
+
+// ── PTZ ──────────────────────────────────────────────────────────────────────
+function sendPTZ(action, direction) {
+    // Zoom digital local
+    if (direction === 'ZoomIn' || direction === 'ZoomOut') {
+        if (direction === 'ZoomIn')  zoomLevel = Math.min(MAX_ZOOM, zoomLevel + ZOOM_STEP);
+        else                         zoomLevel = Math.max(MIN_ZOOM, zoomLevel - ZOOM_STEP);
+        if (zoomLevel <= MIN_ZOOM) { panX = 0; panY = 0; }
+        applyZoom();
+        ptzStatus.textContent = `Zoom: ${Math.round(zoomLevel * 100)}%`;
+        ptzStatus.className = 'ptz-status ok';
+        return;
+    }
+
+    if (!onvifAvailable) {
+        ptzStatus.textContent = 'PTZ indisponível\n(ONVIF bloqueado)';
+        ptzStatus.className = 'ptz-status warn';
+        return;
+    }
+
+    fetch('/ptz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, direction })
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (d.status === 'ok') {
+            ptzStatus.textContent = action === 'stop' ? 'Parado.' : `▶ ${direction}`;
+            ptzStatus.className = 'ptz-status ok';
+        } else if (d.status === 'unavailable') {
+            ptzStatus.textContent = 'PTZ indisponível\n(ONVIF inacessível)';
+            ptzStatus.className = 'ptz-status warn';
+            onvifAvailable = false;
+            enablePTZ(false);
+        } else {
+            ptzStatus.textContent = 'Erro PTZ: ' + d.message;
+            ptzStatus.className = 'ptz-status err';
+        }
+    })
+    .catch(() => {
+        ptzStatus.textContent = 'Erro de conexão.';
+        ptzStatus.className = 'ptz-status err';
+    });
+}
+
+function startMove(dir, btn) {
+    if (activeDir === dir) return;
+    activeDir = dir;
+    btn.classList.add('active');
+    sendPTZ('start', dir);
+}
+
+function stopMove(dir, btn) {
+    if (activeDir !== dir) return;
+    activeDir = null;
+    btn.classList.remove('active');
+    if (dir !== 'ZoomIn' && dir !== 'ZoomOut') sendPTZ('stop', dir);
+}
+
+document.querySelectorAll('.ptz-btn, .zoom-btn').forEach(btn => {
+    const dir = btn.getAttribute('data-dir');
+    if (!dir) return;
+    btn.addEventListener('mousedown',  () => startMove(dir, btn));
+    btn.addEventListener('mouseup',    () => stopMove(dir, btn));
+    btn.addEventListener('mouseleave', () => stopMove(dir, btn));
+    btn.addEventListener('touchstart', e => { e.preventDefault(); startMove(dir, btn); });
+    btn.addEventListener('touchend',   e => { e.preventDefault(); stopMove(dir, btn); });
+});
+
+window.addEventListener('mouseup', () => {
+    if (activeDir) {
+        document.querySelectorAll('.ptz-btn, .zoom-btn').forEach(b => b.classList.remove('active'));
+        sendPTZ('stop', activeDir);
+        activeDir = null;
+    }
+});
+</script>
+</body>
+</html>

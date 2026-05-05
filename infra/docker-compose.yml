@@ -1,0 +1,141 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vms
+      POSTGRES_PASSWORD: vms_password
+      POSTGRES_DB: vms_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - vms-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: vms-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - vms-net
+
+  adminer:
+    image: adminer:latest
+    container_name: vms-adminer
+    restart: unless-stopped
+    ports:
+      - "8090:8080"
+    networks:
+      - vms-net
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    container_name: vms-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://vms:vms_password@postgres:5432/vms_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - API_PORT=3000
+      - JWT_SECRET=super_secret_jwt_key_for_dev
+      - CAMERA_SECRET_KEY=change_me_32_chars_minimum_vms_key
+      - INTERNAL_SERVICE_TOKEN=change_me_service_token
+      - RECORDINGS_ROOT=/storage
+      - MEDIAMTX_ENABLED=true
+      - MEDIAMTX_API_BASE_URL=http://mediamtx:9997
+      - MEDIAMTX_API_USER=nexusguard
+      - MEDIAMTX_API_PASS=nexusguard123
+      - MEDIAMTX_HLS_PORT=8888
+      - MEDIAMTX_WEBRTC_PORT=8889
+      - FFMPEG_RTSP_FALLBACK_TRANSPORTS=tcp,udp
+      - FFMPEG_RTSP_FALLBACK_PORTS=51488,51489,51490
+      - FFMPEG_RTSP_ENABLE_PORT_FALLBACK=false
+    volumes:
+      - ./storage:/storage
+    depends_on:
+      - postgres
+      - redis
+      - mediamtx
+    networks:
+      - vms-net
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    container_name: vms-web
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    networks:
+      - vms-net
+
+  camera-worker:
+    build:
+      context: ..
+      dockerfile: services/camera-worker-go/Dockerfile
+    container_name: vms-camera-worker
+    restart: unless-stopped
+    environment:
+      - REDIS_ADDR=redis:6379
+      - API_URL=http://api:3000
+      - CAMERA_SECRET_KEY=change_me_32_chars_minimum_vms_key
+      - INTERNAL_SERVICE_TOKEN=change_me_service_token
+      - STORAGE_ROOT=/storage
+    volumes:
+      - ./storage:/storage
+    depends_on:
+      - redis
+      - api
+    networks:
+      - vms-net
+
+  ai-service:
+    build:
+      context: ../services/ai-service-python
+      dockerfile: Dockerfile
+    container_name: vms-ai-service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_ADDR=redis:6379
+      - API_URL=http://api:3000
+    depends_on:
+      - redis
+      - api
+    networks:
+      - vms-net
+
+  mediamtx:
+    image: bluenviron/mediamtx:1
+    container_name: vms-mediamtx
+    restart: unless-stopped
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+      - "8189:8189/udp"
+      - "9997:9997"
+      - "9998:9998"
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    networks:
+      - vms-net
+
+volumes:
+  postgres_data:
+
+networks:
+  vms-net:
+    driver: bridge

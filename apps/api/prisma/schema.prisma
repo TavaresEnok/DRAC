@@ -1,0 +1,346 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CameraStatus {
+  UNKNOWN
+  ONLINE
+  OFFLINE
+  ERROR
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum CameraPermissionLevel {
+  VIEW
+  CONTROL
+  RECORD
+  ADMIN
+}
+
+enum AlarmStatus {
+  OPEN
+  ACKED
+  RESOLVED
+}
+
+enum AlarmPriority {
+  P1
+  P2
+  P3
+  P4
+}
+
+enum AlarmSource {
+  STREAM
+  HEALTH
+  MOTION
+  ANALYTICS
+  SYSTEM
+  MANUAL
+}
+
+model Camera {
+  id                String       @id @default(uuid())
+  name              String
+  ip                String
+  rtspPort          Int          @default(554)
+  onvifPort         Int?
+  username          String
+  passwordEncrypted String
+  rtspPath          String?
+  onvifPath         String?
+  onvifProfileToken String?
+  channel           Int          @default(1)
+  subtype           Int          @default(0)
+  status            CameraStatus @default(UNKNOWN)
+  lastSeenAt        DateTime?
+  siteId            String?
+  areaId            String?
+  groupId           String?
+  recordingEnabled  Boolean      @default(true)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  site       Site?          @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  area       Area?          @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  group      CameraGroup?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  recordings    Recording[]
+  exportedClips ExportedClip[]
+  events        CameraEvent[]
+  alarms     AlarmInstance[]
+  permissions CameraPermission[]
+
+  @@index([siteId])
+  @@index([areaId])
+  @@index([groupId])
+  @@index([status])
+}
+
+model Recording {
+  id              String   @id @default(uuid())
+  cameraId        String
+  camera          Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  exportedClips   ExportedClip[]
+  startedAt       DateTime
+  endedAt         DateTime?
+  filePath        String
+  durationSeconds Int?
+  sizeBytes       BigInt?
+  createdAt       DateTime @default(now())
+
+  @@unique([filePath])
+  @@index([cameraId, startedAt])
+  @@index([startedAt])
+}
+
+model ExportedClip {
+  id                String   @id @default(uuid())
+  cameraId          String
+  camera            Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  sourceRecordingId String
+  sourceRecording   Recording @relation(fields: [sourceRecordingId], references: [id], onDelete: Cascade)
+  filePath          String   @unique
+  startedAt         DateTime
+  endedAt           DateTime
+  durationSeconds   Int
+  sizeBytes         BigInt?
+  createdByUserId   String?
+  createdByUserName String?
+  createdAt         DateTime @default(now())
+
+  @@index([cameraId, startedAt])
+  @@index([sourceRecordingId])
+  @@index([createdAt])
+}
+
+model CameraEvent {
+  id         String   @id @default(uuid())
+  cameraId   String
+  camera     Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  type       String
+  severity   String
+  message    String
+  metadata   Json?
+  occurredAt DateTime
+  createdAt  DateTime @default(now())
+
+  alarms AlarmInstance[]
+}
+
+model AlarmRule {
+  id                    String        @id @default(uuid())
+  name                  String
+  source                AlarmSource
+  eventType             String
+  priority              AlarmPriority @default(P3)
+  isEnabled             Boolean       @default(true)
+  dedupWindowSeconds    Int           @default(60)
+  autoResolveOnRecovery Boolean       @default(false)
+  notifyOnOpen          Boolean       @default(true)
+  webhookUrl            String?
+  emailTo               String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  @@unique([source, eventType])
+  @@index([isEnabled])
+  @@index([source, eventType])
+}
+
+model AlarmInstance {
+  id                     String        @id @default(uuid())
+  cameraId               String?
+  camera                 Camera?       @relation(fields: [cameraId], references: [id], onDelete: SetNull)
+  eventId                String?
+  event                  CameraEvent?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  source                 AlarmSource
+  type                   String
+  title                  String
+  message                String
+  severity               String
+  priority               AlarmPriority
+  status                 AlarmStatus   @default(OPEN)
+  metadata               Json?
+  note                   String?
+  occurrenceCount        Int           @default(1)
+  firstOccurredAt        DateTime
+  lastOccurredAt         DateTime
+  acknowledgedAt         DateTime?
+  acknowledgedByUserId   String?
+  acknowledgedByUserName String?
+  resolvedAt             DateTime?
+  resolvedByUserId       String?
+  resolvedByUserName     String?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  @@index([cameraId, status])
+  @@index([status, priority, lastOccurredAt])
+  @@index([source, type])
+  @@index([eventId])
+}
+
+model User {
+  id           String    @id @default(uuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         UserRole  @default(VIEWER)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  auditLogs          AuditLog[]
+  cameraPermissions  CameraPermission[]
+  investigations     Investigation[]
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String?
+  ipAddress  String?
+  userAgent  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model Investigation {
+  id                String              @id @default(uuid())
+  title             String
+  status            String              @default("OPEN")
+  summary           String?
+  selectedCameraIds Json
+  timeStart         DateTime
+  timeEnd           DateTime
+  playbackSpeed     String              @default("1x")
+  activeTrackTime   Int                 @default(0)
+  createdByUserId   String?
+  createdByUserName String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  createdBy User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  items     InvestigationItem[]
+
+  @@index([createdAt])
+  @@index([updatedAt])
+  @@index([status])
+}
+
+model InvestigationItem {
+  id              String        @id @default(uuid())
+  investigationId String
+  investigation   Investigation @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  type            String
+  label           String
+  cameraId        String?
+  cameraName      String?
+  eventId         String?
+  recordingId     String?
+  timestamp       DateTime
+  notes           String?
+  metadata        Json?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([investigationId, timestamp])
+  @@index([cameraId])
+  @@index([eventId])
+  @@index([recordingId])
+}
+
+model Site {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  location    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  areas   Area[]
+  cameras Camera[]
+  mapLayouts SiteMapLayout[]
+
+  @@index([name])
+}
+
+model SiteMapLayout {
+  id        String   @id @default(uuid())
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  floor     String
+  svgDataUrl String?
+  markers   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([siteId, floor])
+  @@index([siteId])
+  @@index([floor])
+}
+
+model Area {
+  id          String   @id @default(uuid())
+  siteId      String?
+  site        Site?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cameras Camera[]
+
+  @@index([siteId])
+  @@index([name])
+}
+
+model CameraGroup {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cameras     Camera[]
+  permissions CameraPermission[]
+
+  @@index([name])
+}
+
+model CameraPermission {
+  id        String                @id @default(uuid())
+  userId    String
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cameraId  String?
+  camera    Camera?               @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  groupId   String?
+  group     CameraGroup?          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  level     CameraPermissionLevel
+  createdAt DateTime              @default(now())
+
+  @@index([userId])
+  @@index([cameraId])
+  @@index([groupId])
+}

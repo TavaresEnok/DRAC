@@ -1,0 +1,70 @@
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
+import { Request } from 'express';
+import { AuditService } from '../audit/audit.service';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { AuthUser } from '../common/types/auth-user.type';
+import { CameraGroupsService } from './camera-groups.service';
+import { CreateCameraGroupDto } from './dto/create-camera-group.dto';
+import { UpdateCameraGroupDto } from './dto/update-camera-group.dto';
+
+@Controller('camera-groups')
+export class CameraGroupsController {
+  constructor(
+    private readonly cameraGroupsService: CameraGroupsService,
+    private readonly auditService: AuditService,
+  ) {}
+
+  @Roles(UserRole.VIEWER)
+  @Get()
+  list(@CurrentUser() user: AuthUser) {
+    return this.cameraGroupsService.list(user);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get(':id')
+  getById(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.cameraGroupsService.getById(id, user);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Post()
+  async create(@CurrentUser() user: AuthUser, @Body() dto: CreateCameraGroupDto, @Req() req: Request) {
+    const group = await this.cameraGroupsService.create(dto);
+    await this.auditService.log(user.id, 'camera_group.create', 'CameraGroup', group.id, { name: group.name }, req);
+    return group;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Patch(':id')
+  async update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: UpdateCameraGroupDto, @Req() req: Request) {
+    const group = await this.cameraGroupsService.update(id, dto);
+    await this.auditService.log(user.id, 'camera_group.update', 'CameraGroup', group.id, { name: group.name, isActive: group.isActive }, req);
+    return group;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Delete(':id')
+  async softDelete(@CurrentUser() user: AuthUser, @Param('id') id: string, @Req() req: Request) {
+    const group = await this.cameraGroupsService.softDelete(id);
+    await this.auditService.log(user.id, 'camera_group.deactivate', 'CameraGroup', group.id, { name: group.name }, req);
+    return group;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Post(':id/cameras/:cameraId')
+  async addCamera(@CurrentUser() user: AuthUser, @Param('id') id: string, @Param('cameraId') cameraId: string, @Req() req: Request) {
+    const group = await this.cameraGroupsService.addCamera(id, cameraId);
+    await this.auditService.log(user.id, 'camera_group.camera_add', 'CameraGroup', id, { cameraId }, req);
+    return group;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Delete(':id/cameras/:cameraId')
+  async removeCamera(@CurrentUser() user: AuthUser, @Param('id') id: string, @Param('cameraId') cameraId: string, @Req() req: Request) {
+    const group = await this.cameraGroupsService.removeCamera(id, cameraId);
+    await this.auditService.log(user.id, 'camera_group.camera_remove', 'CameraGroup', id, { cameraId }, req);
+    return group;
+  }
+}

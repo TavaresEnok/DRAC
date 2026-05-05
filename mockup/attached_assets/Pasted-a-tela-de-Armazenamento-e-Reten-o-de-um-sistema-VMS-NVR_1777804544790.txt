@@ -1,0 +1,121 @@
+a tela de Armazenamento e Retenção de um sistema VMS/NVR, usada para acompanhar a capacidade dos discos, volumes de gravação e saúde do armazenamento.
+
+Visão geral da página
+
+No topo, há um breadcrumb indicando a localização dentro do sistema:
+
+Sistema > Armazenamento > Armazenamento e Retenção
+
+À direita, existe um botão de ação:
+
+Políticas de Retenção
+
+Esse botão sugere que o usuário pode configurar regras de retenção de gravações, como quantidade de dias gravados, prioridade por câmera, exclusão automática e limites por volume.
+
+Layout geral
+
+O layout usa tema dark, com fundo quase preto e cards em cinza escuro. A estrutura é simples e horizontal, com bastante largura disponível, mas os elementos estão mais compactos e técnicos.
+
+A página é dividida basicamente em duas áreas:
+
+Resumo de capacidade global
+Tabela de discos e volumes
+
+Não há sidebar visível nessa captura, apenas a área de conteúdo principal.
+
+Card de capacidade global
+
+A primeira seção é um card grande no topo com o título:
+
+Capacidade Global
+
+Dentro dele há um indicador circular mostrando:
+
+90%
+
+Esse círculo representa o uso total do armazenamento.
+
+Ao lado aparecem três métricas:
+
+Total: 28.0 TB
+Utilizado: 25.3 TB
+Livre: 2.7 TB
+
+Visualmente, essa seção funciona como um resumo rápido para o operador entender se o sistema está perto do limite de armazenamento.
+
+O uso de 90% indica uma situação de atenção, porque o espaço livre já está baixo.
+
+Seção “Discos e Volumes”
+
+Abaixo existe outro card maior com o título:
+
+DISCOS E VOLUMES
+
+Dentro dele há uma tabela com as seguintes colunas:
+
+Servidor
+Mostra em qual servidor o disco está instalado.
+
+Disco / Volume
+Mostra o nome do volume, como NVMe-01, NVMe-02, NVMe-03 e HDD-01.
+
+Tipo
+Indica se o disco é NVMe ou HDD.
+
+Uso
+Mostra o percentual de utilização do disco com uma barra horizontal.
+
+Saúde
+Mostra o estado do disco com badges coloridos, como OK, Aviso e Crítico.
+
+Temp
+Exibe a temperatura do disco em graus Celsius.
+
+Dados exibidos na tabela
+
+A tabela mostra quatro volumes:
+
+SRV-VMS-01 — NVMe-01
+Uso de 78%, saúde OK, temperatura 38°C.
+
+SRV-VMS-01 — NVMe-02
+Uso de 80%, saúde OK, temperatura 39°C.
+
+SRV-VMS-01 — NVMe-03
+Uso de 95%, saúde em Aviso, temperatura 42°C.
+
+SRV-ARCH-01 — HDD-01
+Uso de 95%, saúde Crítico, temperatura 45°C.
+
+Os dois primeiros volumes estão em estado saudável. Já o NVMe-03 e o HDD-01 estão muito próximos do limite, com barras vermelhas de uso e status de alerta.
+
+Estilo visual
+
+O estilo é técnico, operacional e escuro. Ele combina com sistemas de infraestrutura, monitoramento, NVR, CFTV e data center.
+
+A interface usa:
+
+cards com bordas discretas;
+tabela compacta;
+texto branco e azul acinzentado;
+badges coloridos para saúde;
+barras de progresso para uso dos discos;
+hierarquia simples entre título, resumo e tabela.
+Impressão geral do layout
+
+A página é funcional e fácil de entender, mas tem uma aparência mais técnica e densa do que premium. Ela parece uma tela administrativa de infraestrutura, voltada para operadores de TI ou segurança.
+
+O ponto positivo é que a informação principal aparece rápido: capacidade total, uso, espaço livre e discos problemáticos.
+
+O ponto fraco é que o layout ainda parece um pouco “seco” e simples. Para ficar mais premium, poderia ter:
+
+mais espaçamento entre seções;
+cards menores e mais bem distribuídos;
+gráficos mais elegantes;
+resumo separado em cards individuais;
+uma área visual para política de retenção;
+badges mais refinados;
+tabela com mais respiro;
+melhor uso de whitespace, mesmo em tema escuro.
+
+Em resumo, é uma página de monitoramento de armazenamento on-premise, com foco em capacidade, uso de disco, saúde dos volumes e temperatura.
