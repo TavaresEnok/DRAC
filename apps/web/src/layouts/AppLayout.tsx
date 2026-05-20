@@ -5,7 +5,6 @@ import { Sun, Moon } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
 import { StatusStrip } from '../components/StatusStrip';
 import { CommandPalette } from '../components/CommandPalette';
-import { AlarmToast } from '../components/AlarmToast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Kbd } from '@/components/ui/kbd';
 import { useThemeStore } from '../store/themeStore';
@@ -23,7 +22,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/ptz':          'Controle PTZ',
   '/investigation':'Modo Investigação',
   '/evidence':     'Exportar Evidências',
-  '/storage':      'Armazenamento e Retenção',
+  '/storage':      'Monitoramento',
   '/settings':     'Configurações',
   '/users':        'Gestão de Usuários',
   '/roles':        'Perfis e Permissões',
@@ -37,28 +36,24 @@ const SHORTCUTS = [
   { key: 'Alt + 1',  description: 'Painel' },
   { key: 'Alt + 2',  description: 'Ao Vivo' },
   { key: 'Alt + 3',  description: 'Reprodução' },
-  { key: 'Alt + 4',  description: 'Eventos' },
-  { key: 'Alt + 5',  description: 'Alertas' },
-  { key: 'Alt + 6',  description: 'Câmeras' },
-  { key: 'Alt + 7',  description: 'Mapa' },
-  { key: 'Alt + 8',  description: 'PTZ' },
-  { key: 'Alt + 9',  description: 'Investigação' },
-  { key: 'Alt + 0',  description: 'Usuários' },
+  { key: 'Alt + 4',  description: 'Câmeras' },
+  { key: 'Alt + 5',  description: 'Monitoramento' },
+  { key: 'Alt + 6',  description: 'Usuários' },
+  { key: 'Alt + 7',  description: 'Configurações' },
   { key: 'G',        description: 'Alternar layout em grade' },
   { key: 'W',        description: 'Alternar modo mural em tela cheia' },
   { key: 'Esc',      description: 'Fechar painel / diálogo' },
   { key: '?',        description: 'Mostrar atalhos' },
 ];
 
-const PAGE_PATHS = ['/dashboard', '/live', '/playback', '/events', '/alarms', '/cameras', '/map', '/ptz', '/investigation', '/users'];
+const PAGE_PATHS = ['/dashboard', '/live', '/playback', '/cameras', '/storage', '/users', '/settings'];
 
-interface AppLayoutProps { children: React.ReactNãode }
+interface AppLayoutProps { children: React.ReactNode }
 
 export function AppLayout({ children }: AppLayoutProps) {
   const [location, setLocation] = useLocation();
   const [cmdOpen, setCmdOpen] = useState(false);
   const [shortcutsOpen, setAtalhosOpen] = useState(false);
-  const [alarmToastOpen, setAlarmToastOpen] = useState(false);
   const { theme, setTheme } = useThemeStore();
   const system = useVmsDataStore((state) => state.system);
   const cameras = useVmsDataStore((state) => state.cameras);
@@ -72,7 +67,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         e.preventDefault(); setCmdOpen(o => !o); return;
       }
       if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        const tag = (e.target as HTMLElement).tagNome;
+        const tag = (e.target as HTMLElement).tagName;
         if (tag !== 'INPUT' && tag !== 'TEXTAREA') { setAtalhosOpen(o => !o); return; }
       }
       if (e.altKey && e.key >= '1' && e.key <= '9') {
@@ -85,11 +80,6 @@ export function AppLayout({ children }: AppLayoutProps) {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [setLocation]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setAlarmToastOpen(true), 1200);
-    return () => clearTimeout(timer);
-  }, []);
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
@@ -141,7 +131,6 @@ export function AppLayout({ children }: AppLayoutProps) {
 
       <StatusStrip />
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
-      <AlarmToast open={alarmToastOpen} onClose={() => setAlarmToastOpen(false)} />
 
       {/* Keyboard shortcuts dialog */}
       <Dialog open={shortcutsOpen} onOpenChange={setAtalhosOpen}>

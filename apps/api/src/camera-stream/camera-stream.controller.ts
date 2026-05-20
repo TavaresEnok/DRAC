@@ -10,16 +10,26 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { type AuthUser } from '../common/types/auth-user.type';
 import { FfmpegMjpegService } from './ffmpeg-mjpeg.service';
 import { MediamtxProxyService } from './mediamtx-proxy.service';
+import { CamerasService } from '../cameras/cameras.service';
 
 @Controller('camera-stream')
 export class CameraStreamController {
   constructor(
     private readonly ffmpegMjpegService: FfmpegMjpegService,
     private readonly mediamtxProxyService: MediamtxProxyService,
+    private readonly camerasService: CamerasService,
     private readonly authService: AuthService,
     private readonly accessControlService: AccessControlService,
     private readonly auditService: AuditService,
   ) {}
+
+  private extractBearerToken(req: Request): string | null {
+    const authHeader = req.headers.authorization;
+    if (typeof authHeader !== 'string') return null;
+    if (!authHeader.toLowerCase().startsWith('bearer ')) return null;
+    const token = authHeader.slice(7).trim();
+    return token || null;
+  }
 
   @Roles(UserRole.VIEWER)
   @Post(':cameraId/token')
@@ -55,6 +65,17 @@ export class CameraStreamController {
   ) {
     await this.accessControlService.assertCanViewCamera(user, cameraId);
     const token = await this.authService.createStreamToken(user.id, cameraId);
+    let camera = await this.camerasService.getCameraOrThrow(cameraId);
+
+    // Se ainda não temos codec detectado, tenta uma sondagem rápida para persistir metadados.
+    if (!camera.streamVideoCodec && !camera.detectedVideoCodec) {
+      try {
+        await this.camerasService.getStatus(cameraId);
+        camera = await this.camerasService.getCameraOrThrow(cameraId);
+      } catch {
+        // Não bloqueia o live; segue com fallback de protocolo no frontend.
+      }
+    }
 
     let mediaBridge = this.mediamtxProxyService.buildPublicUrls(req, null, null);
     if (this.mediamtxProxyService.isEnabled()) {
@@ -71,14 +92,21 @@ export class CameraStreamController {
     const reqProto = ((req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol ?? 'http')
       .split(',')[0]
       .trim();
-    const flvUrl = `${reqProto}://${apiHost}/camera-stream/${cameraId}/flv?token=${encodeURIComponent(token.streamToken)}`;
+    const flvUrl = `${reqProto}://${apiHost}/camera-stream/${cameraId}/flv`;
+
+    const configuredPreferred = (camera.preferredLiveProtocol ?? 'flv').toLowerCase();
+
+    const { sourceUrl: _sourceUrl, ...safeMediaBridge } = mediaBridge;
 
     return {
       cameraId,
       streamToken: token.streamToken,
+      preferredLiveProtocol: configuredPreferred,
+      preferredRtspTransport: camera.preferredRtspTransport ?? 'tcp',
+      detectedVideoCodec: camera.streamVideoCodec ?? camera.detectedVideoCodec ?? null,
       protocols: {
         flvUrl,
-        ...mediaBridge,
+        ...safeMediaBridge,
       },
     };
   }
@@ -91,11 +119,13 @@ export class CameraStreamController {
     @Req() req: Request,
     @Res() res: Response,
   ) {
-    if (!token) {
+    const bearerToken = this.extractBearerToken(req);
+    const tokenValue = token?.trim() || bearerToken;
+    if (!tokenValue) {
       throw new UnauthorizedException('Token de stream ausente.');
     }
 
-    const payload = await this.authService.verifyStreamToken(token);
+    const payload = await this.authService.verifyStreamToken(tokenValue);
     if (payload.cameraId !== cameraId) {
       throw new UnauthorizedException('Token inválido para esta câmera.');
     }

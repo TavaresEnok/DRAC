@@ -3,6 +3,7 @@ import { useLocation } from 'wouter';
 import { motion } from 'framer-motion';
 import { Shield, Eye, EyeOff, Lock, User, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
+import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
 
 export default function LoginPage() {
@@ -11,30 +12,46 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [now, setNãow] = useState(new Date());
+  const [now, setNow] = useState(new Date());
   const { login, isAuthenticated } = useAuthStore();
   const [, setLocation] = useLocation();
+
+  const getLoginErrorMessage = (error: unknown) => {
+    if (!axios.isAxiosError(error)) {
+      return 'Não foi possível autenticar agora. Tente novamente.';
+    }
+
+    if (!error.response) {
+      return 'Não foi possível conectar à API. Verifique a conexão ou recarregue a página.';
+    }
+
+    if (error.response.status === 401) {
+      return 'Credenciais inválidas ou usuário inativo';
+    }
+
+    return 'Falha no servidor de autenticação. Tente novamente em instantes.';
+  };
 
   useEffect(() => {
     if (isAuthenticated) setLocation('/dashboard');
   }, [isAuthenticated, setLocation]);
 
   useEffect(() => {
-    const t = setInterval(() => setNãow(new Date()), 1000);
+    const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim()) { setError('Username is required'); return; }
-    if (!password.trim()) { setError('Password is required'); return; }
+    if (!username.trim()) { setError('Usuário é obrigatório'); return; }
+    if (!password.trim()) { setError('Senha é obrigatória'); return; }
     setLoading(true);
     setError('');
     try {
       await login(username, password);
       setLocation('/dashboard');
-    } catch {
-      setError('Invalid credentials or inactive user');
+    } catch (error) {
+      setError(getLoginErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -67,7 +84,7 @@ export default function LoginPage() {
             <Shield className="w-3 h-3 text-[hsl(var(--primary))]" />
           </div>
           <span className="font-mono text-[10px] text-[hsl(var(--muted-foreground)_/_0.7)] tracking-[0.15em] uppercase">
-            NexusGuard Security Systems
+            NexusGuard Sistemas de Segurança
           </span>
         </div>
         <div className="font-mono text-[10px] text-[hsl(var(--muted-foreground)_/_0.55)] tabular-nums">
@@ -90,7 +107,7 @@ export default function LoginPage() {
             </div>
             <h1 className="text-xl font-semibold tracking-tight text-foreground">NexusGuard VMS</h1>
             <p className="text-[10px] text-[hsl(var(--muted-foreground)_/_0.7)] mt-1.5 tracking-[0.15em] font-mono uppercase">
-              On-Premise Security Management
+              Gestão de Segurança Local
             </p>
           </div>
 
@@ -98,7 +115,7 @@ export default function LoginPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] tracking-wide uppercase" htmlFor="username">
-                Username
+                Usuário
               </label>
               <div className="relative">
                 <User className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground)_/_0.5)]" />
@@ -107,7 +124,7 @@ export default function LoginPage() {
                   type="text"
                   value={username}
                   onChange={e => { setUsername(e.target.value); setError(''); }}
-                  placeholder="operator@nexusguard.local"
+                  placeholder="admin@local.dev"
                   className="w-full h-10 pl-9 pr-4 rounded-md border border-border bg-card/80 text-foreground text-[12px] font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary)_/_0.6)] focus:border-[hsl(var(--primary)_/_0.5)] placeholder:text-[hsl(var(--muted-foreground)_/_0.35)] placeholder:font-sans transition-all"
                   data-testid="input-username"
                 />
@@ -116,7 +133,7 @@ export default function LoginPage() {
 
             <div className="space-y-1.5">
               <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] tracking-wide uppercase" htmlFor="password">
-                Password
+                Senha
               </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground)_/_0.5)]" />
@@ -167,24 +184,24 @@ export default function LoginPage() {
               {loading ? (
                 <>
                   <span className="w-3.5 h-3.5 border-2 border-white/25 border-t-white rounded-full animate-spin" />
-                  Authenticating...
+                  Autenticando...
                 </>
-              ) : 'Sign In'}
+              ) : 'Entrar'}
             </button>
           </form>
 
           {/* Installation card */}
           <div className="mt-7 rounded-md border border-border/60 bg-card/50 px-4 py-3 space-y-0.5">
-            <div className="text-[9px] font-mono text-[hsl(var(--muted-foreground)_/_0.5)] uppercase tracking-[0.15em]">Installation</div>
+            <div className="text-[9px] font-mono text-[hsl(var(--muted-foreground)_/_0.5)] uppercase tracking-[0.15em]">Instalação</div>
             <div className="text-[11px] text-foreground/80 font-medium">Acesso ao servidor on-premise</div>
             <div className="text-[9px] font-mono text-[hsl(var(--muted-foreground)_/_0.5)]">
-              Voltarend em tempo real · autenticação local ativa
+              Backend em tempo real · autenticação local ativa
             </div>
           </div>
 
           <div className="mt-4 text-center">
             <span className="font-mono text-[9px] text-[hsl(var(--muted-foreground)_/_0.3)]">
-              NexusGuard VMS v4.2.1 · On-Premise · All rights reserved
+              NexusGuard VMS v4.2.1 · Instalação Local · Todos os direitos reservados
             </span>
           </div>
         </motion.div>

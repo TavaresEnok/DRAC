@@ -4,14 +4,14 @@ import { useAuthStore } from '../store/authStore';
 import { useVmsDataStore } from '../store/vmsDataStore';
 
 export function StatusStrip() {
-  const [now, setNãow] = useState(new Date());
+  const [now, setNow] = useState(new Date());
   const { user } = useAuthStore();
   const alarms = useVmsDataStore((state) => state.alarms);
   const cameras = useVmsDataStore((state) => state.cameras);
   const system = useVmsDataStore((state) => state.system);
 
   useEffect(() => {
-    const t = setInterval(() => setNãow(new Date()), 1000);
+    const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
 

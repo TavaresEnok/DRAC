@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Post, Req } from '@nestjs/common';
 import { type Request } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
@@ -15,6 +16,7 @@ export class AuthController {
   ) {}
 
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('login')
   async login(@Body() dto: LoginDto, @Req() req: Request) {
     try {
@@ -37,5 +39,11 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser() user: AuthUser) {
     return this.authService.me(user.id);
+  }
+
+  @Post('logout')
+  async logout(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    await this.auditService.log(user.id, 'auth.logout', 'User', user.id, undefined, req);
+    return { success: true };
   }
 }

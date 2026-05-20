@@ -12,9 +12,32 @@ BigInt.prototype.toJSON = function () {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  app.use(helmet());
+  app.use(
+    helmet({
+      crossOriginOpenerPolicy: false,
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      crossOriginEmbedderPolicy: false,
+    }),
+  );
+  const corsAllowedOrigins = String(process.env.CORS_ALLOWED_ORIGINS ?? 'http://localhost:5173')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
   app.enableCors({
-    origin: true,
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      if (corsAllowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      // Do not turn browser preflight checks into API 500 responses.
+      // Missing origins are denied by omitting CORS headers, while the real
+      // fix remains adding the production origin to CORS_ALLOWED_ORIGINS.
+      callback(null, false);
+    },
     credentials: true,
   });
   app.useGlobalPipes(

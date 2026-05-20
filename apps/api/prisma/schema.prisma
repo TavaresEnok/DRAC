@@ -50,6 +50,12 @@ enum AlarmSource {
   MANUAL
 }
 
+enum RecordingSource {
+  UNKNOWN
+  LOCAL
+  WORKER
+}
+
 model Camera {
   id                String       @id @default(uuid())
   name              String
@@ -69,6 +75,26 @@ model Camera {
   areaId            String?
   groupId           String?
   recordingEnabled  Boolean      @default(true)
+  recordingMode     String       @default("continuous")
+  retentionDays     Int          @default(7)
+  preferredRtspTransport String  @default("tcp")
+  preferredLiveProtocol  String  @default("flv")
+  streamVideoCodec       String?
+  streamWidth            Int?
+  streamHeight           Int?
+  streamFps              Int?
+  streamBitrateKbps      Int?
+  recordingVideoCodec    String?
+  recordingWidth         Int?
+  recordingHeight        Int?
+  recordingFps           Int?
+  recordingBitrateKbps   Int?
+  audioEnabled           Boolean      @default(false)
+  detectedVideoCodec     String?
+  detectedWidth          Int?
+  detectedHeight         Int?
+  detectedFps            Int?
+  detectedBitrateKbps    Int?
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
 
@@ -91,6 +117,7 @@ model Recording {
   id              String   @id @default(uuid())
   cameraId        String
   camera          Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  source          RecordingSource @default(UNKNOWN)
   exportedClips   ExportedClip[]
   startedAt       DateTime
   endedAt         DateTime?
@@ -115,6 +142,7 @@ model ExportedClip {
   endedAt           DateTime
   durationSeconds   Int
   sizeBytes         BigInt?
+  fileSha256        String?
   createdByUserId   String?
   createdByUserName String?
   createdAt         DateTime @default(now())

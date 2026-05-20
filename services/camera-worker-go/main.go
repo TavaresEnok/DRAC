@@ -23,6 +23,7 @@ import (
 
 var (
 	activeRecordings = make(map[string]bool)
+	recordingSegments = make(map[string]int)
 	mu               sync.Mutex
 )
 
@@ -38,6 +39,12 @@ type Camera struct {
 	Subtype           int    `json:"subtype"`
 	Status            string `json:"status"`
 	RecordingEnabled  bool   `json:"recordingEnabled"`
+	PreferredRtspTransport string `json:"preferredRtspTransport"`
+	RecordingVideoCodec    string `json:"recordingVideoCodec"`
+	RecordingWidth         int    `json:"recordingWidth"`
+	RecordingHeight        int    `json:"recordingHeight"`
+	RecordingFps           int    `json:"recordingFps"`
+	RecordingBitrateKbps   int    `json:"recordingBitrateKbps"`
 }
 
 type RecordingCommand struct {
@@ -45,6 +52,20 @@ type RecordingCommand struct {
 	CameraID       string `json:"cameraId"`
 	SegmentSeconds int    `json:"segmentSeconds"`
 	RequestedAt    string `json:"requestedAt"`
+}
+
+func requireStrongEnv(name string, minLen int, blocked map[string]bool) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		log.Fatalf("%s é obrigatório.", name)
+	}
+	if len(value) < minLen {
+		log.Fatalf("%s inválido: mínimo de %d caracteres.", name, minLen)
+	}
+	if blocked[value] {
+		log.Fatalf("%s inseguro: valor padrão bloqueado.", name)
+	}
+	return value
 }
 
 func main() {
@@ -55,10 +76,10 @@ func main() {
 		apiURL = "http://localhost:3000"
 	}
 
-	secretKey := os.Getenv("CAMERA_SECRET_KEY")
-	if secretKey == "" {
-		secretKey = "change_me_32_chars_minimum_vms_key"
-	}
+	secretKey := requireStrongEnv("CAMERA_SECRET_KEY", 32, map[string]bool{
+		"change_me_32_chars_minimum":         true,
+		"change_me_32_chars_minimum_vms_key": true,
+	})
 
 	redisAddr := os.Getenv("REDIS_ADDR")
 	if redisAddr == "" {
@@ -70,10 +91,9 @@ func main() {
 	})
 
 	ctx := context.Background()
-	serviceToken := os.Getenv("INTERNAL_SERVICE_TOKEN")
-	if serviceToken == "" {
-		serviceToken = "change_me_service_token"
-	}
+	serviceToken := requireStrongEnv("INTERNAL_SERVICE_TOKEN", 24, map[string]bool{
+		"change_me_service_token": true,
+	})
 
 	// Teste de conexão com Redis
 	_, err := rdb.Ping(ctx).Result()
@@ -92,7 +112,7 @@ func main() {
 	// Loop principal (Phase 5 - Health Check)
 	for {
 		fmt.Println("Verificando câmeras...")
-		cameras, err := fetchCameras(apiURL)
+			cameras, err := fetchCameras(apiURL, serviceToken)
 		if err != nil {
 			log.Printf("Erro ao buscar câmeras: %v", err)
 		} else {
@@ -106,6 +126,7 @@ func main() {
 				if !currentCamIds[id] {
 					fmt.Printf("[Worker] Câmera %s removida da lista. Parando gravações...\n", id)
 					delete(activeRecordings, id)
+					delete(recordingSegments, id)
 					// O loop go startRecording vai notar a mudança ou simplesmente falhar no próximo ciclo
 				}
 			}
@@ -123,6 +144,7 @@ func main() {
 					if activeRecordings[cam.ID] {
 						fmt.Printf("[%s] Gravação desativada. Parando loop...\n", cam.Name)
 						delete(activeRecordings, cam.ID)
+						delete(recordingSegments, cam.ID)
 					}
 				}
 				mu.Unlock()
@@ -135,12 +157,7 @@ func main() {
 	}
 }
 
-func fetchCameras(apiURL string) ([]Camera, error) {
-	serviceToken := os.Getenv("INTERNAL_SERVICE_TOKEN")
-	if serviceToken == "" {
-		serviceToken = "change_me_service_token"
-	}
-
+func fetchCameras(apiURL, serviceToken string) ([]Camera, error) {
 	req, err := http.NewRequest("GET", apiURL+"/cameras/internal/list", nil)
 	if err != nil {
 		return nil, err
@@ -167,7 +184,10 @@ func fetchCameras(apiURL string) ([]Camera, error) {
 }
 
 func fetchCameraByID(apiURL, id string) (*Camera, error) {
-	cameras, err := fetchCameras(apiURL)
+	serviceToken := requireStrongEnv("INTERNAL_SERVICE_TOKEN", 24, map[string]bool{
+		"change_me_service_token": true,
+	})
+	cameras, err := fetchCameras(apiURL, serviceToken)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +233,9 @@ func handleRecordingCommand(cmd RecordingCommand, apiURL, serviceToken string) {
 			return
 		}
 		mu.Lock()
+		if cmd.SegmentSeconds > 0 {
+			recordingSegments[cam.ID] = cmd.SegmentSeconds
+		}
 		if !activeRecordings[cam.ID] {
 			activeRecordings[cam.ID] = true
 			log.Printf("[%s] START recebido via comando Redis", cam.Name)
@@ -223,6 +246,7 @@ func handleRecordingCommand(cmd RecordingCommand, apiURL, serviceToken string) {
 		mu.Lock()
 		if activeRecordings[cmd.CameraID] {
 			delete(activeRecordings, cmd.CameraID)
+			delete(recordingSegments, cmd.CameraID)
 			log.Printf("[%s] STOP recebido via comando Redis", cmd.CameraID)
 		}
 		mu.Unlock()
@@ -275,12 +299,7 @@ func reportStatus(apiURL, serviceToken, cameraID, status string) {
 }
 
 func decrypt(payload, secret string) (string, error) {
-	plaintext, err := _decryptWithKey(payload, secret)
-	if err != nil && secret != "change_me_32_chars_minimum" {
-		// Tenta com a chave padrão antiga caso a chave customizada falhe
-		return _decryptWithKey(payload, "change_me_32_chars_minimum")
-	}
-	return plaintext, err
+	return _decryptWithKey(payload, secret)
 }
 
 func _decryptWithKey(payload, secret string) (string, error) {

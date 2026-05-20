@@ -1,15 +1,13 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ClipboardList, Download, Filter } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useVmsDataStore } from '../store/vmsDataStore';
 
-const actionTypes = ['Entrar', 'Sair', 'Alerta Disparado', 'Alerta Reconhecido', 'Câmera Offline', 'Usuário Modificado', 'Reprodução Accessed', 'Exportarar Evidênciased', 'Câmera Adicionada', 'Relatório Gerado', 'Gravação Started'];
-
 const resultColor = (r: string) => {
-  if (r === 'Success') return 'bg-green-500/15 text-green-400 border-green-500/30';
-  if (r === 'Warning') return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
+  if (r === 'Sucesso') return 'bg-green-500/15 text-green-400 border-green-500/30';
+  if (r === 'Atenção') return 'bg-amber-500/15 text-amber-400 border-amber-500/30';
   return 'bg-red-500/15 text-red-400 border-red-500/30';
 };
 
@@ -20,6 +18,7 @@ export default function AuditLogsPage() {
   const [search, setSearch] = useState('');
 
   const users = ['all', ...Array.from(new Set(logs.map((log) => log.userId ?? 'system')))];
+  const actionTypes = useMemo(() => Array.from(new Set(logs.map((log) => log.action))).sort(), [logs]);
 
   const filtered = logs.filter(l => {
     const resource = `${l.entityType}${l.entityId ? `:${l.entityId}` : ''}`;
@@ -45,18 +44,18 @@ export default function AuditLogsPage() {
           />
           <Select value={filterUser} onValueChange={setFilterUser}>
             <SelectTrigger className="w-32 h-7 text-xs bg-card border-border">
-              <SelectValue placeholder="User" />
+              <SelectValue placeholder="Usuário" />
             </SelectTrigger>
             <SelectContent>
-              {users.map(u => <SelectItem key={u} value={u} className="text-xs font-mono">{u === 'all' ? 'All Usuários' : u}</SelectItem>)}
+              {users.map(u => <SelectItem key={u} value={u} className="text-xs font-mono">{u === 'all' ? 'Todos usuários' : u}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={filterAction} onValueChange={setFilterAction}>
             <SelectTrigger className="w-40 h-7 text-xs bg-card border-border">
-              <SelectValue placeholder="Action" />
+              <SelectValue placeholder="Ação" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all" className="text-xs">All Ações</SelectItem>
+              <SelectItem value="all" className="text-xs">Todas ações</SelectItem>
               {actionTypes.map(a => <SelectItem key={a} value={a} className="text-xs">{a}</SelectItem>)}
             </SelectContent>
           </Select>
@@ -70,7 +69,7 @@ export default function AuditLogsPage() {
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-card border-b border-border z-10">
             <tr>
-              {['Timestamp', 'User', 'Action', 'Resource', 'Endereço IP', 'Result'].map(h => (
+              {['Data/Hora', 'Usuário', 'Ação', 'Recurso', 'Endereço IP', 'Resultado'].map(h => (
                 <th key={h} className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">{h}</th>
               ))}
             </tr>
@@ -88,19 +87,19 @@ export default function AuditLogsPage() {
                 <td className="px-4 py-2 font-mono text-muted-foreground max-w-xs truncate">{log.entityType}{log.entityId ? ` / ${log.entityId}` : ''}</td>
                 <td className="px-4 py-2 font-mono text-muted-foreground">{log.ipAddress ?? '-'}</td>
                 <td className="px-4 py-2">
-                  <Badge variant="outline" className={cn('text-[10px]', resultColor('Success'))}>Success</Badge>
+                  <Badge variant="outline" className={cn('text-[10px]', resultColor('Sucesso'))}>Sucesso</Badge>
                 </td>
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={6} className="text-center py-12 text-muted-foreground text-sm">Não log entries match the current filters.</td></tr>
+              <tr><td colSpan={6} className="text-center py-12 text-muted-foreground text-sm">Nenhum log corresponde aos filtros atuais.</td></tr>
             )}
           </tbody>
         </table>
       </div>
 
       <div className="border-t border-border px-6 py-2 flex items-center justify-between shrink-0">
-        <span className="text-xs text-muted-foreground">{filtered.length} entries &middot; Last updated: {new Date().toISOString().replace('T', ' ').substring(0, 19)}</span>
+        <span className="text-xs text-muted-foreground">{filtered.length} registro(s) &middot; Atualizado em: {new Date().toISOString().replace('T', ' ').substring(0, 19)}</span>
       </div>
     </div>
   );

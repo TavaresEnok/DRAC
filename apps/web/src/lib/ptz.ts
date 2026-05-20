@@ -6,14 +6,16 @@ export const PTZ_DIRECTIONS = ['Up', 'Down', 'Left', 'Right', 'ZoomIn', 'ZoomOut
 export type PTZDirection = (typeof PTZ_DIRECTIONS)[number];
 
 type PtzAction =
-  | { action: 'start'; direction: PTZDirection }
-  | { action: 'stop' };
+  | { action: 'start'; direction: PTZDirection; speed?: number }
+  | { action: 'step'; direction: PTZDirection; speed?: number; durationMs?: number }
+  | { action: 'home' }
+  | { action: 'stop'; direction?: PTZDirection };
 
 type PtzResponse = {
   status: 'ok' | 'error';
   message?: string;
   cameraId?: string;
-  action?: 'start' | 'stop';
+  action?: 'start' | 'stop' | 'step' | 'home';
   direction?: PTZDirection;
 };
 

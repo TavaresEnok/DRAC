@@ -1,14 +1,15 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { AccessControlModule } from '../access-control/access-control.module';
 import { AlarmsModule } from '../alarms/alarms.module';
 import { AuditModule } from '../audit/audit.module';
+import { RecordingsModule } from '../recordings/recordings.module';
 import { CamerasController } from './cameras.controller';
 import { CamerasService } from './cameras.service';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { PortCheckerService } from '../common/network/port-checker.service';
 
 @Module({
-  imports: [AuditModule, AccessControlModule, AlarmsModule],
+  imports: [AuditModule, AccessControlModule, AlarmsModule, forwardRef(() => RecordingsModule)],
   controllers: [CamerasController],
   providers: [CamerasService, CryptoService, PortCheckerService],
   exports: [CamerasService, CryptoService, PortCheckerService],

@@ -1,31 +1,10 @@
-import { useEffect } from 'react';
+import { Suspense, lazy, useEffect } from 'react';
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from 'wouter';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/toaster';
 
 import { AppLayout } from './layouts/AppLayout';
-import LoginPage from './pages/LoginPage';
-import DashboardPage from './pages/DashboardPage';
-import LiveViewPage from './pages/LiveViewPage';
-import PlaybackPage from './pages/PlaybackPage';
-import EventsPage from './pages/EventsPage';
-import AlarmsPage from './pages/AlarmsPage';
-import CamerasPage from './pages/CamerasPage';
-import MapPage from './pages/MapPage';
-import PTZPage from './pages/PTZPage';
-import InvestigationPage from './pages/InvestigationPage';
-import EvidencePage from './pages/EvidencePage';
-import StoragePage from './pages/StoragePage';
-import SettingsPage from './pages/SettingsPage';
-import AIPage from './pages/AIPage';
-import CameraDetailPage from './pages/CameraDetailPage';
-import WallModePage from './pages/WallModePage';
-import UsersPage from './pages/UsersPage';
-import RolesPage from './pages/RolesPage';
-import ReportsPage from './pages/ReportsPage';
-import AuditLogsPage from './pages/AuditLogsPage';
-import NotFound from './pages/not-found';
 
 import { useAuthStore } from './store/authStore';
 import { useThemeStore } from './store/themeStore';
@@ -33,19 +12,51 @@ import { useVmsDataStore } from './store/vmsDataStore';
 
 const queryClient = new QueryClient();
 
-function ProtectedRoute({ component: Page }: { component: React.ComponentType }) {
-  const { isAuthenticated, isBootstrapped, isLoading } = useAuthStore();
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const LiveViewPage = lazy(() => import('./pages/LiveViewPage'));
+const PlaybackPage = lazy(() => import('./pages/PlaybackPage'));
+const EventsPage = lazy(() => import('./pages/EventsPage'));
+const AlarmsPage = lazy(() => import('./pages/AlarmsPage'));
+const CamerasPage = lazy(() => import('./pages/CamerasPage'));
+const MapPage = lazy(() => import('./pages/MapPage'));
+const PTZPage = lazy(() => import('./pages/PTZPage'));
+const InvestigationPage = lazy(() => import('./pages/InvestigationPage'));
+const EvidencePage = lazy(() => import('./pages/EvidencePage'));
+const StoragePage = lazy(() => import('./pages/StoragePage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const AIPage = lazy(() => import('./pages/AIPage'));
+const CameraDetailPage = lazy(() => import('./pages/CameraDetailPage'));
+const WallModePage = lazy(() => import('./pages/WallModePage'));
+const UsersPage = lazy(() => import('./pages/UsersPage'));
+const RolesPage = lazy(() => import('./pages/RolesPage'));
+const ReportsPage = lazy(() => import('./pages/ReportsPage'));
+const AuditLogsPage = lazy(() => import('./pages/AuditLogsPage'));
+const NotFound = lazy(() => import('./pages/not-found'));
+
+function AppFallback() {
+  return (
+    <div className="flex h-screen items-center justify-center bg-background text-sm text-muted-foreground">
+      Carregando NexusGuard...
+    </div>
+  );
+}
+
+function ProtectedRoute({ component: Page, adminOnly = false }: { component: React.ComponentType; adminOnly?: boolean }) {
+  const { isAuthenticated, isBootstrapped, isLoading, user } = useAuthStore();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
     if (isBootstrapped && !isAuthenticated) setLocation('/login');
-  }, [isAuthenticated, isBootstrapped, setLocation]);
+    if (isBootstrapped && isAuthenticated && adminOnly && user?.role !== 'admin') setLocation('/dashboard');
+  }, [adminOnly, isAuthenticated, isBootstrapped, setLocation, user?.role]);
 
   if (!isBootstrapped || isLoading) {
-    return <div className="flex h-screen items-center justify-center bg-background text-sm text-muted-foreground">Carregando NexusGuard...</div>;
+    return <AppFallback />;
   }
 
   if (!isAuthenticated) return null;
+  if (adminOnly && user?.role !== 'admin') return null;
 
   return (
     <AppLayout>
@@ -112,7 +123,7 @@ function AppRoutes() {
         {() => <ProtectedRoute component={StoragePage} />}
       </Route>
       <Route path="/settings">
-        {() => <ProtectedRoute component={SettingsPage} />}
+        {() => <ProtectedRoute component={SettingsPage} adminOnly />}
       </Route>
       <Route path="/ai">
         {() => <ProtectedRoute component={AIPage} />}
@@ -124,16 +135,16 @@ function AppRoutes() {
         {() => <ProtectedRoute component={WallModePage} />}
       </Route>
       <Route path="/users">
-        {() => <ProtectedRoute component={UsersPage} />}
+        {() => <ProtectedRoute component={UsersPage} adminOnly />}
       </Route>
       <Route path="/roles">
-        {() => <ProtectedRoute component={RolesPage} />}
+        {() => <ProtectedRoute component={RolesPage} adminOnly />}
       </Route>
       <Route path="/reports">
         {() => <ProtectedRoute component={ReportsPage} />}
       </Route>
       <Route path="/audit">
-        {() => <ProtectedRoute component={AuditLogsPage} />}
+        {() => <ProtectedRoute component={AuditLogsPage} adminOnly />}
       </Route>
       <Route path="/" component={RootRedirect} />
       <Route component={NotFound} />
@@ -161,7 +172,9 @@ function App() {
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
           <ThemeSync />
-          <AppRoutes />
+          <Suspense fallback={<AppFallback />}>
+            <AppRoutes />
+          </Suspense>
         </WouterRouter>
         <Toaster />
       </TooltipProvider>

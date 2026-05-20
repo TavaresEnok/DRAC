@@ -1,13 +1,14 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, NotFoundException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { extname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { type Response } from 'express';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Queue } from 'bullmq';
-import { UserRole } from '@prisma/client';
+import { RecordingSource, UserRole } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { AccessControlService } from '../access-control/access-control.service';
 import { AuthService } from '../auth/auth.service';
@@ -19,6 +20,11 @@ import { ExportClipDto } from './dto/export-clip.dto';
 import { ensureFileUnderRoot } from './helpers/safe-file.helper';
 
 const execFileAsync = promisify(execFile);
+type RecordingHealthCacheEntry = {
+  checkedAt: string;
+  diagnostics?: Record<string, unknown>;
+  integrity?: Record<string, unknown>;
+};
 
 @Injectable()
 export class RecordingsService {
@@ -37,7 +43,37 @@ export class RecordingsService {
     return recording;
   }
 
+  private getDiagnosticsCacheFile() {
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
+    const dir = join(recordingsRoot, '.diagnostics-cache');
+    mkdirSync(dir, { recursive: true });
+    return join(dir, 'recording-health.json');
+  }
+
+  private readDiagnosticsCache() {
+    const file = this.getDiagnosticsCacheFile();
+    if (!existsSync(file)) return {} as Record<string, RecordingHealthCacheEntry>;
+    try {
+      const raw = readFileSync(file, 'utf-8');
+      const parsed = JSON.parse(raw) as Record<string, RecordingHealthCacheEntry>;
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {} as Record<string, RecordingHealthCacheEntry>;
+    }
+  }
+
+  private writeDiagnosticsCache(cache: Record<string, RecordingHealthCacheEntry>) {
+    const file = this.getDiagnosticsCacheFile();
+    writeFileSync(file, JSON.stringify(cache), 'utf-8');
+  }
+
+  private getCacheTtlMs() {
+    const ttl = Number(process.env.RECORDING_DIAGNOSTICS_TTL_SECONDS ?? 900);
+    return Math.max(60, Number.isFinite(ttl) ? ttl : 900) * 1000;
+  }
+
   async list(query: ListRecordingsQueryDto, accessibleCameraIds?: string[]) {
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
     let from = query.from ? new Date(query.from) : undefined;
     let to = query.to ? new Date(query.to) : undefined;
 
@@ -72,13 +108,27 @@ export class RecordingsService {
 
     return {
       items: items.map((item: any) => ({
+        ...(function () {
+          const absolutePath = ensureFileUnderRoot(recordingsRoot, item.filePath);
+          const fileExists = existsSync(absolutePath);
+          const actualSizeBytes = fileExists ? statSync(absolutePath).size : 0;
+          const fileUsable = fileExists && actualSizeBytes > 1024;
+          return {
+            fileExists,
+            fileUsable,
+            actualSizeBytes,
+            compatibleCached: existsSync(join(recordingsRoot, '.playback-compatible', item.cameraId, `${item.id}.mp4`)),
+          };
+        })(),
         id: item.id,
         cameraId: item.cameraId,
+        source: item.source ?? RecordingSource.UNKNOWN,
         startedAt: item.startedAt,
         endedAt: item.endedAt,
         durationSeconds: item.durationSeconds,
         sizeBytes: item.sizeBytes ? item.sizeBytes.toString() : null,
         playUrl: `/recordings/${item.id}/play`,
+        compatiblePlayUrl: `/recordings/${item.id}/play?compatible=1`,
         thumbnailUrl: `/recordings/${item.id}/thumbnail`,
       })),
       total,
@@ -98,7 +148,16 @@ export class RecordingsService {
     const fileSize = stats.size;
     const range = res.req.headers.range;
 
-    res.setHeader('Content-Type', 'video/mp4');
+    const extension = extname(filePath).toLowerCase();
+    const contentType =
+      extension === '.mp4'
+        ? 'video/mp4'
+        : extension === '.mkv'
+          ? 'video/x-matroska'
+          : extension === '.ts'
+            ? 'video/mp2t'
+            : 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Accept-Ranges', 'bytes');
 
     if (!range) {
@@ -144,16 +203,22 @@ export class RecordingsService {
         '-y',
         '-i',
         inputPath,
+        '-map',
+        '0:v:0',
+        '-map',
+        '0:a:0?',
         '-c:v',
         'libx264',
         '-preset',
-        'veryfast',
+        'ultrafast',
         '-profile:v',
         'baseline',
         '-level',
         '3.1',
         '-pix_fmt',
         'yuv420p',
+        '-tune',
+        'zerolatency',
         '-vf',
         'scale=min(1280\\,iw):-2',
         '-c:a',
@@ -165,7 +230,10 @@ export class RecordingsService {
         '-movflags',
         '+faststart',
         outputPath,
-      ]);
+      ], {
+        timeout: 120000,
+        maxBuffer: 8 * 1024 * 1024,
+      });
     } catch (error) {
       throw new InternalServerErrorException(error instanceof Error ? error.message : 'Falha ao gerar playback compatível.');
     }
@@ -217,14 +285,41 @@ export class RecordingsService {
       throw new NotFoundException('Arquivo de gravação não encontrado no disco.');
     }
 
+    const stats = statSync(filePath);
+    const fileSize = stats.size;
+    const range = res.req.headers.range;
     res.setHeader('Content-Disposition', `attachment; filename="recording-${recording.id}.mp4"`);
-    createReadStream(filePath).pipe(res);
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Accept-Ranges', 'bytes');
+
+    if (!range) {
+      res.setHeader('Content-Length', fileSize);
+      createReadStream(filePath).pipe(res);
+      return;
+    }
+
+    const [startText, endText] = range.replace(/bytes=/, '').split('-');
+    const start = Number(startText);
+    const end = endText ? Number(endText) : fileSize - 1;
+    const validStart = Number.isNaN(start) ? 0 : Math.max(0, start);
+    const validEnd = Number.isNaN(end) ? fileSize - 1 : Math.min(end, fileSize - 1);
+
+    if (validStart >= fileSize || validStart > validEnd) {
+      res.status(416).setHeader('Content-Range', `bytes */${fileSize}`).end();
+      return;
+    }
+
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${validStart}-${validEnd}/${fileSize}`);
+    res.setHeader('Content-Length', validEnd - validStart + 1);
+    createReadStream(filePath, { start: validStart, end: validEnd }).pipe(res);
   }
   
   async registerInternal(dto: RegisterRecordingDto) {
     const recording = await this.prisma.recording.create({
       data: {
         cameraId: dto.cameraId,
+        source: RecordingSource.WORKER,
         filePath: dto.filePath,
         startedAt: new Date(dto.startedAt),
         endedAt: new Date(dto.endedAt),
@@ -261,6 +356,657 @@ export class RecordingsService {
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'public, max-age=60');
     createReadStream(thumbPath).pipe(res);
+  }
+
+  async getRecordingDiagnostics(recordingId: string, force = false) {
+    if (!force) {
+      const cache = this.readDiagnosticsCache();
+      const entry = cache[recordingId];
+      const checkedAt = entry?.checkedAt ? new Date(entry.checkedAt).getTime() : 0;
+      if (entry?.diagnostics && checkedAt > 0 && Date.now() - checkedAt <= this.getCacheTtlMs()) {
+        return entry.diagnostics;
+      }
+    }
+    const recording = await this.ensureRecordingExists(recordingId);
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
+    const filePath = ensureFileUnderRoot(recordingsRoot, recording.filePath);
+    const fileExists = existsSync(filePath);
+    if (!fileExists) {
+      const result = {
+        recordingId,
+        fileExists: false,
+        playableLikely: false,
+        reason: 'file_missing',
+      };
+      const cache = this.readDiagnosticsCache();
+      cache[recordingId] = { ...(cache[recordingId] ?? {}), checkedAt: new Date().toISOString(), diagnostics: result };
+      this.writeDiagnosticsCache(cache);
+      return result;
+    }
+
+    const fileSize = statSync(filePath).size;
+    if (fileSize <= 0) {
+      const result = {
+        recordingId,
+        fileExists: true,
+        fileSizeBytes: fileSize,
+        playableLikely: false,
+        reason: 'empty_file',
+      };
+      const cache = this.readDiagnosticsCache();
+      cache[recordingId] = { ...(cache[recordingId] ?? {}), checkedAt: new Date().toISOString(), diagnostics: result };
+      this.writeDiagnosticsCache(cache);
+      return result;
+    }
+
+    try {
+      const { stdout } = await execFileAsync('ffprobe', [
+        '-v',
+        'error',
+        '-show_entries',
+        'stream=index,codec_type,codec_name,avg_frame_rate,width,height,sample_rate,channels:format=format_name,duration,bit_rate',
+        '-of',
+        'json',
+        filePath,
+      ]);
+      const parsed = JSON.parse(stdout || '{}') as {
+        streams?: Array<Record<string, unknown>>;
+        format?: Record<string, unknown>;
+      };
+      const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
+      const video = streams.find((s) => String(s.codec_type ?? '') === 'video') ?? null;
+      const audio = streams.find((s) => String(s.codec_type ?? '') === 'audio') ?? null;
+      const vcodec = video ? String(video.codec_name ?? '') : '';
+      const acodec = audio ? String(audio.codec_name ?? '') : '';
+      const formatName = String(parsed.format?.format_name ?? '');
+      const compatibleVideo = ['h264', 'vp8', 'vp9', 'av1'].includes(vcodec.toLowerCase());
+      const compatibleAudio = !audio || ['aac', 'mp3', 'opus', 'vorbis'].includes(acodec.toLowerCase());
+      const formatLower = formatName.toLowerCase();
+      const fragmentedLikely = formatLower.includes('mov') || formatLower.includes('mp4');
+      const compatibleRecommended = !Boolean(video) || !compatibleVideo || !compatibleAudio;
+      const playableLikely = Boolean(video) && compatibleVideo && compatibleAudio;
+      const hasAudioStream = Boolean(audio);
+      const audioPlayableLikely = !audio || compatibleAudio;
+
+      const result = {
+        recordingId,
+        fileExists: true,
+        fileSizeBytes: fileSize,
+        playableLikely,
+        compatibleRecommended,
+        hasAudioStream,
+        audioPlayableLikely,
+        compatibleCached: existsSync(join(recordingsRoot, '.playback-compatible', recording.cameraId, `${recording.id}.mp4`)),
+        fragmentedLikely,
+        reason: playableLikely ? null : (!video ? 'missing_video_stream' : !compatibleVideo ? `video_codec_${vcodec || 'unknown'}_may_fail` : `audio_codec_${acodec || 'unknown'}_may_fail`),
+        format: formatName || null,
+        durationSeconds: Number(parsed.format?.duration ?? 0) || null,
+        bitRate: Number(parsed.format?.bit_rate ?? 0) || null,
+        video: video
+          ? {
+              codec: vcodec || null,
+              width: Number(video.width ?? 0) || null,
+              height: Number(video.height ?? 0) || null,
+              avgFrameRate: String(video.avg_frame_rate ?? '') || null,
+            }
+          : null,
+        audio: audio
+          ? {
+              codec: acodec || null,
+              channels: Number(audio.channels ?? 0) || null,
+              sampleRate: Number(audio.sample_rate ?? 0) || null,
+            }
+          : null,
+      };
+      const cache = this.readDiagnosticsCache();
+      cache[recordingId] = { ...(cache[recordingId] ?? {}), checkedAt: new Date().toISOString(), diagnostics: result };
+      this.writeDiagnosticsCache(cache);
+      return result;
+    } catch (error) {
+      const result = {
+        recordingId,
+        fileExists: true,
+        fileSizeBytes: fileSize,
+        playableLikely: false,
+        reason: error instanceof Error ? error.message : 'ffprobe_failed',
+      };
+      const cache = this.readDiagnosticsCache();
+      cache[recordingId] = { ...(cache[recordingId] ?? {}), checkedAt: new Date().toISOString(), diagnostics: result };
+      this.writeDiagnosticsCache(cache);
+      return result;
+    }
+  }
+
+  async shouldPreferCompatiblePlayback(recordingId: string) {
+    const recording = await this.ensureRecordingExists(recordingId);
+    const extension = extname(recording.filePath).toLowerCase();
+    if (extension && extension !== '.mp4') {
+      return true;
+    }
+    const diagnostics = await this.getRecordingDiagnostics(recordingId);
+    return Boolean((diagnostics as { compatibleRecommended?: boolean }).compatibleRecommended);
+  }
+
+  async getRecordingIntegrity(recordingId: string, force = false) {
+    if (!force) {
+      const cache = this.readDiagnosticsCache();
+      const entry = cache[recordingId];
+      const checkedAt = entry?.checkedAt ? new Date(entry.checkedAt).getTime() : 0;
+      if (entry?.integrity && checkedAt > 0 && Date.now() - checkedAt <= this.getCacheTtlMs()) {
+        return entry.integrity;
+      }
+    }
+    const recording = await this.ensureRecordingExists(recordingId);
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
+    const filePath = ensureFileUnderRoot(recordingsRoot, recording.filePath);
+    if (!existsSync(filePath)) {
+      const result = {
+        recordingId,
+        fileExists: false,
+        integrityOk: false,
+        reason: 'file_missing',
+        checkedAt: new Date().toISOString(),
+      };
+      const cache = this.readDiagnosticsCache();
+      cache[recordingId] = { ...(cache[recordingId] ?? {}), checkedAt: new Date().toISOString(), integrity: result };
+      this.writeDiagnosticsCache(cache);
+      return result;
+    }
+
+    const fileSize = statSync(filePath).size;
+    if (fileSize <= 1024) {
+      const result = {
+        recordingId,
+        fileExists: true,
+        fileSizeBytes: fileSize,
+        integrityOk: false,
+        reason: 'file_too_small',
+        checkedAt: new Date().toISOString(),
+      };
+      const cache = this.readDiagnosticsCache();
+      cache[recordingId] = { ...(cache[recordingId] ?? {}), checkedAt: new Date().toISOString(), integrity: result };
+      this.writeDiagnosticsCache(cache);
+      return result;
+    }
+
+    try {
+      await execFileAsync('ffmpeg', [
+        '-v',
+        'error',
+        '-i',
+        filePath,
+        '-map',
+        '0:v:0',
+        '-f',
+        'null',
+        '-',
+      ], { timeout: 45000, maxBuffer: 1024 * 1024 });
+      const result = {
+        recordingId,
+        fileExists: true,
+        fileSizeBytes: fileSize,
+        integrityOk: true,
+        reason: null,
+        checkedAt: new Date().toISOString(),
+      };
+      const cache = this.readDiagnosticsCache();
+      cache[recordingId] = { ...(cache[recordingId] ?? {}), checkedAt: new Date().toISOString(), integrity: result };
+      this.writeDiagnosticsCache(cache);
+      return result;
+    } catch (error: any) {
+      const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : '';
+      const result = {
+        recordingId,
+        fileExists: true,
+        fileSizeBytes: fileSize,
+        integrityOk: false,
+        reason: stderr || error?.message || 'ffmpeg_integrity_check_failed',
+        checkedAt: new Date().toISOString(),
+      };
+      const cache = this.readDiagnosticsCache();
+      cache[recordingId] = { ...(cache[recordingId] ?? {}), checkedAt: new Date().toISOString(), integrity: result };
+      this.writeDiagnosticsCache(cache);
+      return result;
+    }
+  }
+
+  async getRecordingDiagnosticsBulk(recordingIds: string[], includeIntegrity = false) {
+    const uniqueIds = [...new Set(recordingIds)].slice(0, 120);
+    const items: Array<Record<string, unknown>> = [];
+    for (const id of uniqueIds) {
+      const diagnostics = await this.getRecordingDiagnostics(id);
+      if (includeIntegrity) {
+        const integrity = await this.getRecordingIntegrity(id);
+        items.push({ recordingId: id, diagnostics, integrity });
+      } else {
+        items.push({ recordingId: id, diagnostics });
+      }
+    }
+    return {
+      items,
+      totalRequested: uniqueIds.length,
+    };
+  }
+
+  async getRecordingHealthSummary(params: { date?: string; cameraId?: string; accessibleCameraIds?: string[]; brokenAlertThreshold?: number }) {
+    const selected = params.date ? new Date(params.date) : new Date();
+    selected.setHours(0, 0, 0, 0);
+    const from = new Date(selected);
+    const to = new Date(selected);
+    to.setHours(23, 59, 59, 999);
+    const where = {
+      ...(params.cameraId ? { cameraId: params.cameraId } : {}),
+      ...(params.accessibleCameraIds ? { cameraId: { in: params.accessibleCameraIds } } : {}),
+      startedAt: { gte: from, lte: to },
+    };
+
+    const records = await this.prisma.recording.findMany({
+      where,
+      select: { id: true, cameraId: true, startedAt: true },
+      orderBy: { startedAt: 'asc' },
+      take: 1200,
+    });
+
+    const byCamera = new Map<string, {
+      cameraId: string;
+      total: number;
+      broken: number;
+      tooSmall: number;
+      compatibleRecommended: number;
+      directLikely: number;
+      withAudio: number;
+      lastRecordingAt: string | null;
+      lastRecordingAgeSeconds: number | null;
+    }>();
+    const minExpectedBytes = Math.max(32 * 1024, Number(process.env.RECORDING_MIN_EXPECTED_FILE_BYTES ?? 128 * 1024));
+
+    for (const record of records) {
+      const diagnostics = await this.getRecordingDiagnostics(record.id, false) as any;
+      const current = byCamera.get(record.cameraId) ?? {
+        cameraId: record.cameraId,
+        total: 0,
+        broken: 0,
+        tooSmall: 0,
+        compatibleRecommended: 0,
+        directLikely: 0,
+        withAudio: 0,
+        lastRecordingAt: null,
+        lastRecordingAgeSeconds: null,
+      };
+      current.total += 1;
+      current.lastRecordingAt = record.startedAt.toISOString();
+      current.lastRecordingAgeSeconds = Math.max(0, Math.floor((Date.now() - record.startedAt.getTime()) / 1000));
+      const fileSize = Number(diagnostics.fileSizeBytes ?? 0);
+      if (fileSize > 0 && fileSize < minExpectedBytes) current.tooSmall += 1;
+      if (!diagnostics.fileExists || diagnostics.reason === 'file_missing' || diagnostics.reason === 'empty_file') {
+        current.broken += 1;
+      } else if (diagnostics.compatibleRecommended) {
+        current.compatibleRecommended += 1;
+      } else {
+        current.directLikely += 1;
+      }
+      if (diagnostics.hasAudioStream) current.withAudio += 1;
+      byCamera.set(record.cameraId, current);
+    }
+
+    const threshold = Math.max(1, Math.floor(params.brokenAlertThreshold ?? 3));
+    const items = Array.from(byCamera.values()).map((item) => {
+      const degradedRatio = item.total > 0 ? (item.broken + item.compatibleRecommended) / item.total : 0;
+      const needsAttention =
+        item.broken >= threshold ||
+        degradedRatio >= 0.5 ||
+        item.tooSmall >= threshold ||
+        (item.lastRecordingAgeSeconds != null && item.lastRecordingAgeSeconds > 30 * 60);
+      let alertReason: string | null = null;
+      if (item.broken >= threshold) alertReason = `falhas=${item.broken} (limiar=${threshold})`;
+      else if (item.tooSmall >= threshold) alertReason = `arquivos pequenos=${item.tooSmall} (mín ${Math.round(minExpectedBytes / 1024)}KB)`;
+      else if (item.lastRecordingAgeSeconds != null && item.lastRecordingAgeSeconds > 30 * 60) alertReason = `último segmento atrasado (${Math.floor(item.lastRecordingAgeSeconds / 60)} min)`;
+      else if (degradedRatio >= 0.5) alertReason = 'alta taxa de segmentos degradados';
+      return {
+        ...item,
+        needsAttention,
+        alertReason,
+      };
+    }).sort((a, b) => {
+      const riskA = a.broken * 4 + a.compatibleRecommended;
+      const riskB = b.broken * 4 + b.compatibleRecommended;
+      return riskB - riskA;
+    });
+
+    return {
+      date: from.toISOString(),
+      totalRecordings: records.length,
+      brokenAlertThreshold: threshold,
+      minExpectedFileBytes: minExpectedBytes,
+      camerasNeedingAttention: items.filter((item) => item.needsAttention).length,
+      cameras: items,
+    };
+  }
+
+  async getRecordingGapsReport(params: { date?: string; cameraId: string; accessibleCameraIds?: string[] }) {
+    const selected = params.date ? new Date(params.date) : new Date();
+    selected.setHours(0, 0, 0, 0);
+    const dayStart = new Date(selected);
+    const dayEnd = new Date(selected);
+    dayEnd.setHours(23, 59, 59, 999);
+
+    if (params.accessibleCameraIds && !params.accessibleCameraIds.includes(params.cameraId)) {
+      throw new NotFoundException('Câmera não encontrada para este usuário.');
+    }
+
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
+    const records = await this.prisma.recording.findMany({
+      where: {
+        cameraId: params.cameraId,
+        startedAt: { gte: dayStart, lte: dayEnd },
+      },
+      select: {
+        id: true,
+        filePath: true,
+        startedAt: true,
+        endedAt: true,
+        durationSeconds: true,
+      },
+      orderBy: { startedAt: 'asc' },
+      take: 2000,
+    });
+
+    const usableSegments = records
+      .map((record) => {
+        const fileExists = existsSync(ensureFileUnderRoot(recordingsRoot, record.filePath));
+        if (!fileExists) return null;
+        const startMs = record.startedAt.getTime();
+        const endMs = record.endedAt?.getTime()
+          ?? (record.durationSeconds ? startMs + record.durationSeconds * 1000 : startMs);
+        if (endMs <= startMs) return null;
+        return { startMs, endMs };
+      })
+      .filter((item): item is { startMs: number; endMs: number } => Boolean(item))
+      .sort((a, b) => a.startMs - b.startMs);
+
+    const merged: Array<{ startMs: number; endMs: number }> = [];
+    for (const segment of usableSegments) {
+      const last = merged[merged.length - 1];
+      if (!last || segment.startMs > last.endMs) {
+        merged.push({ ...segment });
+      } else {
+        last.endMs = Math.max(last.endMs, segment.endMs);
+      }
+    }
+
+    const gaps: Array<{ startAt: string; endAt: string; durationSeconds: number }> = [];
+    let cursor = dayStart.getTime();
+    for (const segment of merged) {
+      if (segment.startMs > cursor) {
+        const durationSeconds = Math.floor((segment.startMs - cursor) / 1000);
+        if (durationSeconds > 0) {
+          gaps.push({
+            startAt: new Date(cursor).toISOString(),
+            endAt: new Date(segment.startMs).toISOString(),
+            durationSeconds,
+          });
+        }
+      }
+      cursor = Math.max(cursor, segment.endMs);
+    }
+    if (cursor < dayEnd.getTime()) {
+      const durationSeconds = Math.floor((dayEnd.getTime() - cursor) / 1000);
+      if (durationSeconds > 0) {
+        gaps.push({
+          startAt: new Date(cursor).toISOString(),
+          endAt: new Date(dayEnd.getTime()).toISOString(),
+          durationSeconds,
+        });
+      }
+    }
+
+    const totalGapSeconds = gaps.reduce((sum, item) => sum + item.durationSeconds, 0);
+    return {
+      date: dayStart.toISOString(),
+      cameraId: params.cameraId,
+      totalSegments: records.length,
+      usableSegments: merged.length,
+      totalGaps: gaps.length,
+      totalGapSeconds,
+      gaps: gaps.slice(0, 240),
+    };
+  }
+
+  async getPlaybackReadinessReport(params: { date?: string; cameraId: string; accessibleCameraIds?: string[] }) {
+    const selected = params.date ? new Date(params.date) : new Date();
+    selected.setHours(0, 0, 0, 0);
+    const from = new Date(selected);
+    const to = new Date(selected);
+    to.setHours(23, 59, 59, 999);
+
+    if (params.accessibleCameraIds && !params.accessibleCameraIds.includes(params.cameraId)) {
+      throw new NotFoundException('Câmera não encontrada para este usuário.');
+    }
+
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
+    const records = await this.prisma.recording.findMany({
+      where: {
+        cameraId: params.cameraId,
+        startedAt: { gte: from, lte: to },
+      },
+      select: {
+        id: true,
+        source: true,
+        filePath: true,
+      },
+      orderBy: { startedAt: 'asc' },
+      take: 2000,
+    });
+
+    let existingFiles = 0;
+    let usableFiles = 0;
+    let missingFiles = 0;
+    let workerRecords = 0;
+    let workerUsableFiles = 0;
+
+    for (const record of records) {
+      if (record.source === RecordingSource.WORKER) workerRecords += 1;
+      const absolutePath = ensureFileUnderRoot(recordingsRoot, record.filePath);
+      const fileExists = existsSync(absolutePath);
+      if (!fileExists) {
+        missingFiles += 1;
+        continue;
+      }
+      existingFiles += 1;
+      const size = statSync(absolutePath).size;
+      const usable = size > 1024;
+      if (usable) {
+        usableFiles += 1;
+        if (record.source === RecordingSource.WORKER) workerUsableFiles += 1;
+      }
+    }
+
+    const gaps = await this.getRecordingGapsReport({
+      date: from.toISOString(),
+      cameraId: params.cameraId,
+      accessibleCameraIds: params.accessibleCameraIds,
+    });
+
+    const passPlaybackFindsFiles = usableFiles > 0;
+    const passWorkerPlaybackFindsFiles = workerRecords === 0 ? null : workerUsableFiles > 0;
+
+    return {
+      date: from.toISOString(),
+      cameraId: params.cameraId,
+      totals: {
+        records: records.length,
+        existingFiles,
+        usableFiles,
+        missingFiles,
+      },
+      source: {
+        workerRecords,
+        workerUsableFiles,
+      },
+      gaps: {
+        totalGaps: gaps.totalGaps,
+        totalGapSeconds: gaps.totalGapSeconds,
+      },
+      criteria: {
+        passPlaybackFindsFiles,
+        passWorkerPlaybackFindsFiles,
+      },
+    };
+  }
+
+  async getStorageUsageAnalytics(params: {
+    from?: string;
+    to?: string;
+    cameraId?: string;
+    accessibleCameraIds?: string[];
+  }) {
+    const from = params.from ? new Date(params.from) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const to = params.to ? new Date(params.to) : new Date();
+    const cameraIds = params.cameraId ? [params.cameraId] : params.accessibleCameraIds;
+    const cameraWhere = cameraIds && cameraIds.length ? { in: cameraIds } : undefined;
+
+    const [recordings, clips, cameras] = await Promise.all([
+      this.prisma.recording.findMany({
+        where: {
+          startedAt: { gte: from, lte: to },
+          ...(cameraWhere ? { cameraId: cameraWhere } : {}),
+        },
+        select: {
+          cameraId: true,
+          startedAt: true,
+          sizeBytes: true,
+        },
+        take: 100000,
+      }),
+      this.prisma.exportedClip.findMany({
+        where: {
+          startedAt: { gte: from, lte: to },
+          ...(cameraWhere ? { cameraId: cameraWhere } : {}),
+        },
+        select: {
+          cameraId: true,
+          startedAt: true,
+          sizeBytes: true,
+        },
+        take: 100000,
+      }),
+      this.prisma.camera.findMany({
+        where: cameraWhere ? { id: cameraWhere } : {},
+        select: { id: true, name: true },
+      }),
+    ]);
+
+    const cameraNameById = new Map(cameras.map((camera) => [camera.id, camera.name]));
+    const dayKey = (date: Date) => date.toISOString().slice(0, 10);
+    const bucket = new Map<
+      string,
+      {
+        cameraId: string;
+        cameraName: string;
+        day: string;
+        recordingsBytes: bigint;
+        clipsBytes: bigint;
+        recordingsCount: number;
+        clipsCount: number;
+      }
+    >();
+
+    const ensure = (cameraId: string, day: string) => {
+      const key = `${cameraId}::${day}`;
+      const current = bucket.get(key);
+      if (current) return current;
+      const created = {
+        cameraId,
+        cameraName: cameraNameById.get(cameraId) ?? cameraId,
+        day,
+        recordingsBytes: BigInt(0),
+        clipsBytes: BigInt(0),
+        recordingsCount: 0,
+        clipsCount: 0,
+      };
+      bucket.set(key, created);
+      return created;
+    };
+
+    for (const recording of recordings) {
+      const row = ensure(recording.cameraId, dayKey(recording.startedAt));
+      row.recordingsCount += 1;
+      row.recordingsBytes += BigInt(recording.sizeBytes ?? BigInt(0));
+    }
+
+    for (const clip of clips) {
+      const row = ensure(clip.cameraId, dayKey(clip.startedAt));
+      row.clipsCount += 1;
+      row.clipsBytes += BigInt(clip.sizeBytes ?? BigInt(0));
+    }
+
+    const items = [...bucket.values()]
+      .map((row) => ({
+        cameraId: row.cameraId,
+        cameraName: row.cameraName,
+        day: row.day,
+        recordingsCount: row.recordingsCount,
+        clipsCount: row.clipsCount,
+        recordingsBytes: row.recordingsBytes.toString(),
+        clipsBytes: row.clipsBytes.toString(),
+        totalBytes: (row.recordingsBytes + row.clipsBytes).toString(),
+      }))
+      .sort((a, b) => (a.day === b.day ? a.cameraName.localeCompare(b.cameraName) : a.day < b.day ? 1 : -1));
+
+    const totalRecordingsBytes = items.reduce((acc, item) => acc + BigInt(item.recordingsBytes), BigInt(0));
+    const totalClipsBytes = items.reduce((acc, item) => acc + BigInt(item.clipsBytes), BigInt(0));
+
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      cameraId: params.cameraId ?? null,
+      summary: {
+        rows: items.length,
+        totalRecordingsBytes: totalRecordingsBytes.toString(),
+        totalClipsBytes: totalClipsBytes.toString(),
+        totalBytes: (totalRecordingsBytes + totalClipsBytes).toString(),
+      },
+      items,
+    };
+  }
+
+  async streamSnapshotFrame(recordingId: string, seconds: number, res: Response) {
+    const recording = await this.ensureRecordingExists(recordingId);
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
+    const filePath = ensureFileUnderRoot(recordingsRoot, recording.filePath);
+    if (!existsSync(filePath)) {
+      throw new NotFoundException('Arquivo de gravação não encontrado no disco.');
+    }
+
+    const safeSeconds = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
+    try {
+      const { stdout } = await execFileAsync('ffmpeg', [
+        '-v',
+        'error',
+        '-ss',
+        String(safeSeconds),
+        '-i',
+        filePath,
+        '-frames:v',
+        '1',
+        '-f',
+        'image2pipe',
+        '-vcodec',
+        'mjpeg',
+        'pipe:1',
+      ], { encoding: 'buffer', maxBuffer: 12 * 1024 * 1024, timeout: 30000 });
+
+      if (!stdout || stdout.length === 0) {
+        throw new InternalServerErrorException('FFmpeg não retornou imagem para este frame.');
+      }
+
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Content-Disposition', `attachment; filename="snapshot-${recording.id}-${safeSeconds}s.jpg"`);
+      res.end(stdout);
+    } catch (error) {
+      if (error instanceof InternalServerErrorException) throw error;
+      throw new InternalServerErrorException(error instanceof Error ? error.message : 'Falha ao gerar snapshot do frame.');
+    }
   }
 
   async ensureExportedClipExists(clipId: string) {
@@ -320,6 +1066,101 @@ export class RecordingsService {
     }
   }
 
+  private async transcodeClipForCompatibility(inputPath: string, outputPath: string, startSeconds: number, durationSeconds: number) {
+    try {
+      await execFileAsync('ffmpeg', [
+        '-y',
+        '-ss',
+        String(startSeconds),
+        '-i',
+        inputPath,
+        '-t',
+        String(durationSeconds),
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-crf',
+        '23',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'aac',
+        '-ar',
+        '48000',
+        '-ac',
+        '2',
+        '-movflags',
+        '+faststart',
+        outputPath,
+      ]);
+    } catch (error) {
+      throw new InternalServerErrorException(error instanceof Error ? error.message : 'Falha ao transcodificar clip compatível.');
+    }
+  }
+
+  private async inspectClipExternalPlayback(filePath: string) {
+    try {
+      const { stdout } = await execFileAsync(
+        'ffprobe',
+        ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', filePath],
+        { timeout: 15000, maxBuffer: 8 * 1024 * 1024 },
+      );
+      const parsed = JSON.parse(stdout || '{}') as {
+        format?: { format_name?: string; duration?: string };
+        streams?: Array<{ codec_type?: string; codec_name?: string }>;
+      };
+
+      const formatName = String(parsed.format?.format_name ?? '').toLowerCase();
+      const durationSeconds = Number(parsed.format?.duration ?? 0);
+      const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
+      const video = streams.find((s) => s.codec_type === 'video');
+      const audio = streams.find((s) => s.codec_type === 'audio');
+      const videoCodec = String(video?.codec_name ?? '').toLowerCase();
+      const audioCodec = String(audio?.codec_name ?? '').toLowerCase();
+
+      const containerOk = formatName.includes('mp4') || formatName.includes('mov');
+      const videoOk = ['h264', 'hevc'].includes(videoCodec);
+      const audioOk = !audioCodec || ['aac', 'mp3'].includes(audioCodec);
+      const durationOk = Number.isFinite(durationSeconds) && durationSeconds > 0.1;
+
+      const ok = containerOk && videoOk && audioOk && durationOk;
+      const reasons: string[] = [];
+      if (!containerOk) reasons.push(`container_incompativel:${formatName || 'desconhecido'}`);
+      if (!videoOk) reasons.push(`codec_video_incompativel:${videoCodec || 'desconhecido'}`);
+      if (!audioOk) reasons.push(`codec_audio_incompativel:${audioCodec}`);
+      if (!durationOk) reasons.push('duracao_invalida');
+
+      return {
+        ok,
+        container: formatName || null,
+        videoCodec: videoCodec || null,
+        audioCodec: audioCodec || null,
+        durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : null,
+        reasons,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        container: null,
+        videoCodec: null,
+        audioCodec: null,
+        durationSeconds: null,
+        reasons: [error instanceof Error ? error.message : 'ffprobe_failed'],
+      };
+    }
+  }
+
+  private async computeFileSha256(filePath: string): Promise<string> {
+    return await new Promise((resolve, reject) => {
+      const hash = createHash('sha256');
+      const stream = createReadStream(filePath);
+      stream.on('data', (chunk) => hash.update(chunk));
+      stream.on('error', reject);
+      stream.on('end', () => resolve(hash.digest('hex')));
+    });
+  }
+
   async exportClip(user: AuthUser, recordingId: string, dto: ExportClipDto) {
     const recording = await this.ensureRecordingExists(recordingId);
     const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
@@ -367,7 +1208,22 @@ export class RecordingsService {
       throw new InternalServerErrorException('FFmpeg não gerou o arquivo de clip.');
     }
 
+    let externalPlayback = await this.inspectClipExternalPlayback(outputPath);
+    if (!externalPlayback.ok) {
+      await this.transcodeClipForCompatibility(inputPath, outputPath, dto.startSeconds, durationSeconds);
+      if (!existsSync(outputPath)) {
+        throw new InternalServerErrorException('Falha ao gerar clip compatível para reprodução externa.');
+      }
+      externalPlayback = await this.inspectClipExternalPlayback(outputPath);
+      if (!externalPlayback.ok) {
+        throw new InternalServerErrorException(
+          `Clip exportado incompatível para reprodução externa: ${externalPlayback.reasons.join(', ') || 'motivo desconhecido'}.`,
+        );
+      }
+    }
+
     const stats = statSync(outputPath);
+    const fileSha256 = await this.computeFileSha256(outputPath);
     const clip = await this.prisma.exportedClip.create({
       data: {
         cameraId: recording.cameraId,
@@ -377,6 +1233,7 @@ export class RecordingsService {
         endedAt: clipEndedAt,
         durationSeconds,
         sizeBytes: BigInt(stats.size),
+        fileSha256,
         createdByUserId: user.id,
         createdByUserName: user.name,
       },
@@ -390,6 +1247,14 @@ export class RecordingsService {
       endedAt: clip.endedAt,
       durationSeconds: clip.durationSeconds,
       sizeBytes: clip.sizeBytes?.toString() ?? null,
+      fileSha256: clip.fileSha256 ?? null,
+      externalPlayback: {
+        validated: true,
+        container: externalPlayback.container,
+        videoCodec: externalPlayback.videoCodec,
+        audioCodec: externalPlayback.audioCodec,
+        durationSeconds: externalPlayback.durationSeconds,
+      },
       downloadUrl: `/recordings/clips/${clip.id}/download`,
     };
   }

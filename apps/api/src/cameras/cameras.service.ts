@@ -1,12 +1,15 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CameraStatus } from '@prisma/client';
 import { createHash, randomBytes } from 'crypto';
 import * as http from 'http';
 import { spawn } from 'child_process';
+import { isIP } from 'node:net';
+import { statfs } from 'node:fs/promises';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { PortCheckerService } from '../common/network/port-checker.service';
+import { isPrivateOrReservedIp } from '../common/network/safe-url.helper';
 import { AlarmsService } from '../alarms/alarms.service';
 import { CreateCameraDto } from './dto/create-camera.dto';
 import { TestCameraConnectionDto } from './dto/test-camera-connection.dto';
@@ -16,6 +19,25 @@ export function sanitizeCamera<T extends { passwordEncrypted: string }>(camera: 
   const { passwordEncrypted, ...safeCamera } = camera;
   return safeCamera;
 }
+
+type ProbedStreamMetadata = {
+  codec?: string | null;
+  width?: number | null;
+  height?: number | null;
+  fps?: number | null;
+  bitrateKbps?: number | null;
+};
+
+type CameraProfilePayload = {
+  streamWidth?: number;
+  streamHeight?: number;
+  streamFps?: number;
+  streamBitrateKbps?: number;
+  recordingWidth?: number;
+  recordingHeight?: number;
+  recordingFps?: number;
+  recordingBitrateKbps?: number;
+};
 
 @Injectable()
 export class CamerasService {
@@ -29,8 +51,22 @@ export class CamerasService {
     private readonly alarmsService: AlarmsService,
   ) {}
 
+  private assertTestTargetAllowed(ip: string) {
+    const normalizedIp = ip.trim();
+    if (!normalizedIp || isIP(normalizedIp) === 0) {
+      throw new BadRequestException('IP inválido para teste de conexão.');
+    }
+    const allowPublic = this.configService.get<boolean>('cameraTestAllowPublicIp') === true;
+    if (!allowPublic && !isPrivateOrReservedIp(normalizedIp)) {
+      throw new BadRequestException(
+        'Teste de conexão para IP público está bloqueado. Configure CAMERA_TEST_ALLOW_PUBLIC_IP=true se for necessário.',
+      );
+    }
+  }
+
   async create(dto: CreateCameraDto) {
     await this.validateReferences(dto.siteId, dto.areaId, dto.groupId);
+    const normalizedProfile = this.normalizeProfileToDetected(dto, null);
     const camera = await this.prisma.camera.create({
       data: {
         name: dto.name,
@@ -48,6 +84,21 @@ export class CamerasService {
         areaId: dto.areaId,
         groupId: dto.groupId,
         recordingEnabled: dto.recordingEnabled ?? true,
+        recordingMode: dto.recordingMode ?? ((dto.recordingEnabled ?? true) ? 'continuous' : 'manual'),
+        retentionDays: dto.retentionDays ?? this.getDefaultRetentionDays(),
+        preferredRtspTransport: dto.preferredRtspTransport ?? 'tcp',
+        preferredLiveProtocol: dto.preferredLiveProtocol ?? 'flv',
+        streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec),
+        streamWidth: normalizedProfile.streamWidth,
+        streamHeight: normalizedProfile.streamHeight,
+        streamFps: normalizedProfile.streamFps,
+        streamBitrateKbps: normalizedProfile.streamBitrateKbps,
+        recordingVideoCodec: this.normalizeVideoCodec(dto.recordingVideoCodec),
+        recordingWidth: normalizedProfile.recordingWidth,
+        recordingHeight: normalizedProfile.recordingHeight,
+        recordingFps: normalizedProfile.recordingFps,
+        recordingBitrateKbps: normalizedProfile.recordingBitrateKbps,
+        audioEnabled: dto.audioEnabled ?? false,
       },
     });
 
@@ -78,6 +129,7 @@ export class CamerasService {
   async update(id: string, dto: UpdateCameraDto) {
     const existing = await this.getCameraOrThrow(id);
     await this.validateReferences(dto.siteId, dto.areaId, dto.groupId);
+    const normalizedProfile = this.normalizeProfileToDetected(dto, existing);
     const camera = await this.prisma.camera.update({
       where: { id },
       data: {
@@ -96,6 +148,21 @@ export class CamerasService {
         areaId: dto.areaId,
         groupId: dto.groupId,
         recordingEnabled: dto.recordingEnabled !== undefined ? dto.recordingEnabled : existing.recordingEnabled,
+        recordingMode: dto.recordingMode,
+        retentionDays: dto.retentionDays,
+        preferredRtspTransport: dto.preferredRtspTransport,
+        preferredLiveProtocol: dto.preferredLiveProtocol,
+        streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec),
+        streamWidth: normalizedProfile.streamWidth,
+        streamHeight: normalizedProfile.streamHeight,
+        streamFps: normalizedProfile.streamFps,
+        streamBitrateKbps: normalizedProfile.streamBitrateKbps,
+        recordingVideoCodec: this.normalizeVideoCodec(dto.recordingVideoCodec),
+        recordingWidth: normalizedProfile.recordingWidth,
+        recordingHeight: normalizedProfile.recordingHeight,
+        recordingFps: normalizedProfile.recordingFps,
+        recordingBitrateKbps: normalizedProfile.recordingBitrateKbps,
+        audioEnabled: dto.audioEnabled,
       },
       include: { site: true, area: true, group: true },
     });
@@ -153,6 +220,7 @@ export class CamerasService {
   }
 
   async testConnectionDraft(input: TestCameraConnectionDto) {
+    this.assertTestTargetAllowed(input.ip);
     const rtspPortCandidates = Array.from(
       new Set([input.rtspPort, 554, 8554, 10554, 5544, 51488, 51489, 51490].filter((v): v is number => Number.isFinite(v as number))),
     );
@@ -194,6 +262,7 @@ export class CamerasService {
     let selectedRtspPortAuthOk = false;
     let detectedRtspPort: number | null = null;
     let detectedRtspPath: string | null = null;
+    let detectedStream: ProbedStreamMetadata | null = null;
     let rtspProbeError: string | null = null;
     if (rtspReachableAny && input.username && input.password) {
       if (rtspReachable) {
@@ -216,6 +285,7 @@ export class CamerasService {
       rtspAuthOk = probe.ok;
       detectedRtspPort = probe.port;
       detectedRtspPath = probe.path;
+      detectedStream = probe.metadata;
       rtspProbeError = probe.error;
     }
 
@@ -274,6 +344,7 @@ export class CamerasService {
       selectedRtspPortAuthOk,
       detectedRtspPort,
       detectedRtspPath,
+      detectedStream,
       rtspProbeError,
       detectedOnvifPort,
       detectedOnvifPath,
@@ -411,7 +482,7 @@ export class CamerasService {
     for (const port of input.rtspPorts) {
       for (const path of input.paths) {
         const url = `rtsp://${encodeURIComponent(input.username)}:${encodeURIComponent(input.password)}@${input.ip}:${port}${path}`;
-        const result = await new Promise<{ ok: boolean; error: string | null }>((resolve) => {
+        const result = await new Promise<{ ok: boolean; error: string | null; metadata: ProbedStreamMetadata | null }>((resolve) => {
           const proc = spawn(
             'ffprobe',
             [
@@ -424,15 +495,15 @@ export class CamerasService {
               '-select_streams',
               'v:0',
               '-show_entries',
-              'stream=codec_name,width,height',
+              'stream=codec_name,width,height,avg_frame_rate,bit_rate:format=bit_rate',
               '-of',
-              'default=nw=1',
+              'json',
               url,
             ],
             { stdio: ['ignore', 'pipe', 'pipe'] },
           );
           let settled = false;
-          const finish = (value: { ok: boolean; error: string | null }) => {
+          const finish = (value: { ok: boolean; error: string | null; metadata: ProbedStreamMetadata | null }) => {
             if (settled) return;
             settled = true;
             clearTimeout(killTimer);
@@ -440,40 +511,54 @@ export class CamerasService {
           };
           const killTimer = setTimeout(() => {
             proc.kill('SIGKILL');
-            finish({ ok: false, error: 'ffprobe timeout' });
+            finish({ ok: false, error: 'ffprobe timeout', metadata: null });
           }, 7000);
+          let stdout = '';
           let stderr = '';
+          proc.stdout.on('data', (chunk) => {
+            stdout += chunk.toString();
+          });
           proc.stderr.on('data', (chunk) => {
             stderr += chunk.toString();
           });
-          proc.on('error', (error) => finish({ ok: false, error: error.message }));
+          proc.on('error', (error) => finish({ ok: false, error: error.message, metadata: null }));
           proc.on('close', (code) => {
             if (code === 0) {
-              finish({ ok: true, error: null });
+              finish({ ok: true, error: null, metadata: this.parseProbedStreamMetadata(stdout) });
               return;
             }
             const clean = stderr.trim();
-            finish({ ok: false, error: clean.length ? clean.slice(0, 300) : `ffprobe exit ${code ?? -1}` });
+            finish({ ok: false, error: clean.length ? clean.slice(0, 300) : `ffprobe exit ${code ?? -1}`, metadata: null });
           });
         });
 
         if (result.ok) {
-          return { ok: true, port, path, error: null };
+          const metadata = result.metadata ?? {};
+          if (!metadata.bitrateKbps || metadata.bitrateKbps <= 0) {
+            const estimatedBitrate = await this.estimateBitrateWithFfmpeg(url);
+            if (estimatedBitrate && estimatedBitrate > 0) {
+              metadata.bitrateKbps = estimatedBitrate;
+            }
+          }
+          return { ok: true, port, path, error: null, metadata };
         }
         lastError = result.error;
       }
     }
-    return { ok: false, port: null as number | null, path: null as string | null, error: lastError };
+    return { ok: false, port: null as number | null, path: null as string | null, error: lastError, metadata: null };
   }
 
   async getStatus(id: string) {
+    const startedAt = Date.now();
     try {
       const camera = await this.getCameraOrThrow(id);
+      const previousStatus = camera.status;
       const rtspReachable = await this.portChecker.check(camera.ip, camera.rtspPort);
       const onvifReachable =
         camera.onvifPort == null ? true : await this.portChecker.check(camera.ip, camera.onvifPort);
       let rtspAuthOk = false;
       let detectedRtspPath: string | null = null;
+      let detectedStream: ProbedStreamMetadata | null = null;
 
       if (rtspReachable) {
         try {
@@ -498,6 +583,7 @@ export class CamerasService {
           });
           rtspAuthOk = probe.ok;
           detectedRtspPath = probe.path;
+          detectedStream = probe.metadata;
         } catch (error) {
           this.logger.warn(`Falha ao validar auth RTSP da câmera ${camera.id}: ${(error as Error).message}`);
         }
@@ -512,10 +598,30 @@ export class CamerasService {
         where: { id },
         data: {
           rtspPath: detectedRtspPath ?? camera.rtspPath,
+          detectedVideoCodec: detectedStream?.codec ?? camera.detectedVideoCodec,
+          detectedWidth: detectedStream?.width ?? camera.detectedWidth,
+          detectedHeight: detectedStream?.height ?? camera.detectedHeight,
+          detectedFps: detectedStream?.fps ?? camera.detectedFps,
+          detectedBitrateKbps: detectedStream?.bitrateKbps ?? camera.detectedBitrateKbps,
           status,
           lastSeenAt: status === CameraStatus.ONLINE ? new Date() : undefined,
         },
       });
+
+      if (previousStatus !== CameraStatus.ONLINE && status === CameraStatus.ONLINE) {
+        await this.registerEvent(
+          id,
+          'HEALTH_CAMERA_RECOVERED',
+          'INFO',
+          'Câmera voltou a ficar online após período degradado.',
+          {
+            previousStatus,
+            rtspReachable,
+            rtspAuthOk,
+            onvifReachable,
+          },
+        );
+      }
 
       const refreshed = await this.getCameraOrThrow(id);
       return {
@@ -523,8 +629,14 @@ export class CamerasService {
         rtspReachable,
         rtspAuthOk,
         onvifReachable,
+        detectedVideoCodec: refreshed.detectedVideoCodec ?? null,
+        detectedFps: refreshed.detectedFps ?? null,
+        configuredFps: refreshed.streamFps ?? null,
+        recordingEnabled: refreshed.recordingEnabled,
+        preferredLiveProtocol: refreshed.preferredLiveProtocol ?? 'flv',
         status,
         lastSeenAt: refreshed.lastSeenAt,
+        liveProbeLatencyMs: Math.max(0, Date.now() - startedAt),
         checkedAt: new Date().toISOString(),
       };
     } catch (error) {
@@ -539,6 +651,200 @@ export class CamerasService {
       });
       throw error;
     }
+  }
+
+  private parseProbedStreamMetadata(stdout: string): ProbedStreamMetadata | null {
+    const parsed = this.parseProbeJson(stdout);
+    if (!parsed) return null;
+
+    const codec = parsed.codec;
+    const width = parsed.width;
+    const height = parsed.height;
+    const bitrate = parsed.bitrate;
+    const fps = parsed.fps;
+
+    if (!codec && !width && !height && !bitrate && !fps) {
+      return null;
+    }
+
+    return {
+      codec,
+      width,
+      height,
+      fps,
+      bitrateKbps: bitrate ? Math.max(1, Math.round(bitrate / 1000)) : null,
+    };
+  }
+
+  private parseProbeJson(stdout: string) {
+    try {
+      const payload = JSON.parse(stdout) as {
+        streams?: Array<{
+          codec_name?: string | null;
+          width?: number | string | null;
+          height?: number | string | null;
+          avg_frame_rate?: string | null;
+          bit_rate?: number | string | null;
+        }>;
+        format?: {
+          bit_rate?: number | string | null;
+        } | null;
+      };
+
+      const stream = payload.streams?.[0];
+      const codec = this.normalizeVideoCodec(stream?.codec_name);
+      const width = this.parseOptionalInt(stream?.width == null ? null : String(stream.width));
+      const height = this.parseOptionalInt(stream?.height == null ? null : String(stream.height));
+      const fps = this.parseFrameRate(stream?.avg_frame_rate ?? null);
+      const streamBitrate = this.parseOptionalInt(stream?.bit_rate == null ? null : String(stream.bit_rate));
+      const formatBitrate = this.parseOptionalInt(payload.format?.bit_rate == null ? null : String(payload.format.bit_rate));
+      const bitrate = streamBitrate ?? formatBitrate;
+
+      if (!codec && !width && !height && !bitrate && !fps) {
+        return null;
+      }
+
+      return { codec, width, height, fps, bitrate };
+    } catch {
+      return null;
+    }
+  }
+
+  private async estimateBitrateWithFfmpeg(url: string): Promise<number | null> {
+    return await new Promise<number | null>((resolve) => {
+      const startedAt = Date.now();
+      const proc = spawn(
+        'ffmpeg',
+        [
+          '-hide_banner',
+          '-loglevel',
+          'info',
+          '-rtsp_transport',
+          'tcp',
+          '-i',
+          url,
+          '-map',
+          '0:v:0',
+          '-c:v',
+          'copy',
+          '-an',
+          '-t',
+          '5',
+          '-f',
+          'matroska',
+          'pipe:1',
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+
+      let settled = false;
+      let bytes = 0;
+      let stderr = '';
+      const finish = (value: number | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(killTimer);
+        resolve(value);
+      };
+
+      const killTimer = setTimeout(() => {
+        proc.kill('SIGKILL');
+        finish(this.calculateBitrateFromBytes(bytes, startedAt) ?? this.extractBitrateFromFfmpegLog(stderr));
+      }, 9000);
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        bytes += chunk.length;
+      });
+
+      proc.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
+
+      proc.on('error', () => finish(null));
+      proc.on('close', () => finish(this.calculateBitrateFromBytes(bytes, startedAt) ?? this.extractBitrateFromFfmpegLog(stderr)));
+    });
+  }
+
+  private calculateBitrateFromBytes(bytes: number, startedAt: number): number | null {
+    if (!Number.isFinite(bytes) || bytes <= 0) return null;
+    const elapsedSeconds = Math.max(1, (Date.now() - startedAt) / 1000);
+    const kbps = Math.round((bytes * 8) / elapsedSeconds / 1000);
+    return Number.isFinite(kbps) && kbps > 0 ? kbps : null;
+  }
+
+  private extractBitrateFromFfmpegLog(stderr: string): number | null {
+    const matches = [...stderr.matchAll(/bitrate=\s*([0-9.]+)\s*kbits\/s/gi)];
+    if (!matches.length) return null;
+    const last = matches[matches.length - 1]?.[1];
+    if (!last) return null;
+    const value = Number(last);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return Math.max(1, Math.round(value));
+  }
+
+  private parseFrameRate(value?: string | null) {
+    if (!value) return null;
+    if (value.includes('/')) {
+      const [numRaw, denRaw] = value.split('/');
+      const numerator = Number(numRaw);
+      const denominator = Number(denRaw);
+      if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
+        return null;
+      }
+      return Math.max(1, Math.round(numerator / denominator));
+    }
+    return this.parseOptionalInt(value);
+  }
+
+  private parseOptionalInt(value?: string | null) {
+    if (value == null || value === '') return null;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private normalizeVideoCodec(codec?: string | null) {
+    const value = codec?.trim().toLowerCase();
+    if (!value) return undefined;
+    if (['hevc', 'h.265', 'h265'].includes(value)) return 'h265';
+    if (['avc1', 'h.264', 'h264'].includes(value)) return 'h264';
+    if (['mjpeg', 'mjpg', 'jpeg'].includes(value)) return 'mjpeg';
+    return value;
+  }
+
+  private getDefaultRetentionDays() {
+    return this.configService.get<number>('retentionDays') ?? 7;
+  }
+
+  private normalizeProfileToDetected(
+    profile: CameraProfilePayload,
+    existing: {
+      detectedWidth?: number | null;
+      detectedHeight?: number | null;
+      detectedFps?: number | null;
+      detectedBitrateKbps?: number | null;
+    } | null,
+  ): CameraProfilePayload {
+    const maxWidth = existing?.detectedWidth ?? null;
+    const maxHeight = existing?.detectedHeight ?? null;
+    const maxFps = existing?.detectedFps ?? null;
+    const maxBitrate = existing?.detectedBitrateKbps ?? null;
+
+    const clamp = (value: number | undefined, max: number | null) => {
+      if (value == null) return value;
+      if (!max || max <= 0) return value;
+      return Math.min(value, max);
+    };
+
+    return {
+      streamWidth: clamp(profile.streamWidth, maxWidth),
+      streamHeight: clamp(profile.streamHeight, maxHeight),
+      streamFps: clamp(profile.streamFps, maxFps),
+      streamBitrateKbps: clamp(profile.streamBitrateKbps, maxBitrate),
+      recordingWidth: clamp(profile.recordingWidth, maxWidth),
+      recordingHeight: clamp(profile.recordingHeight, maxHeight),
+      recordingFps: clamp(profile.recordingFps, maxFps),
+      recordingBitrateKbps: clamp(profile.recordingBitrateKbps, maxBitrate),
+    };
   }
 
   async getCameraOrThrow(id: string) {
@@ -1224,7 +1530,21 @@ export class CamerasService {
     });
     const recentMap = new Map<string, number>(recentIncidents.map((item) => [item.cameraId, item._count._all]));
 
-    const alerts = health.items
+    type AlertItem = {
+      cameraId: string;
+      cameraName: string;
+      severity: 'CRITICAL' | 'WARNING';
+      score: number;
+      status: CameraStatus;
+      streamIncidents24h: number;
+      streamIncidentsRecentWindow: number;
+      reasons: string[];
+      storageUsagePercent?: number;
+      storageThresholdWarning?: number;
+      storageThresholdCritical?: number;
+    };
+
+    const alerts: AlertItem[] = health.items
       .map((item) => {
         const recent = recentMap.get(item.cameraId) ?? 0;
         const criticalByScore = item.score < criticalThreshold;
@@ -1234,7 +1554,7 @@ export class CamerasService {
         if (!(criticalByScore || criticalByOpen || warningByScore || warningByRecent)) {
           return null;
         }
-        const severity = criticalByScore || criticalByOpen ? 'CRITICAL' : 'WARNING';
+        const severity: AlertItem['severity'] = criticalByScore || criticalByOpen ? 'CRITICAL' : 'WARNING';
         const reasons: string[] = [];
         if (criticalByScore) reasons.push(`score_below_${criticalThreshold}`);
         else if (warningByScore) reasons.push(`score_below_${warningThreshold}`);
@@ -1258,6 +1578,38 @@ export class CamerasService {
         return a.score - b.score;
       });
 
+    const storageWarningPercent = Number(process.env.ALERT_STORAGE_WARNING_PERCENT ?? 85);
+    const storageCriticalPercent = Number(process.env.ALERT_STORAGE_CRITICAL_PERCENT ?? 92);
+    const recordingsRoot = this.configService.get<string>('recordingsRoot') ?? './storage/recordings';
+    try {
+      const disk = await statfs(recordingsRoot);
+      const totalBytes = Number(disk.blocks) * Number(disk.bsize);
+      const freeBytes = Number(disk.bavail) * Number(disk.bsize);
+      const usedBytes = Math.max(totalBytes - freeBytes, 0);
+      const usagePercent = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) : 0;
+      if (usagePercent >= storageWarningPercent) {
+        alerts.unshift({
+          cameraId: '__SYSTEM_STORAGE__',
+          cameraName: 'Storage do sistema',
+          severity: usagePercent >= storageCriticalPercent ? 'CRITICAL' : 'WARNING',
+          score: Math.max(0, 100 - usagePercent),
+          status: usagePercent >= storageCriticalPercent ? 'ERROR' : 'ONLINE',
+          streamIncidents24h: 0,
+          streamIncidentsRecentWindow: 0,
+          reasons: [
+            usagePercent >= storageCriticalPercent
+              ? `storage_usage_ge_${storageCriticalPercent}`
+              : `storage_usage_ge_${storageWarningPercent}`,
+          ],
+          storageUsagePercent: usagePercent,
+          storageThresholdWarning: storageWarningPercent,
+          storageThresholdCritical: storageCriticalPercent,
+        });
+      }
+    } catch (error) {
+      this.logger.warn(`Falha ao ler uso de storage para alertas: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
     return {
       generatedAt: new Date().toISOString(),
       thresholds: {
@@ -1265,6 +1617,8 @@ export class CamerasService {
         criticalScore: criticalThreshold,
         criticalOpenIncidents24h: openCritical,
         recentWindowMinutes,
+        storageWarningPercent,
+        storageCriticalPercent,
       },
       summary: {
         total: alerts.length,
@@ -1272,6 +1626,115 @@ export class CamerasService {
         warning: alerts.filter((item) => item.severity === 'WARNING').length,
       },
       items: alerts,
+    };
+  }
+
+  async getOperationsTimeline(params: {
+    accessibleCameraIds: string[];
+    cameraId?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+  }) {
+    const limit = Math.max(10, Math.min(500, params.limit ?? 120));
+    const from = params.from ? new Date(params.from) : new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const to = params.to ? new Date(params.to) : new Date();
+    const cameraIds = params.cameraId ? [params.cameraId] : params.accessibleCameraIds;
+
+    const [events, alarms, audit] = await Promise.all([
+      this.prisma.cameraEvent.findMany({
+        where: {
+          cameraId: { in: cameraIds },
+          occurredAt: { gte: from, lte: to },
+        },
+        include: { camera: { select: { name: true } } },
+        orderBy: { occurredAt: 'desc' },
+        take: limit,
+      }),
+      this.prisma.alarmInstance.findMany({
+        where: {
+          cameraId: { in: cameraIds },
+          lastOccurredAt: { gte: from, lte: to },
+        },
+        include: { camera: { select: { name: true } } },
+        orderBy: { lastOccurredAt: 'desc' },
+        take: limit,
+      }),
+      this.prisma.auditLog.findMany({
+        where: {
+          createdAt: { gte: from, lte: to },
+          OR: [
+            { action: { startsWith: 'alarm.' } },
+            { action: { startsWith: 'recording.reconnect' } },
+            { action: { startsWith: 'incident.' } },
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      }),
+    ]);
+
+    const alarmByEventId = new Map<string, (typeof alarms)[number]>();
+    for (const alarm of alarms) {
+      if (alarm.eventId) alarmByEventId.set(alarm.eventId, alarm);
+    }
+
+    const items = [
+      ...events.map((event) => {
+        const linkedAlarm = alarmByEventId.get(event.id);
+        return {
+          kind: 'event',
+          at: event.occurredAt,
+          cameraId: event.cameraId,
+          cameraName: event.camera?.name ?? null,
+          severity: event.severity,
+          type: event.type,
+          message: event.message,
+          eventId: event.id,
+          alarmId: linkedAlarm?.id ?? null,
+          alarmStatus: linkedAlarm?.status ?? null,
+          action: null,
+          actor: null,
+        };
+      }),
+      ...alarms.map((alarm) => ({
+        kind: 'alarm',
+        at: alarm.lastOccurredAt,
+        cameraId: alarm.cameraId ?? null,
+        cameraName: alarm.camera?.name ?? null,
+        severity: alarm.severity,
+        type: alarm.type,
+        message: alarm.message,
+        eventId: alarm.eventId ?? null,
+        alarmId: alarm.id,
+        alarmStatus: alarm.status,
+        action: null,
+        actor: alarm.acknowledgedByUserName ?? alarm.resolvedByUserName ?? null,
+      })),
+      ...audit.map((entry) => ({
+        kind: 'action',
+        at: entry.createdAt,
+        cameraId: null,
+        cameraName: null,
+        severity: 'INFO',
+        type: entry.action,
+        message: `${entry.entityType}${entry.entityId ? ` ${entry.entityId}` : ''}`,
+        eventId: null,
+        alarmId: null,
+        alarmStatus: null,
+        action: entry.action,
+        actor: entry.userId ?? null,
+      })),
+    ]
+      .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+      .slice(0, limit);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      from: from.toISOString(),
+      to: to.toISOString(),
+      total: items.length,
+      items,
     };
   }
 

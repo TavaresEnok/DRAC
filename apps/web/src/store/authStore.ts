@@ -69,13 +69,13 @@ function mapUser(user: LoginResponse['user'] | MeResponse): AuthUser {
 function getStoredUser(): AuthUser | null {
   if (typeof window === 'undefined') return null;
 
-  const raw = window.localStorage.getItem(USER_STORAGE_KEY);
+  const raw = window.sessionStorage.getItem(USER_STORAGE_KEY);
   if (!raw) return null;
 
   try {
     return JSON.parse(raw) as AuthUser;
   } catch {
-    window.localStorage.removeItem(USER_STORAGE_KEY);
+    window.sessionStorage.removeItem(USER_STORAGE_KEY);
     return null;
   }
 }
@@ -84,15 +84,15 @@ function persistSession(accessToken: string | null, user: AuthUser | null) {
   if (typeof window === 'undefined') return;
 
   if (accessToken) {
-    window.localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
+    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
   } else {
-    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
   }
 
   if (user) {
-    window.localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+    window.sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
   } else {
-    window.localStorage.removeItem(USER_STORAGE_KEY);
+    window.sessionStorage.removeItem(USER_STORAGE_KEY);
   }
 }
 
@@ -108,7 +108,7 @@ async function fetchMe(accessToken: string) {
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: getStoredUser(),
-  accessToken: typeof window === 'undefined' ? null : window.localStorage.getItem(TOKEN_STORAGE_KEY),
+  accessToken: typeof window === 'undefined' ? null : window.sessionStorage.getItem(TOKEN_STORAGE_KEY),
   isAuthenticated: false,
   isLoading: false,
   isBootstrapped: false,
@@ -140,17 +140,29 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   login: async (email, password) => {
     set({ isLoading: true });
 
-    const { data } = await axios.post<LoginResponse>(`${API_URL}/auth/login`, { email, password });
-    const user = mapUser(data.user);
+    try {
+      const { data } = await axios.post<LoginResponse>(`${API_URL}/auth/login`, { email, password });
+      const user = mapUser(data.user);
 
-    persistSession(data.accessToken, user);
-    set({
-      user,
-      accessToken: data.accessToken,
-      isAuthenticated: true,
-      isLoading: false,
-      isBootstrapped: true,
-    });
+      persistSession(data.accessToken, user);
+      set({
+        user,
+        accessToken: data.accessToken,
+        isAuthenticated: true,
+        isLoading: false,
+        isBootstrapped: true,
+      });
+    } catch (error) {
+      persistSession(null, null);
+      set({
+        user: null,
+        accessToken: null,
+        isAuthenticated: false,
+        isLoading: false,
+        isBootstrapped: true,
+      });
+      throw error;
+    }
   },
   logout: () => {
     persistSession(null, null);

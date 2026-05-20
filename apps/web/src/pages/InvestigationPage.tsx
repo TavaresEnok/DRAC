@@ -23,11 +23,39 @@ type InvestigationItem = {
   timestamp: string;
   notes?: string | null;
 };
+type InvestigationNote = InvestigationItem;
+type InvestigationActivity = InvestigationItem;
+type CustodyEntry = {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId?: string | null;
+  createdAt: string;
+};
+
+type ClosureTrace = {
+  investigationId: string;
+  currentStatus: string;
+  closed: boolean;
+  closedLifecycleEntry: {
+    id: string;
+    timestamp: string;
+    notes?: string | null;
+    metadata?: Record<string, unknown> | null;
+  } | null;
+  lifecycleCount: number;
+  auditCount: number;
+};
 
 type Investigation = {
   id: string;
   title: string;
   status: string;
+  priority?: 'LOW' | 'NORMAL' | 'HIGH' | 'CRITICAL';
+  classification?: string;
+  ownerUserId?: string | null;
+  ownerUserName?: string | null;
+  participants?: Array<{ userId: string; userName: string }>;
   summary?: string | null;
   selectedCameraIds: string[];
   timeStart: string;
@@ -48,6 +76,7 @@ export default function InvestigationPage() {
   const accessToken = useAuthStore((state) => state.accessToken);
   const cameras = useVmsDataStore((state) => state.cameras);
   const events = useVmsDataStore((state) => state.events);
+  const users = useVmsDataStore((state) => state.users);
 
   const [investigations, setInvestigations] = useState<Investigation[]>([]);
   const [investigationId, setInvestigationId] = useState<string>('');
@@ -63,6 +92,29 @@ export default function InvestigationPage() {
   const [saving, setSaving] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
   const [query, setQuery] = useState('');
+  const [notes, setNotes] = useState<InvestigationNote[]>([]);
+  const [activity, setActivity] = useState<InvestigationActivity[]>([]);
+  const [newNote, setNewNote] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
+  const [listStatusFilter, setListStatusFilter] = useState<'ALL' | 'OPEN' | 'IN_REVIEW' | 'PENDING_APPROVAL' | 'CLOSED' | 'ARCHIVED'>('ALL');
+  const [listPriorityFilter, setListPriorityFilter] = useState<'ALL' | 'LOW' | 'NORMAL' | 'HIGH' | 'CRITICAL'>('ALL');
+  const [listSearch, setListSearch] = useState('');
+  const [casePriority, setCasePriority] = useState<'LOW' | 'NORMAL' | 'HIGH' | 'CRITICAL'>('NORMAL');
+  const [caseClassification, setCaseClassification] = useState('GENERAL');
+  const [caseOwnerUserId, setCaseOwnerUserId] = useState('__none__');
+  const [caseParticipants, setCaseParticipants] = useState<Array<{ userId: string; userName: string }>>([]);
+  const [savingCaseMeta, setSavingCaseMeta] = useState(false);
+  const [legalHoldEnabled, setLegalHoldEnabled] = useState(false);
+  const [legalHoldReason, setLegalHoldReason] = useState('');
+  const [savingLegalHold, setSavingLegalHold] = useState(false);
+  const [custody, setCustody] = useState<CustodyEntry[]>([]);
+  const [closureTrace, setClosureTrace] = useState<ClosureTrace | null>(null);
+  const [reportHtml, setReportHtml] = useState<string | null>(null);
+  const [manualEvidenceType, setManualEvidenceType] = useState<'camera' | 'recording' | 'snapshot'>('camera');
+  const [manualEvidenceCameraId, setManualEvidenceCameraId] = useState('__none__');
+  const [manualEvidenceRef, setManualEvidenceRef] = useState('');
+  const [manualEvidenceLabel, setManualEvidenceLabel] = useState('');
+  const [addingManualEvidence, setAddingManualEvidence] = useState(false);
 
   const requestedInvestigationId = useMemo(() => {
     if (typeof window === 'undefined') return null;
@@ -80,13 +132,21 @@ export default function InvestigationPage() {
     setPlaybackSpeed(item.playbackSpeed || '1x');
     setActiveTrackTime(item.activeTrackTime || 0);
     setEvidence(item.items || []);
+    setCasePriority(item.priority ?? 'NORMAL');
+    setCaseClassification(item.classification ?? 'GENERAL');
+    setCaseOwnerUserId(item.ownerUserId ?? '__none__');
+    setCaseParticipants(Array.isArray(item.participants) ? item.participants : []);
   }, []);
 
   const loadInvestigations = useCallback(async () => {
     if (!accessToken) return;
     setLoading(true);
     try {
-      const { data } = await client.get<{ items: Investigation[] }>('/investigations');
+      const params = new URLSearchParams();
+      if (listSearch.trim()) params.set('q', listSearch.trim());
+      if (listStatusFilter !== 'ALL') params.set('status', listStatusFilter);
+      if (listPriorityFilter !== 'ALL') params.set('priority', listPriorityFilter);
+      const { data } = await client.get<{ items: Investigation[] }>(`/investigations${params.toString() ? `?${params.toString()}` : ''}`);
       const items = Array.isArray(data.items) ? data.items : [];
       setInvestigations(items);
       const selected =
@@ -100,18 +160,48 @@ export default function InvestigationPage() {
       }
     } catch (error) {
       toast({
-        title: 'Falha ao carregar investigations',
+        title: 'Falha ao carregar casos',
         description: error instanceof Error ? error.message : 'Não foi possível carregar as áreas de trabalho.',
         variant: 'destructive',
       });
     } finally {
       setLoading(false);
     }
-  }, [accessToken, cameras, client, hydrate, requestedInvestigationId]);
+  }, [accessToken, cameras, client, hydrate, requestedInvestigationId, listPriorityFilter, listSearch, listStatusFilter]);
 
   useEffect(() => {
     void loadInvestigations();
   }, [loadInvestigations]);
+
+  useEffect(() => {
+    if (!investigationId) {
+      setNotes([]);
+      setActivity([]);
+      setCustody([]);
+      setClosureTrace(null);
+      setReportHtml(null);
+      return;
+    }
+    void client.get<{ items: InvestigationNote[] }>(`/investigations/${investigationId}/notes`).then(({ data }) => {
+      setNotes(Array.isArray(data.items) ? data.items : []);
+    }).catch(() => setNotes([]));
+    void client.get<{ items: InvestigationActivity[] }>(`/investigations/${investigationId}/activity`).then(({ data }) => {
+      setActivity(Array.isArray(data.items) ? data.items : []);
+    }).catch(() => setActivity([]));
+    void client.get<{ enabled: boolean; reason: string | null }>(`/investigations/${investigationId}/legal-hold`).then(({ data }) => {
+      setLegalHoldEnabled(Boolean(data.enabled));
+      setLegalHoldReason(data.reason ?? '');
+    }).catch(() => {
+      setLegalHoldEnabled(false);
+      setLegalHoldReason('');
+    });
+    void client.get<{ items: CustodyEntry[] }>(`/investigations/${investigationId}/custody`).then(({ data }) => {
+      setCustody(Array.isArray(data.items) ? data.items : []);
+    }).catch(() => setCustody([]));
+    void client.get<ClosureTrace>(`/investigations/${investigationId}/closure-trace`).then(({ data }) => {
+      setClosureTrace(data);
+    }).catch(() => setClosureTrace(null));
+  }, [client, investigationId]);
 
   const currentInvestigation = investigations.find((item) => item.id === investigationId) ?? null;
 
@@ -192,7 +282,51 @@ export default function InvestigationPage() {
     }
   }, [client, events, investigationId, investigations, saveWorkspace]);
 
-  const updateEvidenceNãotes = useCallback(async (itemId: string, notes: string) => {
+  const addManualEvidence = useCallback(async () => {
+    if (!investigationId) {
+      toast({ title: 'Salve a investigação primeiro', description: 'Crie/salve o caso antes de anexar itens.', variant: 'destructive' });
+      return;
+    }
+    const cam = manualEvidenceCameraId !== '__none__' ? cameras.find((c) => c.id === manualEvidenceCameraId) : null;
+    const label =
+      manualEvidenceLabel.trim() ||
+      (manualEvidenceType === 'camera'
+        ? `Câmera anexada${cam ? ` — ${cam.name}` : ''}`
+        : manualEvidenceType === 'recording'
+          ? `Gravação anexada${manualEvidenceRef.trim() ? ` — ${manualEvidenceRef.trim()}` : ''}`
+          : `Snapshot anexado${manualEvidenceRef.trim() ? ` — ${manualEvidenceRef.trim()}` : ''}`);
+    setAddingManualEvidence(true);
+    try {
+      const payload: Record<string, unknown> = {
+        type: manualEvidenceType,
+        label,
+        timestamp: new Date().toISOString(),
+        notes: '',
+      };
+      if (cam) {
+        payload.cameraId = cam.id;
+        payload.cameraName = cam.name;
+      }
+      if (manualEvidenceType === 'recording' && manualEvidenceRef.trim()) {
+        payload.recordingId = manualEvidenceRef.trim();
+      }
+      if (manualEvidenceType === 'snapshot' && manualEvidenceRef.trim()) {
+        payload.metadata = { snapshotRef: manualEvidenceRef.trim() };
+      }
+      const { data } = await client.post<InvestigationItem>(`/investigations/${investigationId}/items`, payload);
+      setEvidence((items) => [...items, data]);
+      setInvestigations((items) => items.map((item) => item.id === investigationId ? { ...item, items: [...item.items, data] } : item));
+      setManualEvidenceRef('');
+      setManualEvidenceLabel('');
+      toast({ title: 'Item anexado', description: 'Evidência adicionada ao caso com sucesso.' });
+    } catch (error) {
+      toast({ title: 'Falha ao anexar item', description: error instanceof Error ? error.message : 'Não foi possível anexar item.', variant: 'destructive' });
+    } finally {
+      setAddingManualEvidence(false);
+    }
+  }, [cameras, client, investigationId, manualEvidenceCameraId, manualEvidenceLabel, manualEvidenceRef, manualEvidenceType]);
+
+  const updateEvidenceNotes = useCallback(async (itemId: string, notes: string) => {
     if (!investigationId) return;
     setEvidence((items) => items.map((item) => item.id === itemId ? { ...item, notes } : item));
     try {
@@ -212,7 +346,7 @@ export default function InvestigationPage() {
     }
   }, [client, investigationId]);
 
-  const transitionLifecycle = useCallback(async (status: 'OPEN' | 'ACTIVE' | 'REVIEW' | 'CLOSED' | 'ARCHIVED') => {
+  const transitionLifecycle = useCallback(async (status: 'OPEN' | 'IN_REVIEW' | 'PENDING_APPROVAL' | 'CLOSED' | 'ARCHIVED') => {
     if (!investigationId) {
       toast({ title: 'Salve a área de trabalho primeiro', description: 'Crie a investigação antes de alterar o ciclo de vida.', variant: 'destructive' });
       return;
@@ -282,10 +416,16 @@ export default function InvestigationPage() {
           <button onClick={() => void saveWorkspace()} className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50" disabled={saving}>
             {saving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Salvar área de trabalho
           </button>
-          <Select value={currentInvestigation?.status ?? 'OPEN'} onValueChange={(value) => void transitionLifecycle(value as 'OPEN' | 'ACTIVE' | 'REVIEW' | 'CLOSED' | 'ARCHIVED')} disabled={!investigationId || transitioning}>
-            <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Status" /></SelectTrigger>
+          <Select value={currentInvestigation?.status ?? 'OPEN'} onValueChange={(value) => void transitionLifecycle(value as 'OPEN' | 'IN_REVIEW' | 'PENDING_APPROVAL' | 'CLOSED' | 'ARCHIVED')} disabled={!investigationId || transitioning}>
+            <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Status do caso" /></SelectTrigger>
             <SelectContent>
-              {['OPEN', 'ACTIVE', 'REVIEW', 'CLOSED', 'ARCHIVED'].map((status) => <SelectItem key={status} value={status} className="text-xs">{status}</SelectItem>)}
+              {[
+                ['OPEN', 'Aberto'],
+                ['IN_REVIEW', 'Em revisão'],
+                ['PENDING_APPROVAL', 'Aguardando aprovação'],
+                ['CLOSED', 'Fechado'],
+                ['ARCHIVED', 'Arquivado'],
+              ].map(([status, label]) => <SelectItem key={status} value={status} className="text-xs">{label}</SelectItem>)}
             </SelectContent>
           </Select>
           <button onClick={() => setLocation('/evidence')} className="flex items-center gap-1.5 rounded bg-[hsl(var(--primary))] px-3 py-1.5 text-xs font-semibold text-[hsl(var(--primary-foreground))] hover:opacity-90">
@@ -296,6 +436,33 @@ export default function InvestigationPage() {
 
       <div className="border-b border-border bg-card px-5 py-3 shrink-0">
         <div className="flex items-center gap-3">
+          <input value={listSearch} onChange={(event) => setListSearch(event.target.value)} className="h-8 w-40 rounded border border-border bg-background px-2 text-xs" placeholder="Buscar casos" />
+          <Select value={listStatusFilter} onValueChange={(value) => setListStatusFilter(value as typeof listStatusFilter)}>
+            <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Status caso" /></SelectTrigger>
+            <SelectContent>
+              {[
+                ['ALL', 'Todos'],
+                ['OPEN', 'Aberto'],
+                ['IN_REVIEW', 'Em revisão'],
+                ['PENDING_APPROVAL', 'Aguardando aprovação'],
+                ['CLOSED', 'Fechado'],
+                ['ARCHIVED', 'Arquivado'],
+              ].map(([status, label]) => <SelectItem key={status} value={status} className="text-xs">{label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={listPriorityFilter} onValueChange={(value) => setListPriorityFilter(value as typeof listPriorityFilter)}>
+            <SelectTrigger className="h-8 w-32 text-xs"><SelectValue placeholder="Prioridade" /></SelectTrigger>
+            <SelectContent>
+              {[
+                ['ALL', 'Todas'],
+                ['LOW', 'Baixa'],
+                ['NORMAL', 'Normal'],
+                ['HIGH', 'Alta'],
+                ['CRITICAL', 'Crítica'],
+              ].map(([priority, label]) => <SelectItem key={priority} value={priority} className="text-xs">{label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <button onClick={() => void loadInvestigations()} className="h-8 rounded border border-border px-3 text-xs hover:bg-[hsl(var(--accent))]">Filtrar</button>
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
             <input value={query} onChange={(event) => setQuery(event.target.value)} className="h-8 w-56 rounded border border-border bg-background pl-8 pr-3 text-xs" placeholder="Buscar câmera ou evento" />
@@ -325,8 +492,121 @@ export default function InvestigationPage() {
             <span className="font-mono">{trackEvents.length} eventos</span>
             <span>•</span>
             <span className="font-mono">{playbackSpeed}</span>
+            <span>•</span>
+            <span className="font-mono">{casePriority}</span>
           </div>
         </div>
+        <div className="mt-3 flex items-center gap-2">
+          <Select value={casePriority} onValueChange={(value) => setCasePriority(value as typeof casePriority)}>
+            <SelectTrigger className="h-8 w-32 text-xs"><SelectValue placeholder="Prioridade" /></SelectTrigger>
+            <SelectContent>
+              {[
+                ['LOW', 'Baixa'],
+                ['NORMAL', 'Normal'],
+                ['HIGH', 'Alta'],
+                ['CRITICAL', 'Crítica'],
+              ].map(([priority, label]) => <SelectItem key={priority} value={priority} className="text-xs">{label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <input value={caseClassification} onChange={(event) => setCaseClassification(event.target.value)} className="h-8 w-40 rounded border border-border bg-background px-2 text-xs" placeholder="Classificação" />
+          <Select value={caseOwnerUserId} onValueChange={setCaseOwnerUserId}>
+            <SelectTrigger className="h-8 w-44 text-xs"><SelectValue placeholder="Responsável" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__" className="text-xs">Sem responsável</SelectItem>
+              {users.map((u) => <SelectItem key={u.id} value={u.id} className="text-xs">{u.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select onValueChange={(uid) => {
+            const u = users.find((x) => x.id === uid);
+            if (!u) return;
+            if (caseParticipants.some((p) => p.userId === u.id)) return;
+            setCaseParticipants((items) => [...items, { userId: u.id, userName: u.name }]);
+          }}>
+            <SelectTrigger className="h-8 w-48 text-xs"><SelectValue placeholder="Adicionar participante" /></SelectTrigger>
+            <SelectContent>
+              {users.filter((u) => !caseParticipants.some((p) => p.userId === u.id)).map((u) => <SelectItem key={u.id} value={u.id} className="text-xs">{u.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <button
+            onClick={async () => {
+              if (!investigationId) return;
+              setSavingCaseMeta(true);
+              try {
+                const owner = caseOwnerUserId !== '__none__' ? users.find((u) => u.id === caseOwnerUserId) : null;
+                const { data } = await client.post<Investigation>(`/investigations/${investigationId}/meta`, {
+                  priority: casePriority,
+                  classification: caseClassification,
+                  ownerUserId: owner?.id ?? null,
+                  ownerUserName: owner?.name ?? null,
+                  participants: caseParticipants,
+                });
+                setInvestigations((items) => items.map((item) => (item.id === data.id ? data : item)));
+                hydrate(data);
+                toast({ title: 'Metadados do caso salvos' });
+              } catch (error) {
+                toast({ title: 'Falha ao salvar metadados', description: error instanceof Error ? error.message : 'Erro ao salvar', variant: 'destructive' });
+              } finally {
+                setSavingCaseMeta(false);
+              }
+            }}
+            disabled={!investigationId || savingCaseMeta}
+            className="h-8 rounded border border-border px-3 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
+          >
+            {savingCaseMeta ? 'Salvando...' : 'Salvar responsável/prioridade'}
+          </button>
+        </div>
+        {caseParticipants.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {caseParticipants.map((p) => (
+              <button key={p.userId} onClick={() => setCaseParticipants((items) => items.filter((x) => x.userId !== p.userId))} className="rounded border border-border px-2 py-1 text-[10px]">
+                {p.userName} ×
+              </button>
+            ))}
+          </div>
+        )}
+        {investigationId && (
+          <div className="mt-3 flex items-center gap-2">
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={legalHoldEnabled} onChange={(event) => setLegalHoldEnabled(event.target.checked)} />
+              Legal hold ativo
+            </label>
+            <input value={legalHoldReason} onChange={(event) => setLegalHoldReason(event.target.value)} className="h-8 w-56 rounded border border-border bg-background px-2 text-xs" placeholder="Motivo do legal hold" />
+            <button
+              onClick={async () => {
+                if (!investigationId) return;
+                setSavingLegalHold(true);
+                try {
+                  await client.post(`/investigations/${investigationId}/legal-hold`, { enabled: legalHoldEnabled, reason: legalHoldReason });
+                  toast({ title: 'Legal hold atualizado' });
+                } catch (error) {
+                  toast({ title: 'Falha no legal hold', description: error instanceof Error ? error.message : 'Erro ao atualizar', variant: 'destructive' });
+                } finally {
+                  setSavingLegalHold(false);
+                }
+              }}
+              disabled={!investigationId || savingLegalHold}
+              className="h-8 rounded border border-border px-3 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
+            >
+              {savingLegalHold ? 'Salvando...' : 'Salvar Legal Hold'}
+            </button>
+            <button
+              onClick={async () => {
+                if (!investigationId) return;
+                const reason = window.prompt('Motivo para gerar relatório (obrigatório):')?.trim() ?? '';
+                if (!reason) return;
+                try {
+                  const { data } = await client.get<{ html: string }>(`/investigations/${investigationId}/report?reason=${encodeURIComponent(reason)}`);
+                  setReportHtml(data.html);
+                } catch (error) {
+                  toast({ title: 'Falha ao gerar relatório', description: error instanceof Error ? error.message : 'Erro no relatório', variant: 'destructive' });
+                }
+              }}
+              className="h-8 rounded border border-border px-3 text-xs hover:bg-[hsl(var(--accent))]"
+            >
+              Gerar Relatório
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-1 min-h-0">
@@ -368,7 +648,7 @@ export default function InvestigationPage() {
                       </div>
                       <div className="flex items-center gap-2 font-mono text-white/55">
                         <span className="rounded border border-red-500/30 bg-red-500/10 px-1.5 py-0.5 text-red-300">REC</span>
-                        <span>{camera.ptzCapable ? 'PTZ' : 'FIXED'}</span>
+                        <span>{camera.ptzCapable ? 'PTZ' : 'FIXA'}</span>
                       </div>
                     </div>
                     <div className="relative h-44 border-y border-white/10 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.05),transparent_60%)]">
@@ -420,13 +700,52 @@ export default function InvestigationPage() {
           </div>
         </div>
 
-        <div className="w-72 shrink-0 border-l border-border bg-card">
+        <div className="w-80 shrink-0 border-l border-border bg-card">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div>
               <div className="text-xs font-semibold">Evidência</div>
               <div className="mt-0.5 text-[10px] font-mono text-[hsl(var(--muted-foreground))]">{evidence.length} itens</div>
             </div>
             <button onClick={() => setLocation('/evidence')} className="text-[10px] font-semibold text-[hsl(var(--primary))]">Exportar</button>
+          </div>
+          <div className="border-b border-border px-4 py-3 space-y-2">
+            <div className="text-[11px] font-semibold">Anexar item manual</div>
+            <div className="grid grid-cols-1 gap-2">
+              <Select value={manualEvidenceType} onValueChange={(v) => setManualEvidenceType(v as 'camera' | 'recording' | 'snapshot')}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="camera" className="text-xs">Câmera</SelectItem>
+                  <SelectItem value="recording" className="text-xs">Gravação</SelectItem>
+                  <SelectItem value="snapshot" className="text-xs">Snapshot</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={manualEvidenceCameraId} onValueChange={setManualEvidenceCameraId}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Câmera (opcional)" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__" className="text-xs">Sem câmera</SelectItem>
+                  {cameras.map((camera) => <SelectItem key={camera.id} value={camera.id} className="text-xs">{camera.code} — {camera.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <input
+                value={manualEvidenceRef}
+                onChange={(event) => setManualEvidenceRef(event.target.value)}
+                className="h-8 rounded border border-border bg-background px-2 text-xs"
+                placeholder={manualEvidenceType === 'recording' ? 'ID da gravação (opcional)' : manualEvidenceType === 'snapshot' ? 'URL/caminho do snapshot (opcional)' : 'Referência (opcional)'}
+              />
+              <input
+                value={manualEvidenceLabel}
+                onChange={(event) => setManualEvidenceLabel(event.target.value)}
+                className="h-8 rounded border border-border bg-background px-2 text-xs"
+                placeholder="Título do item (opcional)"
+              />
+              <button
+                onClick={() => void addManualEvidence()}
+                disabled={!investigationId || addingManualEvidence}
+                className="h-8 rounded border border-border text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
+              >
+                {addingManualEvidence ? 'Anexando...' : 'Anexar ao caso'}
+              </button>
+            </div>
           </div>
           <div className="divide-y divide-border overflow-y-auto">
             {evidence.map((item) => (
@@ -447,16 +766,115 @@ export default function InvestigationPage() {
                 <textarea
                   value={item.notes ?? ''}
                   onChange={(event) => setEvidence((items) => items.map((current) => current.id === item.id ? { ...current, notes: event.target.value } : current))}
-                  onBlur={(event) => void updateEvidenceNãotes(item.id, event.target.value)}
-                  placeholder="Nãotas objetivas..."
+                  onBlur={(event) => void updateEvidenceNotes(item.id, event.target.value)}
+                  placeholder="Notas objetivas..."
                   className="mt-2 w-full resize-none rounded border border-border bg-[hsl(var(--muted))] p-2 text-[10px] focus:outline-none"
                   rows={3}
                 />
               </div>
             ))}
           </div>
+          <div className="border-t border-border px-4 py-3">
+            <div className="text-xs font-semibold">Notas do caso</div>
+            <textarea
+              value={newNote}
+              onChange={(event) => setNewNote(event.target.value)}
+              rows={3}
+              className="mt-2 w-full resize-none rounded border border-border bg-[hsl(var(--muted))] p-2 text-[10px] focus:outline-none"
+              placeholder="Adicionar nota operacional..."
+            />
+            <button
+              onClick={async () => {
+                if (!investigationId || !newNote.trim()) return;
+                setSavingNote(true);
+                try {
+                  const { data } = await client.post<InvestigationNote>(`/investigations/${investigationId}/notes`, { note: newNote });
+                  setNotes((items) => [data, ...items]);
+                  setNewNote('');
+                } catch (error) {
+                  toast({ title: 'Falha ao salvar nota', description: error instanceof Error ? error.message : 'Não foi possível salvar nota.', variant: 'destructive' });
+                } finally {
+                  setSavingNote(false);
+                }
+              }}
+              disabled={!investigationId || savingNote || !newNote.trim()}
+              className="mt-2 w-full rounded border border-border px-3 py-1.5 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
+            >
+              {savingNote ? 'Salvando...' : 'Adicionar nota'}
+            </button>
+            <div className="mt-3 max-h-40 space-y-2 overflow-auto">
+              {notes.map((note) => (
+                <div key={note.id} className="rounded border border-border p-2 text-[10px]">
+                  <div className="font-mono text-[9px] text-[hsl(var(--muted-foreground))]">{format(new Date(note.timestamp), 'yyyy-MM-dd HH:mm:ss')}</div>
+                  <div className="mt-1 whitespace-pre-wrap">{note.notes}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="border-t border-border px-4 py-3">
+            <div className="text-xs font-semibold">Atividade recente</div>
+            <div className="mt-2 max-h-44 space-y-2 overflow-auto">
+              {activity.map((entry) => (
+                <div key={entry.id} className="rounded border border-border p-2 text-[10px]">
+                  <div className="font-medium">{entry.label}</div>
+                  <div className="font-mono text-[9px] text-[hsl(var(--muted-foreground))]">{format(new Date(entry.timestamp), 'yyyy-MM-dd HH:mm:ss')}</div>
+                  {entry.notes ? <div className="mt-1 text-[hsl(var(--muted-foreground))]">{entry.notes}</div> : null}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="border-t border-border px-4 py-3">
+            <div className="text-xs font-semibold">Rastreabilidade de fechamento</div>
+            <div className="mt-2 space-y-2 text-[10px]">
+              {!closureTrace && (
+                <div className="rounded border border-border p-2 text-[hsl(var(--muted-foreground))]">Sem dados de fechamento auditável.</div>
+              )}
+              {closureTrace && (
+                <>
+                  <div className="rounded border border-border p-2">
+                    <div className="font-medium">Status atual: {closureTrace.currentStatus}</div>
+                    <div className="text-[hsl(var(--muted-foreground))]">
+                      Entradas lifecycle: {closureTrace.lifecycleCount} · Registros de auditoria: {closureTrace.auditCount}
+                    </div>
+                  </div>
+                  <div className="rounded border border-border p-2">
+                    <div className="font-medium">Fechamento registrado: {closureTrace.closed ? 'sim' : 'não'}</div>
+                    {closureTrace.closedLifecycleEntry ? (
+                      <>
+                        <div className="font-mono text-[9px] text-[hsl(var(--muted-foreground))]">
+                          {format(new Date(closureTrace.closedLifecycleEntry.timestamp), 'yyyy-MM-dd HH:mm:ss')}
+                        </div>
+                        {closureTrace.closedLifecycleEntry.notes ? (
+                          <div className="mt-1 text-[hsl(var(--muted-foreground))]">{closureTrace.closedLifecycleEntry.notes}</div>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="border-t border-border px-4 py-3">
+            <div className="text-xs font-semibold">Cadeia de custódia</div>
+            <div className="mt-2 max-h-44 space-y-2 overflow-auto">
+              {custody.slice(0, 50).map((entry) => (
+                <div key={entry.id} className="rounded border border-border p-2 text-[10px]">
+                  <div className="font-medium">{entry.action}</div>
+                  <div className="text-[hsl(var(--muted-foreground))]">{entry.entityType} {entry.entityId ?? ''}</div>
+                  <div className="font-mono text-[9px] text-[hsl(var(--muted-foreground))]">{format(new Date(entry.createdAt), 'yyyy-MM-dd HH:mm:ss')}</div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
+
+      {reportHtml && (
+        <div className="border-t border-border bg-card p-3">
+          <div className="mb-2 text-xs font-semibold">Pré-visualização do relatório</div>
+          <iframe title="Relatório" srcDoc={reportHtml} className="h-80 w-full rounded border border-border bg-white" />
+        </div>
+      )}
 
       <div className="flex items-center justify-between border-t border-border bg-card px-5 py-2 text-[10px] font-mono text-[hsl(var(--muted-foreground))]">
         <div className="flex items-center gap-5">

@@ -6,44 +6,44 @@ import { cn } from '@/lib/utils';
 
 const DEFAULT_ROLES = [
   {
-    id: 'role-1', name: 'System Admin', description: 'Full system access',
+    id: 'role-1', name: 'Administrador do Sistema', description: 'Acesso total ao sistema',
     permissions: { liveView: true, playback: true, alarmAck: true, cameraConfig: true, userManage: true, auditLogs: true, exportEvidence: true, serverConfig: true, roleManage: true, reportGenerate: true }
   },
   {
-    id: 'role-2', name: 'Operator', description: 'Day-to-day surveillance operations',
+    id: 'role-2', name: 'Operador', description: 'Operação diária de monitoramento',
     permissions: { liveView: true, playback: true, alarmAck: true, cameraConfig: false, userManage: false, auditLogs: false, exportEvidence: true, serverConfig: false, roleManage: false, reportGenerate: true }
   },
   {
-    id: 'role-3', name: 'Viewer', description: 'Read-only live and playback access',
+    id: 'role-3', name: 'Visualizador', description: 'Acesso somente leitura ao ao vivo e reprodução',
     permissions: { liveView: true, playback: true, alarmAck: false, cameraConfig: false, userManage: false, auditLogs: false, exportEvidence: false, serverConfig: false, roleManage: false, reportGenerate: false }
   },
   {
-    id: 'role-4', name: 'Auditor', description: 'Audit logs and report access',
+    id: 'role-4', name: 'Auditor', description: 'Acesso a logs de auditoria e relatórios',
     permissions: { liveView: false, playback: false, alarmAck: false, cameraConfig: false, userManage: false, auditLogs: true, exportEvidence: true, serverConfig: false, roleManage: false, reportGenerate: true }
   },
   {
-    id: 'role-5', name: 'Integrator', description: 'API and integration access',
+    id: 'role-5', name: 'Integrador', description: 'Acesso de API e integrações',
     permissions: { liveView: true, playback: false, alarmAck: false, cameraConfig: true, userManage: false, auditLogs: false, exportEvidence: false, serverConfig: true, roleManage: false, reportGenerate: false }
   },
 ];
 
 const PERMISSIONS = [
-  { key: 'liveView',       label: 'Ao Vivo',          desc: 'Access live camera feeds' },
-  { key: 'playback',       label: 'Reprodução',           desc: 'Review recorded footage' },
-  { key: 'alarmAck',       label: 'Alarm Acknowledge',  desc: 'Acknowledge and manage alarms' },
-  { key: 'cameraConfig',   label: 'Camera Config',      desc: 'Configure camera settings' },
-  { key: 'userManage',     label: 'User Management',    desc: 'Create and edit user accounts' },
-  { key: 'auditLogs',      label: 'Logs de Auditoria',         desc: 'Access system audit trail' },
-  { key: 'exportEvidence', label: 'Export Evidence',    desc: 'Export clips and evidence packages' },
-  { key: 'serverConfig',   label: 'Server Config',      desc: 'Manage NVR server settings' },
-  { key: 'roleManage',     label: 'Role Management',    desc: 'Manage roles and permissions' },
-  { key: 'reportGenerate', label: 'Relatórios',            desc: 'Generate and export reports' },
+  { key: 'liveView',       label: 'Ao Vivo',                 desc: 'Acessar transmissões ao vivo das câmeras' },
+  { key: 'playback',       label: 'Reprodução',              desc: 'Revisar gravações' },
+  { key: 'alarmAck',       label: 'Reconhecer alarmes',      desc: 'Reconhecer e gerenciar alarmes' },
+  { key: 'cameraConfig',   label: 'Configuração de câmeras', desc: 'Configurar parâmetros das câmeras' },
+  { key: 'userManage',     label: 'Gestão de usuários',      desc: 'Criar e editar contas de usuário' },
+  { key: 'auditLogs',      label: 'Logs de auditoria',       desc: 'Acessar trilha de auditoria do sistema' },
+  { key: 'exportEvidence', label: 'Exportar evidências',     desc: 'Exportar clipes e pacotes de evidência' },
+  { key: 'serverConfig',   label: 'Configuração do servidor',desc: 'Gerenciar configurações do servidor NVR' },
+  { key: 'roleManage',     label: 'Gestão de perfis',        desc: 'Gerenciar perfis e permissões' },
+  { key: 'reportGenerate', label: 'Relatórios',              desc: 'Gerar e exportar relatórios' },
 ];
 
 const roleColor = (r: string) => {
-  if (r === 'System Admin') return 'bg-purple-500/15 text-purple-400 border-purple-500/30';
-  if (r === 'Operator')     return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
-  if (r === 'Viewer')       return 'bg-slate-500/15 text-slate-400 border-slate-500/30';
+  if (r === 'Administrador do Sistema') return 'bg-purple-500/15 text-purple-400 border-purple-500/30';
+  if (r === 'Operador')                return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
+  if (r === 'Visualizador')            return 'bg-slate-500/15 text-slate-400 border-slate-500/30';
   if (r === 'Auditor')      return 'bg-green-500/15 text-green-400 border-green-500/30';
   return 'bg-orange-500/15 text-orange-400 border-orange-500/30';
 };
@@ -69,7 +69,7 @@ export default function PerfisPage() {
       <div className="flex items-center justify-between px-6 py-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <Shield className="h-4 w-4 text-primary" />
-          <h1 className="text-lg font-semibold">Perfis & Permissions</h1>
+          <h1 className="text-lg font-semibold">Perfis e Permissões</h1>
         </div>
       </div>
 
@@ -78,13 +78,13 @@ export default function PerfisPage() {
           <table className="w-full text-sm">
             <thead className="bg-card border-b border-border">
               <tr>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground w-52">Permission</th>
+                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground w-52">Permissão</th>
                 {roleList.map(r => (
                   <th key={r.id} className="px-4 py-3 text-center">
                     <div className="flex flex-col items-center gap-1">
                       <Badge variant="outline" className={cn('text-[10px]', roleColor(r.name))}>{r.name}</Badge>
                       <button onClick={() => openEdit(r)} className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors">
-                        <Edit2 className="h-2.5 w-2.5" />Edit
+                        <Edit2 className="h-2.5 w-2.5" />Editar
                       </button>
                     </div>
                   </th>
@@ -130,7 +130,7 @@ export default function PerfisPage() {
           <SheetHeader>
             <SheetTitle className="flex items-center gap-2">
               <Shield className="h-4 w-4 text-primary" />
-              Edit Role: {editRole?.name}
+              Editar Perfil: {editRole?.name}
             </SheetTitle>
           </SheetHeader>
           <div className="mt-4 space-y-2">

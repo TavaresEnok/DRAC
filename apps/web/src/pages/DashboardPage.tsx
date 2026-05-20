@@ -1,21 +1,15 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useLocation } from 'wouter';
 import { motion } from 'framer-motion';
 import {
   Activity,
-  AlertTriangle,
   ArrowRight,
-  Bell,
-  Camera,
   Cpu,
   HardDrive,
   MemoryStick,
   Radio,
-  Server,
-  ShieldCheck,
   TrendingUp,
 } from 'lucide-react';
-import { MetricCard } from '@/components/ui/metric-card';
 import {
   AreaChart,
   Area,
@@ -44,6 +38,92 @@ const TOOLTIP_STYLE = {
   color: 'hsl(var(--foreground))',
 };
 
+function PanelCard({
+  eyebrow,
+  title,
+  description,
+  action,
+  children,
+  className = '',
+}: {
+  eyebrow?: string;
+  title: string;
+  description?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`rounded-2xl border border-border bg-card shadow-sm ${className}`}>
+      <div className="flex items-start justify-between gap-4 border-b border-border/70 px-5 py-4">
+        <div className="min-w-0">
+          {eyebrow ? (
+            <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-muted-foreground">{eyebrow}</p>
+          ) : null}
+          <h3 className="mt-1 text-[15px] font-semibold tracking-tight text-foreground">{title}</h3>
+          {description ? <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{description}</p> : null}
+        </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
+      </div>
+      <div className="px-5 py-4">{children}</div>
+    </section>
+  );
+}
+
+function CompactStat({
+  label,
+  value,
+  tone = 'neutral',
+}: {
+  label: string;
+  value: string;
+  tone?: 'neutral' | 'success' | 'warning' | 'danger';
+}) {
+  const toneClass = {
+    neutral: 'text-foreground',
+    success: 'text-[hsl(var(--status-online))]',
+    warning: 'text-[hsl(var(--chart-2))]',
+    danger: 'text-[hsl(var(--destructive))]',
+  }[tone];
+
+  return (
+    <div className="rounded-xl border border-border/70 bg-background/70 px-4 py-3">
+      <div className="text-[9px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{label}</div>
+      <div className={`mt-1 text-lg font-semibold ${toneClass}`}>{value}</div>
+    </div>
+  );
+}
+
+function QueueRow({
+  title,
+  subtitle,
+  right,
+  tone = 'neutral',
+}: {
+  title: string;
+  subtitle: string;
+  right?: React.ReactNode;
+  tone?: 'neutral' | 'warning' | 'danger' | 'success';
+}) {
+  const dotClass = {
+    neutral: 'bg-[hsl(var(--muted-foreground))]',
+    warning: 'bg-[hsl(var(--chart-2))]',
+    danger: 'bg-[hsl(var(--destructive))]',
+    success: 'bg-[hsl(var(--status-online))]',
+  }[tone];
+
+  return (
+    <div className="grid grid-cols-[10px_1fr_auto] items-center gap-3 rounded-xl border border-border/70 bg-background/60 px-3 py-2.5 transition-colors hover:bg-background/80">
+      <span className={`h-2 w-2 rounded-full ${dotClass}`} />
+      <div className="min-w-0">
+        <div className="truncate text-[12px] font-medium text-foreground">{title}</div>
+        <div className="truncate text-[10px] text-muted-foreground">{subtitle}</div>
+      </div>
+      {right ? <div className="shrink-0">{right}</div> : null}
+    </div>
+  );
+}
+
 export default function PainelPage() {
   const [, setLocation] = useLocation();
   const cameras = useVmsDataStore((state) => state.cameras);
@@ -68,264 +148,217 @@ export default function PainelPage() {
   const unacknowledged = events.filter(e => !e.acknowledged).length;
   const storageHealth = system ? Math.max(100 - system.disk.usagePercent, 0) : 0;
   const recentEventos = events.slice(0, 10);
+  const recentHealthEvents = events
+    .filter((event) => [
+      'HEALTH_CAMERA_OFFLINE',
+      'HEALTH_RECORDING_RECOVERED',
+      'HEALTH_AUTO_RECOVERED',
+      'HEALTH_STREAM_UNAVAILABLE',
+      'HEALTH_STREAM_RECOVERED',
+      'HEALTH_STREAM_LATENCY_HIGH',
+      'HEALTH_STREAM_LATENCY_RECOVERED',
+      'HEALTH_STREAM_CODEC_INCOMPATIBLE',
+      'HEALTH_STREAM_FPS_DRIFT',
+      'HEALTH_STREAM_FPS_RECOVERED',
+      'HEALTH_STREAM_FPS_REMEDIATION_REQUESTED',
+      'HEALTH_STREAM_FPS_REMEDIATION_SUCCESS',
+      'HEALTH_STREAM_FPS_REMEDIATION_FAILED',
+    ].includes(event.type))
+    .slice(0, 12);
   const recordingCams = overview?.recordingEnabled ?? cameras.filter(c => c.status === 'recording' || c.status === 'online').length;
-  const healthScore = cameras.length ? Math.round((onlineCams / cameras.length) * 100) : 0;
+  const recordingNow = cameras.filter((camera) => camera.status === 'recording').length;
   const cpuUsage = system ? Math.min(100, Math.round(((system.server.loadAverage[0] ?? 0) / Math.max(system.server.cpuCount, 1)) * 100)) : 0;
   const ramUsage = system ? Math.min(100, Math.round(((system.server.totalMemoryBytes - system.server.freeMemoryBytes) / Math.max(system.server.totalMemoryBytes, 1)) * 100)) : 0;
   const diskUsage = system?.disk.usagePercent ?? 0;
   const streamCount = onlineCams;
+  const p1Alarms = activeAlertas.filter((a) => a.priority === 'P1').length;
   const alarmByPriority = [
     { name: 'P1', value: alarms.filter((alarm) => alarm.priority === 'P1').length, color: 'hsl(354,52%,52%)' },
     { name: 'P2', value: alarms.filter((alarm) => alarm.priority === 'P2').length, color: 'hsl(22,60%,54%)' },
     { name: 'P3', value: alarms.filter((alarm) => alarm.priority === 'P3').length, color: 'hsl(38,58%,54%)' },
     { name: 'P4', value: alarms.filter((alarm) => alarm.priority === 'P4').length, color: 'hsl(213,65%,57%)' },
   ];
-
   return (
-    <div className="p-5 space-y-4">
-      <section className="ops-card px-5 py-4">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-[hsl(var(--status-online))]" />
-              <h2 className="text-[15px] font-semibold">Site operational posture</h2>
-              <span className="ops-chip">
-                <span className="w-1.5 h-1.5 rounded-full status-online" />
-                ON-PREMISE
-              </span>
-            </div>
-            <p className="mt-1 text-[12px] text-[hsl(var(--muted-foreground))]">
-              {system ? `${system.server.hostname} · ${cameras.length} câmera(s) cadastrada(s)` : 'Sem resumo de sistema disponível.'}
-            </p>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {[
-              { label: 'Health', value: `${healthScore}%`, tone: 'status-online' },
-              { label: 'Gravação', value: `${recordingCams}`, tone: 'status-alarm' },
-              { label: 'Streams', value: `${streamCount}`, tone: 'status-online' },
-              { label: 'Unacked', value: `${unacknowledged}`, tone: activeAlertas.length > 0 ? 'status-warning' : 'status-online' },
-            ].map(item => (
-              <div key={item.label} className="ops-card-muted min-w-[128px] px-3 py-2">
-                <div className="text-[9px] font-mono uppercase tracking-ui text-[hsl(var(--muted-foreground))]">{item.label}</div>
-                <div className="mt-1 flex items-center gap-2">
-                  <span className={`w-1.5 h-1.5 rounded-full ${item.tone}`} />
-                  <span className="font-mono text-[18px] leading-none tabular-nums">{item.value}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+    <div className="space-y-5 p-5">
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <CompactStat
+          label="Online"
+          value={`${onlineCams}/${cameras.length}`}
+          tone={offlineCams > 0 ? 'warning' : 'success'}
+        />
+        <CompactStat
+          label="Alarmes ativos"
+          value={String(activeAlertas.length)}
+          tone={activeAlertas.length > 0 ? 'danger' : 'success'}
+        />
+        <CompactStat
+          label="Gravando agora"
+          value={String(recordingNow)}
+          tone={recordingNow > 0 ? 'danger' : 'success'}
+        />
+        <CompactStat
+          label="Disco livre"
+          value={`${storageHealth}%`}
+          tone={diskUsage >= 85 ? 'danger' : diskUsage >= 70 ? 'warning' : 'success'}
+        />
       </section>
 
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-        <MetricCard
-          label="Cameras online"
-          value={`${onlineCams}/${cameras.length}`}
-          subtitle={`${offlineCams} feeds require attention`}
-          subtext={offlineCams > 0 ? `${offlineCams} feed(s) offline` : 'Todos os feeds operacionais'}
-          icon={Camera}
-          accent="chart-3"
-          index={0}
-        />
-        <MetricCard
-          label="Active alarms"
-          value={activeAlertas.length.toString()}
-          subtitle={`${activeAlertas.filter(a => a.priority === 'P1').length} P1 critical`}
-          subtext="Operator queue is open"
-          icon={Bell}
-          accent="destructive"
-          alert={activeAlertas.length > 0}
-          index={1}
-        />
-        <MetricCard
-          label="Critical events"
-          value={criticalEventos.toString()}
-          subtitle="Last 24 hours"
-          subtext={`${unacknowledged} not acknowledged`}
-          icon={AlertTriangle}
-          accent="chart-2"
-          index={2}
-        />
-        <MetricCard
-          label="Armazenamento reserve"
-          value={`${storageHealth}%`}
-          subtitle={system ? `${(system.disk.freeBytes / 1024 / 1024 / 1024 / 1024).toFixed(2)}TB available` : 'Armazenamento indisponível'}
-          subtext={system ? `${(system.disk.usedBytes / 1024 / 1024 / 1024 / 1024).toFixed(2)}TB / ${(system.disk.totalBytes / 1024 / 1024 / 1024 / 1024).toFixed(2)}TB used` : 'Sem métricas'}
-          icon={HardDrive}
-          accent={storageHealth < 20 ? 'destructive' : 'chart-3'}
-          index={3}
-        />
-      </div>
-
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
-        <section className="ops-card xl:col-span-8 p-4">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-[13px] font-semibold">Event and alarm activity</h3>
-              <p className="text-[10px] text-[hsl(var(--muted-foreground))] mt-0.5">Last 24 hours by event ingestion time</p>
-            </div>
-            <div className="ops-chip">
-              <TrendingUp className="w-3 h-3" />
-              LIVE TELEMETRY
-            </div>
-          </div>
-          <ResponsiveContainer width="100%" height={210}>
-            <AreaChart data={hourlyData} margin={{ top: 8, right: 12, left: -20, bottom: 0 }}>
-              <defs>
-                <linearGradient id="events-grad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="hsl(213,68%,57%)" stopOpacity={0.24} />
-                  <stop offset="95%" stopColor="hsl(213,68%,57%)" stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="alarms-grad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="hsl(354,52%,52%)" stopOpacity={0.20} />
-                  <stop offset="95%" stopColor="hsl(354,52%,52%)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="hour" tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} interval={3} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
-              <ReTooltip contentStyle={TOOLTIP_STYLE} />
-              <Area type="monotone" dataKey="events" stroke="hsl(213,68%,57%)" strokeWidth={1.6} fill="url(#events-grad)" name="Eventos" dot={false} />
-              <Area type="monotone" dataKey="alarms" stroke="hsl(354,52%,52%)" strokeWidth={1.6} fill="url(#alarms-grad)" name="Alertas" dot={false} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </section>
-
-        <section className="ops-card xl:col-span-4 p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h3 className="text-[13px] font-semibold">Alarm priority mix</h3>
-              <p className="text-[10px] text-[hsl(var(--muted-foreground))] mt-0.5">Open and historical queue</p>
-            </div>
-            <Bell className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-          </div>
-          <div className="grid grid-cols-[130px_1fr] items-center gap-3">
-            <ResponsiveContainer width="100%" height={132}>
-              <PieChart>
-                <Pie data={alarmByPriority} cx="50%" cy="50%" innerRadius={38} outerRadius={58} dataKey="value" paddingAngle={3}>
-                  {alarmByPriority.map((entry, i) => (
-                    <Cell key={i} fill={entry.color} stroke="none" />
-                  ))}
-                </Pie>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_360px]">
+        <div className="space-y-4">
+          <PanelCard
+            eyebrow="Volume"
+            title="Atividade de eventos e alarmes"
+            description="Últimas 24 horas."
+            action={<span className="ops-chip"><TrendingUp className="h-3 w-3" /> 24h</span>}
+          >
+            <ResponsiveContainer width="100%" height={250}>
+              <AreaChart data={hourlyData} margin={{ top: 8, right: 12, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="events-grad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="hsl(213,68%,57%)" stopOpacity={0.22} />
+                    <stop offset="95%" stopColor="hsl(213,68%,57%)" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="alarms-grad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="hsl(354,52%,52%)" stopOpacity={0.18} />
+                    <stop offset="95%" stopColor="hsl(354,52%,52%)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="hour" tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} interval={3} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
                 <ReTooltip contentStyle={TOOLTIP_STYLE} />
-              </PieChart>
+                <Area type="monotone" dataKey="events" stroke="hsl(213,68%,57%)" strokeWidth={1.6} fill="url(#events-grad)" name="Eventos" dot={false} />
+                <Area type="monotone" dataKey="alarms" stroke="hsl(354,52%,52%)" strokeWidth={1.6} fill="url(#alarms-grad)" name="Alertas" dot={false} />
+              </AreaChart>
             </ResponsiveContainer>
+          </PanelCard>
+
+          <PanelCard
+            eyebrow="Fila"
+            title="Eventos recentes"
+            description="Incidentes mais novos que merecem revisão operacional."
+            action={
+              <button onClick={() => setLocation('/events')} className="ops-button flex items-center gap-1.5 px-3 text-[11px]">
+                Ver todos <ArrowRight className="h-3 w-3" />
+              </button>
+            }
+          >
             <div className="space-y-2">
-              {alarmByPriority.map(p => (
-                <div key={p.name} className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: p.color }} />
-                  <span className="font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{p.name}</span>
-                  <span className="ml-auto font-mono text-[11px] tabular-nums">{p.value}</span>
-                </div>
+              {recentEventos.slice(0, 8).map((evt, index) => (
+                <motion.div
+                  key={evt.id}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.025 }}
+                >
+                  <QueueRow
+                    title={evt.cameraName}
+                    subtitle={`${evt.type.replace(/_/g, ' ')} / ${evt.description}`}
+                    tone={evt.severity === 'critical' ? 'danger' : evt.severity === 'warning' ? 'warning' : 'success'}
+                    right={
+                      <div className="flex items-center gap-2">
+                        <span className={`rounded-full border px-2 py-0.5 text-[9px] font-mono uppercase ${SEV_BADGE[evt.severity]}`}>{evt.severity}</span>
+                        <span className="font-mono text-[9px] text-muted-foreground">{format(new Date(evt.timestamp), 'HH:mm:ss')}</span>
+                      </div>
+                    }
+                  />
+                </motion.div>
               ))}
             </div>
-          </div>
-        </section>
-      </div>
+          </PanelCard>
+        </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
-        <section className="ops-card xl:col-span-7 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <div>
-              <h3 className="text-[13px] font-semibold">Operator event queue</h3>
-              <p className="text-[10px] text-[hsl(var(--muted-foreground))] mt-0.5">Newest incidents requiring review</p>
-            </div>
-            <button
-              onClick={() => setLocation('/events')}
-              className="ops-button flex items-center gap-1.5 px-3 text-[11px]"
-            >
-              View all <ArrowRight className="w-3 h-3" />
-            </button>
-          </div>
-          <div className="divide-y divide-border/80">
-            {recentEventos.map((evt, index) => (
-              <motion.div
-                key={evt.id}
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.025 }}
-                className="grid grid-cols-[10px_1fr_auto_auto] items-center gap-3 px-4 py-2.5 hover:bg-[hsl(var(--accent)_/_0.55)] transition-colors"
-              >
-                <span className={`w-1.5 h-1.5 rounded-full ${
-                  evt.severity === 'critical' ? 'status-alarm' :
-                  evt.severity === 'warning' ? 'status-motion' : 'status-online'
-                }`} />
-                <div className="min-w-0">
-                  <div className="text-[12px] font-medium truncate">{evt.cameraName}</div>
-                  <div className="text-[10px] text-[hsl(var(--muted-foreground))] truncate capitalize">
-                    {evt.type.replace(/_/g, ' ')} / {evt.description}
+        <div className="space-y-4 xl:sticky xl:top-4 self-start">
+          <PanelCard
+            eyebrow="Mix"
+            title="Prioridade de alarmes"
+            description="Distribuição atual."
+          >
+            <div className="grid grid-cols-[132px_1fr] items-center gap-3">
+              <ResponsiveContainer width="100%" height={140}>
+                <PieChart>
+                  <Pie data={alarmByPriority} cx="50%" cy="50%" innerRadius={40} outerRadius={60} dataKey="value" paddingAngle={3}>
+                    {alarmByPriority.map((entry, i) => (
+                      <Cell key={i} fill={entry.color} stroke="none" />
+                    ))}
+                  </Pie>
+                  <ReTooltip contentStyle={TOOLTIP_STYLE} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="space-y-2">
+                {alarmByPriority.map((priority) => (
+                  <div key={priority.name} className="flex items-center gap-2 rounded-lg border border-border/70 bg-background/60 px-3 py-2">
+                    <span className="h-2 w-2 rounded-full" style={{ background: priority.color }} />
+                    <span className="text-[10px] font-mono text-muted-foreground">{priority.name}</span>
+                    <span className="ml-auto font-mono text-[11px] tabular-nums">{priority.value}</span>
                   </div>
-                </div>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-mono capitalize shrink-0 ${SEV_BADGE[evt.severity]}`}>
-                  {evt.severity}
-                </span>
-                <span className="font-mono text-[9px] text-[hsl(var(--muted-foreground))] shrink-0 tabular-nums">
-                  {format(new Date(evt.timestamp), 'HH:mm:ss')}
-                </span>
-              </motion.div>
-            ))}
-          </div>
-        </section>
-
-        <section className="xl:col-span-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-1 gap-3">
-          <div className="ops-card p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[13px] font-semibold">System telemetry</h3>
-              <Radio className="w-3.5 h-3.5 text-[hsl(var(--status-online))] rec-pulse" />
+                ))}
+              </div>
             </div>
+          </PanelCard>
+
+          <PanelCard
+            eyebrow="Infra"
+            title="Telemetria do sistema"
+            description="Carga atual."
+            action={<Radio className="h-3.5 w-3.5 text-[hsl(var(--status-online))] rec-pulse" />}
+          >
             <div className="space-y-3">
               {[
                 { label: 'CPU', value: cpuUsage, unit: '%', icon: Cpu },
                 { label: 'RAM', value: ramUsage, unit: '%', icon: MemoryStick },
-                { label: 'Disk', value: diskUsage, unit: '%', icon: HardDrive },
+                { label: 'Disco', value: diskUsage, unit: '%', icon: HardDrive },
                 { label: 'Streams', value: streamCount, unit: '', icon: Activity },
-              ].map(m => {
-                const Icon = m.icon;
-                const pct = m.unit === '%' ? m.value : Math.min(100, (m.value / 200) * 100);
+              ].map((metric) => {
+                const Icon = metric.icon;
+                const pct = metric.unit === '%' ? metric.value : Math.min(100, (metric.value / 200) * 100);
                 const barColor = pct > 82 ? 'hsl(354,52%,52%)' : pct > 62 ? 'hsl(38,58%,54%)' : 'hsl(213,68%,57%)';
                 return (
-                  <div key={m.label} className="grid grid-cols-[18px_54px_1fr_58px] items-center gap-2">
-                    <Icon className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-                    <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{m.label}</span>
-                    <div className="h-1.5 bg-[hsl(var(--border)_/_0.7)] rounded-full overflow-hidden">
+                  <div key={metric.label} className="grid grid-cols-[18px_56px_1fr_58px] items-center gap-2">
+                    <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-[10px] text-muted-foreground">{metric.label}</span>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-border/70">
                       <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, pct)}%`, background: barColor }} />
                     </div>
-                    <span className="font-mono text-[10px] text-right tabular-nums">{m.value.toFixed(0)}{m.unit}</span>
+                    <span className="text-right font-mono text-[10px] tabular-nums">{metric.value.toFixed(0)}{metric.unit}</span>
                   </div>
                 );
               })}
             </div>
-          </div>
 
-          <div className="ops-card p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[13px] font-semibold">Server summary</h3>
-              <Server className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-            </div>
-            <div className="space-y-2.5">
-              {[{
-                id: system?.server.hostname ?? 'server',
-                name: system?.server.hostname ?? 'Servidor',
-                ip: system?.recordingsRoot ?? '/storage',
-                cameras: cameras.length,
-                cpu: cpuUsage,
-                temp: 0,
-                status: system?.status === 'ok' ? 'healthy' : 'warning',
-              }].map(srv => (
-                <div key={srv.id} className="grid grid-cols-[10px_1fr_42px_42px] items-center gap-2">
-                  <span className={`w-1.5 h-1.5 rounded-full ${srv.status === 'healthy' ? 'status-online' : 'status-warning rec-pulse'}`} />
-                  <div className="min-w-0">
-                    <div className="text-[11px] font-medium truncate">{srv.name}</div>
-                    <div className="font-mono text-[9px] text-[hsl(var(--muted-foreground))] truncate">{srv.ip} / {srv.cameras} cams</div>
-                  </div>
-                  <span className="font-mono text-[10px] text-right tabular-nums">{srv.cpu}%</span>
-                  <span className="font-mono text-[10px] text-right tabular-nums text-[hsl(var(--muted-foreground))]">
-                    N/D
-                  </span>
+            <div className="mt-4 rounded-xl border border-border/80 bg-background px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-semibold">{system?.server.hostname ?? 'Servidor'}</div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">{system?.recordingsRoot ?? '/storage'} · {cameras.length} câmeras</div>
                 </div>
-              ))}
+                <div className="text-right">
+                  <div className="text-[11px] font-semibold">{cpuUsage}% CPU</div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">{ramUsage}% RAM</div>
+                </div>
+              </div>
             </div>
-          </div>
-        </section>
+          </PanelCard>
+
+          {recentHealthEvents.length > 0 ? (
+            <PanelCard
+              eyebrow="Saúde"
+              title="Saúde recente"
+              description="Últimos eventos de saúde."
+            >
+              <div className="space-y-2">
+                {recentHealthEvents.slice(0, 5).map((evt) => (
+                  <QueueRow
+                    key={evt.id}
+                    title={evt.cameraName}
+                    subtitle={evt.type.replace(/_/g, ' ')}
+                    tone={evt.severity === 'critical' ? 'danger' : evt.severity === 'warning' ? 'warning' : 'success'}
+                    right={<span className="font-mono text-[9px] text-muted-foreground">{format(new Date(evt.timestamp), 'HH:mm:ss')}</span>}
+                  />
+                ))}
+              </div>
+            </PanelCard>
+          ) : null}
+        </div>
       </div>
     </div>
   );

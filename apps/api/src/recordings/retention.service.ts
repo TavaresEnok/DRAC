@@ -4,6 +4,7 @@ import { existsSync, rmSync, readdirSync, rmdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { ConfigService } from '@nestjs/config';
+import { ensureFileUnderRoot } from './helpers/safe-file.helper';
 
 @Injectable()
 export class RetentionService implements OnModuleInit, OnModuleDestroy {
@@ -19,7 +20,12 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('Retention Service inicializado.');
     const useBullmq = this.config.get<boolean>('retentionUseBullmq');
     if (useBullmq) {
-      this.logger.log('Retenção por timer local desativada (BullMQ ativo).');
+      this.logger.log('Retenção por idade via timer local desativada (BullMQ ativo). Guardião de disco permanece ativo.');
+      void this.checkDiskUsage();
+      this.interval = setInterval(() => {
+        void this.checkDiskUsage();
+      }, 60 * 60 * 1000);
+      this.interval.unref();
       return;
     }
     // Executa uma vez no início para limpar caso tenha ficado desligado
@@ -38,15 +44,82 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
   }
 
   async handleRetention() {
-    const days = parseInt(this.config.get('RECORDING_RETENTION_DAYS') || '7');
-    this.logger.log(`Iniciando verificação de retenção (${days} dias)...`);
+    const globalDays = parseInt(this.config.get('RECORDING_RETENTION_DAYS') || '7');
+    this.logger.log(`Iniciando verificação de retenção (global=${globalDays} dias, com override por câmera)...`);
 
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
+    // Ler legal holds ativos para proteger evidências
+    const holds = await this.prisma.investigationItem.findMany({
+      where: { type: 'legal_hold' },
+      orderBy: { createdAt: 'desc' },
+      select: { investigationId: true, metadata: true },
+    });
+    const holdByInvestigation = new Map<string, any>();
+    for (const hold of holds) {
+      if (!holdByInvestigation.has(hold.investigationId)) {
+        holdByInvestigation.set(hold.investigationId, hold.metadata);
+      }
+    }
+    const heldRecordingIds = new Set<string>();
+    const heldClipIds = new Set<string>();
+    for (const metadata of holdByInvestigation.values()) {
+      if (!metadata || typeof metadata !== 'object') continue;
+      const m = metadata as Record<string, unknown>;
+      if (!m.enabled) continue;
+      const rids = Array.isArray(m.recordingIds) ? m.recordingIds.filter((x): x is string => typeof x === 'string') : [];
+      const cids = Array.isArray(m.clipIds) ? m.clipIds.filter((x): x is string => typeof x === 'string') : [];
+      rids.forEach((id) => heldRecordingIds.add(id));
+      cids.forEach((id) => heldClipIds.add(id));
+    }
+
+    const linkedClipItems = await this.prisma.investigationItem.findMany({
+      where: {
+        OR: [
+          { type: 'clip' },
+          { type: 'export_package' },
+          { type: 'evidence' },
+        ],
+      },
+      select: { metadata: true },
+      take: 5000,
+      orderBy: { createdAt: 'desc' },
+    });
+    for (const item of linkedClipItems) {
+      if (!item.metadata || typeof item.metadata !== 'object') continue;
+      const m = item.metadata as Record<string, unknown>;
+      if (typeof m.clipId === 'string') heldClipIds.add(m.clipId);
+      if (Array.isArray(m.clipIds)) {
+        for (const clipId of m.clipIds) {
+          if (typeof clipId === 'string') heldClipIds.add(clipId);
+        }
+      }
+    }
+
+    const heldClipRows = heldClipIds.size
+      ? await this.prisma.exportedClip.findMany({
+          where: { id: { in: [...heldClipIds] } },
+          select: { id: true, sourceRecordingId: true },
+        })
+      : [];
+    for (const clip of heldClipRows) {
+      heldRecordingIds.add(clip.sourceRecordingId);
+    }
 
     // 1. Buscar gravações antigas
-    const oldRecordings = await this.prisma.recording.findMany({
-      where: { startedAt: { lt: cutoff } },
+    const allRecordings = await this.prisma.recording.findMany({
+      include: {
+        camera: {
+          select: {
+            retentionDays: true,
+          },
+        },
+      },
+    });
+
+    const now = Date.now();
+    const oldRecordings = allRecordings.filter((record) => {
+      const retentionDays = record.camera?.retentionDays ?? globalDays;
+      const thresholdMs = now - retentionDays * 24 * 60 * 60 * 1000;
+      return record.startedAt.getTime() < thresholdMs;
     });
 
     if (oldRecordings.length === 0) {
@@ -57,7 +130,8 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
 
       for (const rec of oldRecordings) {
         try {
-          const fullPath = join(root, rec.filePath);
+          if (heldRecordingIds.has(rec.id)) continue;
+          const fullPath = ensureFileUnderRoot(root, rec.filePath);
           if (existsSync(fullPath)) {
             rmSync(fullPath);
           }
@@ -71,6 +145,39 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
       
       // Limpar diretórios vazios
       this.cleanEmptyDirs(root);
+    }
+
+    // 1.1 Limpar clips exportados antigos que nao estao em legal hold
+    const allClips = await this.prisma.exportedClip.findMany({
+      include: {
+        sourceRecording: {
+          include: {
+            camera: {
+              select: {
+                retentionDays: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    const oldClips = allClips.filter((clip) => {
+      const retentionDays = clip.sourceRecording?.camera?.retentionDays ?? globalDays;
+      const thresholdMs = now - retentionDays * 24 * 60 * 60 * 1000;
+      return clip.startedAt.getTime() < thresholdMs;
+    });
+    if (oldClips.length > 0) {
+      const root = process.env.RECORDINGS_ROOT || './storage/recordings';
+      for (const clip of oldClips) {
+        try {
+          if (heldClipIds.has(clip.id)) continue;
+          const fullPath = ensureFileUnderRoot(root, clip.filePath);
+          if (existsSync(fullPath)) rmSync(fullPath);
+          await this.prisma.exportedClip.delete({ where: { id: clip.id } });
+        } catch (err: any) {
+          this.logger.error(`Falha ao remover clip ${clip.id}: ${err.message}`);
+        }
+      }
     }
 
     // 2. Limpar eventos antigos (30 dias padrão)
@@ -107,7 +214,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
 
         for (const rec of oldest) {
           try {
-            const fullPath = join(root, rec.filePath);
+            const fullPath = ensureFileUnderRoot(root, rec.filePath);
             if (existsSync(fullPath)) rmSync(fullPath);
             await this.prisma.recording.delete({ where: { id: rec.id } });
           } catch {}

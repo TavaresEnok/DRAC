@@ -11,5 +11,6 @@ import { MediamtxProxyService } from './mediamtx-proxy.service';
   imports: [CamerasModule, AuthModule, AuditModule, AccessControlModule],
   controllers: [CameraStreamController],
   providers: [FfmpegMjpegService, MediamtxProxyService],
+  exports: [FfmpegMjpegService, MediamtxProxyService],
 })
 export class CameraStreamModule {}

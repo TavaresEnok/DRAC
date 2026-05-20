@@ -1,6 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import axios from 'axios';
 import { ChevronRight, HardDrive, ShieldAlert, Thermometer, Server, Gauge, RefreshCw, FileText } from 'lucide-react';
 import { useVmsDataStore } from '../store/vmsDataStore';
+import { useAuthStore } from '../store/authStore';
+import { getApiBaseUrl } from '../lib/api-base';
 
 function Ring({ value }: { value: number }) {
   return (
@@ -18,10 +21,55 @@ function Bar({ value }: { value: number }) {
   return <div className="h-1.5 rounded-full bg-[hsl(var(--border))] overflow-hidden"><div className={`h-full ${tone}`} style={{ width: `${value}%` }} /></div>;
 }
 
-export default function ArmazenamentoPage() {
+export default function MonitoramentoPage() {
+  const API_URL = getApiBaseUrl();
+  const accessToken = useAuthStore((state) => state.accessToken);
   const cameras = useVmsDataStore((state) => state.cameras);
   const system = useVmsDataStore((state) => state.system);
   const [policyDays, setPolicyDays] = useState(90);
+  const [fromDate, setFromDate] = useState(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  const [toDate, setToDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [analytics, setAnalytics] = useState<{
+    summary: { rows: number; totalRecordingsBytes: string; totalClipsBytes: string; totalBytes: string };
+    items: Array<{
+      cameraId: string;
+      cameraName: string;
+      day: string;
+      recordingsCount: number;
+      clipsCount: number;
+      recordingsBytes: string;
+      clipsBytes: string;
+      totalBytes: string;
+    }>;
+  } | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let cancelled = false;
+    setAnalyticsLoading(true);
+    setAnalyticsError(null);
+    void axios.get(`${API_URL}/recordings/storage-usage`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      params: {
+        from: new Date(`${fromDate}T00:00:00.000Z`).toISOString(),
+        to: new Date(`${toDate}T23:59:59.999Z`).toISOString(),
+      },
+    }).then(({ data }) => {
+      if (cancelled) return;
+      setAnalytics(data);
+    }).catch((error) => {
+      if (cancelled) return;
+      setAnalytics(null);
+      setAnalyticsError(error instanceof Error ? error.message : 'Falha ao carregar analytics de storage.');
+    }).finally(() => {
+      if (!cancelled) setAnalyticsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [API_URL, accessToken, fromDate, toDate]);
+
+  const toGB = (raw: string | number | bigint) => (Number(raw) / 1024 / 1024 / 1024).toFixed(2);
   const volumes = useMemo(() => system ? [
     {
       server: system.server.hostname,
@@ -41,11 +89,12 @@ export default function ArmazenamentoPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div className="space-y-1">
-          <div className="text-[10px] uppercase tracking-[0.22em] text-[hsl(var(--muted-foreground))]">Sistema &gt; Armazenamento &gt; Armazenamento e Retenção</div>
-          <h2 className="text-lg font-semibold">Armazenamento e Retenção</h2>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-[hsl(var(--muted-foreground))]">Sistema &gt; Monitoramento &gt; Disco e Retenção</div>
+          <h2 className="text-lg font-semibold">Monitoramento</h2>
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">Saúde de disco, retenção e uso das gravações em uma visão operacional simples.</p>
         </div>
         <button className="flex items-center gap-2 px-3 py-2 rounded border border-border bg-card text-xs hover:bg-[hsl(var(--accent))] transition-colors">
-          <FileText className="w-3.5 h-3.5" /> Políticas de Retenção
+          <FileText className="w-3.5 h-3.5" /> Política de Retenção
         </button>
       </div>
       <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
@@ -61,7 +110,7 @@ export default function ArmazenamentoPage() {
       <div className="bg-card border border-card-border rounded-xl">
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <div>
-            <div className="text-xs font-semibold tracking-[0.16em] uppercase text-[hsl(var(--muted-foreground))]">Discos e Volumes</div>
+            <div className="text-xs font-semibold tracking-[0.16em] uppercase text-[hsl(var(--muted-foreground))]">Disco e Volume</div>
           </div>
           <button className="text-xs flex items-center gap-2 text-[hsl(var(--muted-foreground))] hover:text-foreground transition-colors"><RefreshCw className="w-3.5 h-3.5" /> Atualizar</button>
         </div>
@@ -90,6 +139,55 @@ export default function ArmazenamentoPage() {
           </tbody>
         </table>
       </div>
+      <div className="bg-card border border-card-border rounded-xl">
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold tracking-[0.16em] uppercase text-[hsl(var(--muted-foreground))]">Uso por Câmera / Dia / Tipo</div>
+            <div className="text-[11px] text-[hsl(var(--muted-foreground))] mt-1">Gravações e clips exportados no período selecionado</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="h-8 rounded border border-border bg-background px-2 text-xs" />
+            <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="h-8 rounded border border-border bg-background px-2 text-xs" />
+          </div>
+        </div>
+        <div className="px-5 py-3 text-xs text-[hsl(var(--muted-foreground))]">
+          {analyticsLoading && 'Carregando analytics...'}
+          {!analyticsLoading && analyticsError && analyticsError}
+          {!analyticsLoading && analytics && (
+            <span>
+              linhas: {analytics.summary.rows} · gravações: {toGB(analytics.summary.totalRecordingsBytes)} GB · clips: {toGB(analytics.summary.totalClipsBytes)} GB · total: {toGB(analytics.summary.totalBytes)} GB
+            </span>
+          )}
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-[10px] uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">
+              <tr className="border-b border-border">
+                <th className="text-left px-5 py-3">Dia</th>
+                <th className="text-left px-5 py-3">Câmera</th>
+                <th className="text-left px-5 py-3">Gravações</th>
+                <th className="text-left px-5 py-3">Clips</th>
+                <th className="text-left px-5 py-3">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(analytics?.items ?? []).slice(0, 200).map((row) => (
+                <tr key={`${row.day}-${row.cameraId}`} className="border-b border-border last:border-0">
+                  <td className="px-5 py-3 font-mono text-xs">{row.day}</td>
+                  <td className="px-5 py-3 text-xs">{row.cameraName}</td>
+                  <td className="px-5 py-3 text-xs">
+                    {row.recordingsCount} arquivo(s) · {toGB(row.recordingsBytes)} GB
+                  </td>
+                  <td className="px-5 py-3 text-xs">
+                    {row.clipsCount} arquivo(s) · {toGB(row.clipsBytes)} GB
+                  </td>
+                  <td className="px-5 py-3 text-xs font-semibold">{toGB(row.totalBytes)} GB</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="bg-card border border-card-border rounded-xl p-4">
           <div className="text-xs uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">Política de Retenção</div>
@@ -102,7 +200,7 @@ export default function ArmazenamentoPage() {
           <div className="mt-3 text-xs text-[hsl(var(--muted-foreground))]">Base para cálculo de retenção por carga.</div>
         </div>
         <div className="bg-card border border-card-border rounded-xl p-4">
-          <div className="text-xs uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">Saúde do Armazenamento</div>
+          <div className="text-xs uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">Saúde Operacional</div>
           <div className="mt-3 flex items-center gap-2 text-xs"><ShieldAlert className="w-4 h-4 text-[hsl(var(--chart-4))]" /> {volumes.filter((volume) => volume.health !== 'OK').length} volumes em atenção</div>
           <div className="mt-3 flex items-center gap-2 text-xs"><Server className="w-4 h-4 text-[hsl(var(--primary))]" /> {system ? 1 : 0} servidor monitorado</div>
         </div>

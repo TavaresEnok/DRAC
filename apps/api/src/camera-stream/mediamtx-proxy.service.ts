@@ -37,10 +37,13 @@ export class MediamtxProxyService {
     return `cam_${cameraId.replace(/[^a-zA-Z0-9]/g, '')}`;
   }
 
-  private async apiRequest(method: 'POST' | 'DELETE', path: string, body?: unknown) {
+  private async apiRequest(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown) {
     const base = this.configService.get<string>('mediaMtxApiBaseUrl') ?? 'http://mediamtx:9997';
-    const apiUser = this.configService.get<string>('mediaMtxApiUser') ?? 'nexusguard';
-    const apiPass = this.configService.get<string>('mediaMtxApiPass') ?? 'nexusguard123';
+    const apiUser = (this.configService.get<string>('mediaMtxApiUser') ?? '').trim();
+    const apiPass = (this.configService.get<string>('mediaMtxApiPass') ?? '').trim();
+    if (!apiUser || !apiPass) {
+      throw new Error('Credenciais da API do MediaMTX não configuradas (MEDIAMTX_API_USER/MEDIAMTX_API_PASS).');
+    }
     const basicAuth = Buffer.from(`${apiUser}:${apiPass}`).toString('base64');
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
@@ -64,6 +67,18 @@ export class MediamtxProxyService {
     }
   }
 
+  private async getPath(pathName: string) {
+    const encodedPath = encodeURIComponent(pathName);
+    const text = await this.apiRequest('GET', `/v3/config/paths/get/${encodedPath}`);
+    return JSON.parse(text) as {
+      source?: string;
+      sourceOnDemand?: boolean;
+      sourceOnDemandStartTimeout?: string;
+      sourceOnDemandCloseAfter?: string;
+      rtspTransport?: string;
+    };
+  }
+
   async ensurePathForCamera(cameraId: string) {
     if (!this.isEnabled()) {
       return { pathName: null as string | null, sourceUrl: null as string | null };
@@ -83,21 +98,38 @@ export class MediamtxProxyService {
 
     const pathName = this.pathNameFromCameraId(cameraId);
     const encodedPath = encodeURIComponent(pathName);
+    const desiredPath = {
+      source: sourceUrl,
+      sourceOnDemand: true,
+      sourceOnDemandStartTimeout: '10s',
+      sourceOnDemandCloseAfter: '20s',
+      rtspTransport: camera.preferredRtspTransport ?? this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp',
+    };
 
-    // Recria para garantir sincronismo com alterações de credencial/porta/path.
+    try {
+      const current = await this.getPath(pathName);
+      const isSamePath =
+        current.source === desiredPath.source &&
+        current.sourceOnDemand === desiredPath.sourceOnDemand &&
+        current.sourceOnDemandStartTimeout === desiredPath.sourceOnDemandStartTimeout &&
+        current.sourceOnDemandCloseAfter === desiredPath.sourceOnDemandCloseAfter &&
+        current.rtspTransport === desiredPath.rtspTransport;
+
+      if (isSamePath) {
+        return { pathName, sourceUrl };
+      }
+    } catch {
+      // Se não existe, cria abaixo. Se a API falhar temporariamente, a criação vai expor o erro real.
+    }
+
+    // Só recria quando a configuração mudou; recriar em toda leitura derruba muxers HLS/WebRTC ativos.
     try {
       await this.apiRequest('DELETE', `/v3/config/paths/delete/${encodedPath}`);
     } catch {
       // ignora quando ainda não existe
     }
 
-    await this.apiRequest('POST', `/v3/config/paths/add/${encodedPath}`, {
-      source: sourceUrl,
-      sourceOnDemand: true,
-      sourceOnDemandStartTimeout: '10s',
-      sourceOnDemandCloseAfter: '20s',
-      rtspTransport: this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp',
-    });
+    await this.apiRequest('POST', `/v3/config/paths/add/${encodedPath}`, desiredPath);
 
     this.logger.log(`Path MediaMTX pronto ${pathName} -> ${this.sanitizeRtspUrl(sourceUrl)}`);
     return { pathName, sourceUrl };

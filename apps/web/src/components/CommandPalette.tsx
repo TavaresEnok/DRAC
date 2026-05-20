@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useLocation } from 'wouter';
 import {
-  LayoutDashboard, Monitor, PlaySquare, Activity, Bell,
-  Camera, Map, Crosshair, Search, Archive, Settings,
-  HardDrive, LogOut, Sun, Moon, Shield, Clock
+  LayoutDashboard, Monitor, PlaySquare,
+  Camera, Settings,
+  Gauge, LogOut, Sun, Moon, Shield, Clock, Users
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command';
@@ -15,14 +15,9 @@ const PAGES = [
   { label: 'Painel', path: '/dashboard', icon: LayoutDashboard, description: 'Visão geral da central de comando' },
   { label: 'Ao Vivo', path: '/live', icon: Monitor, description: 'Grade de câmeras e controles' },
   { label: 'Reprodução', path: '/playback', icon: PlaySquare, description: 'Revisar gravações' },
-  { label: 'Eventos', path: '/events', icon: Activity, description: 'Log de eventos e investigação' },
-  { label: 'Alertas', path: '/alarms', icon: Bell, description: 'Gestão de alertas' },
   { label: 'Câmeras', path: '/cameras', icon: Camera, description: 'Gestão e configuração de câmeras' },
-  { label: 'Mapa / Planta', path: '/map', icon: Map, description: 'Mapa interativo da instalação' },
-  { label: 'Controle PTZ', path: '/ptz', icon: Crosshair, description: 'Controlador pan-tilt-zoom' },
-  { label: 'Investigação', path: '/investigation', icon: Search, description: 'Área de trabalho de investigação multicâmera' },
-  { label: 'Exportar Evidências', path: '/evidence', icon: Archive, description: 'Exportar pacotes de evidência' },
-  { label: 'Armazenamento', path: '/storage', icon: HardDrive, description: 'Capacidade e retenção' },
+  { label: 'Monitoramento', path: '/storage', icon: Gauge, description: 'Disco, retenção e saúde operacional' },
+  { label: 'Usuários', path: '/users', icon: Users, description: 'Gestão de usuários' },
   { label: 'Configurações', path: '/settings', icon: Settings, description: 'Configuração do sistema' },
 ];
 
@@ -33,15 +28,14 @@ interface Props {
 
 export function CommandPalette({ open, onClose }: Props) {
   const [, setLocation] = useLocation();
-  const { logout } = useAuthStore();
+  const { logout, user } = useAuthStore();
   const { theme, setTheme } = useThemeStore();
   const cameras = useVmsDataStore((state) => state.cameras);
-  const events = useVmsDataStore((state) => state.events);
+  const visiblePages = user?.role === 'admin' ? PAGES : PAGES.filter((page) => !['/users', '/settings'].includes(page.path));
 
   const recent = [
     cameras[0] ? { label: `Ao Vivo — ${cameras[0].name}`, path: '/live', icon: Clock } : null,
-    events[0] ? { label: `Investigar — ${events[0].cameraName}`, path: '/investigation', icon: Clock } : null,
-    { label: 'Exportar Evidências', path: '/evidence', icon: Clock },
+    { label: 'Reprodução', path: '/playback', icon: Clock },
   ].filter(Boolean) as Array<{ label: string; path: string; icon: typeof Clock }>;
 
   const navigate = (path: string) => {
@@ -88,7 +82,7 @@ export function CommandPalette({ open, onClose }: Props) {
                 <div className="py-6 text-center text-sm text-[hsl(var(--muted-foreground))]">Nenhum resultado encontrado</div>
               </CommandEmpty>
 
-              <CommandGroup heading="Recenteses">
+              <CommandGroup heading="Recentes">
                 {recent.map(item => (
                   <CommandItem key={item.label} onSelect={() => navigate(item.path)} className="gap-3 py-2.5 cursor-pointer">
                     <item.icon className="w-4 h-4 shrink-0 text-[hsl(var(--muted-foreground))]" />
@@ -100,7 +94,7 @@ export function CommandPalette({ open, onClose }: Props) {
               <CommandSeparator />
 
               <CommandGroup heading="Navegar">
-                {PAGES.map(page => (
+                {visiblePages.map(page => (
                   <CommandItem key={page.path} onSelect={() => navigate(page.path)} className="gap-3 py-2.5 cursor-pointer">
                     <page.icon className="w-4 h-4 shrink-0 text-[hsl(var(--primary))]" />
                     <div className="flex-1 min-w-0">

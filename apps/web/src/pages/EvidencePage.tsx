@@ -1,398 +1,304 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import axios from 'axios';
 import { format } from 'date-fns';
-import {
-  Archive, Download, Plus, FileVideo,
-  Clock, Camera, FileText, CheckSquare, X, ChevronDown, ChevronRight,
-  Shield, Package, CheckCircle2
-} from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { useVmsDataStore } from '../store/vmsDataStore';
+import { CheckCircle2, Clock3, FileArchive, ShieldCheck, XCircle } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { getApiBaseUrl } from '../lib/api-base';
+import { useAuthStore } from '../store/authStore';
+import { toast } from '../hooks/use-toast';
 
-interface ExportPackage {
+type Investigation = { id: string; title: string; status: string };
+type ExportItem = {
   id: string;
-  name: string;
-  status: 'draft' | 'compiling' | 'ready' | 'delivered';
-  items: number;
-  cameras: string[];
-  dateRange: string;
+  type: 'export_request' | 'export_package' | string;
+  label: string;
+  notes?: string | null;
   createdAt: string;
-  format: string;
-  size?: string;
-  hash?: string;
-}
-
-const REAL_PACKAGES: ExportPackage[] = [];
-
-const STATUS_BADGE: Record<string, string> = {
-  draft: 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border-border',
-  compiling: 'bg-[hsl(var(--chart-2)_/_0.12)] text-[hsl(var(--chart-2))] border-[hsl(var(--chart-2)_/_0.3)]',
-  ready: 'bg-[hsl(var(--chart-3)_/_0.12)] text-[hsl(var(--chart-3))] border-[hsl(var(--chart-3)_/_0.3)]',
-  delivered: 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border-border',
+  metadata?: Record<string, unknown>;
+};
+type VerifyResult = {
+  ok: boolean;
+  hashValid: boolean;
+  signatureValid: boolean;
+  details?: string[];
 };
 
-const WIZARD_STEPS = ['Selecionar Clipes', 'Opções de Redação', 'Formato de Exportação', 'Confirmar e Exportar'];
+const API_URL = getApiBaseUrl();
 
-function toDateTimeLocalValue(date: Date) {
-  const offsetMs = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
-}
-
-function NewPackageModal({ onClose }: { onClose: () => void }) {
-  const cameras = useVmsDataStore((state) => state.cameras);
-  const [step, setStep] = useState(0);
-  const [name, setNome] = useState('');
-  const [selectedCams, setSelectedCams] = useState<string[]>([]);
-  const [format, setFormat] = useState('MP4');
-  const [watermark, setWatermark] = useState(true);
-  const [blur, setBlur] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const now = new Date();
-  const defaultEnd = toDateTimeLocalValue(now);
-  const defaultStart = toDateTimeLocalValue(new Date(now.getTime() - 10 * 60 * 1000));
-
-  const canPróximo = step === 0 ? selectedCams.length > 0 : true;
-
-  const submit = async () => {
-    setSubmitting(true);
-    await new Promise(r => setTimeout(r, 1500));
-    onClose();
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }} onClick={onClose}>
-      <div className="bg-card border border-border rounded-lg w-[620px] overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-          <h3 className="text-sm font-semibold">New Evidence Package</h3>
-          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded hover:bg-[hsl(var(--accent))] transition-colors">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Step indicators */}
-        <div className="flex items-center px-5 py-3 border-b border-border">
-          {WIZARD_STEPS.map((s, i) => (
-            <div key={s} className="flex items-center">
-              <div
-                className={cn(
-                  'flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium cursor-pointer transition-colors',
-                  i === step ? 'bg-primary text-primary-foreground' : i < step ? 'text-green-400' : 'text-muted-foreground'
-                )}
-                onClick={() => i <= step && setStep(i)}
-              >
-                {i < step ? <CheckCircle2 className="h-3.5 w-3.5" /> : (
-                  <span className={cn('h-5 w-5 rounded-full border flex items-center justify-center text-[10px]',
-                    i === step ? 'border-primary-foreground/50 text-primary-foreground' : 'border-muted-foreground'
-                  )}>{i + 1}</span>
-                )}
-                {s}
-              </div>
-              {i < WIZARD_STEPS.length - 1 && <ChevronRight className="h-4 w-4 text-muted-foreground/40 mx-1" />}
-            </div>
-          ))}
-        </div>
-
-        <div className="p-5 space-y-4 min-h-64">
-          {step === 0 && (
-            <div className="space-y-4">
-              <p className="text-sm font-medium">Select Camera & Time Range</p>
-              <div className="grid grid-cols-2 gap-3">
-                {cameras.map(c => (
-                  <div
-                    key={c.id}
-                    onClick={() => setSelectedCams(prev => prev.includes(c.id) ? prev.filter(id => id !== c.id) : [...prev, c.id])}
-                    className={cn(
-                      'flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all',
-                      selectedCams.includes(c.id) ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card/50 hover:bg-accent/40'
-                    )}
-                  >
-                    <Camera className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium">{c.name}</p>
-                      <p className="text-[10px] font-mono text-muted-foreground">{c.code}</p>
-                    </div>
-                    {selectedCams.includes(c.id) && <CheckCircle2 className="h-4 w-4 text-primary flex-shrink-0" />}
-                  </div>
-                ))}
-              </div>
-              {selectedCams.length > 0 && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Start Time</label>
-                    <input type="datetime-local" defaultValue={defaultStart}
-                      className="h-8 w-full rounded border border-border bg-background text-xs px-2 font-mono focus:outline-none focus:ring-1 focus:ring-primary" />
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">End Time</label>
-                    <input type="datetime-local" defaultValue={defaultEnd}
-                      className="h-8 w-full rounded border border-border bg-background text-xs px-2 font-mono focus:outline-none focus:ring-1 focus:ring-primary" />
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {step === 1 && (
-            <div className="space-y-4 max-w-lg">
-              <p className="text-sm font-medium">Redaction & Privacy Options</p>
-              <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-card/30 cursor-pointer">
-                <div>
-                  <p className="text-xs font-medium">Add Chain-of-Custody Watermark</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">Embed export metadata and operator ID on each frame</p>
-                </div>
-                <input type="checkbox" checked={watermark} onChange={e => setWatermark(e.target.checked)} className="rounded" />
-              </label>
-              <label className="flex items-center justify-between p-3 rounded-lg border border-border bg-card/30 cursor-pointer">
-                <div>
-                  <p className="text-xs font-medium">Blur Sensitive Regions</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">Pixelate selected areas (faces, license plates, etc.)</p>
-                </div>
-                <input type="checkbox" checked={blur} onChange={e => setBlur(e.target.checked)} className="rounded" />
-              </label>
-              {blur && (
-                <div className="aspect-video bg-slate-900 rounded border border-border flex items-center justify-center">
-                  <p className="text-xs text-muted-foreground">As regioes selecionadas serao aplicadas ao material exportado.</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {step === 2 && (
-            <div className="space-y-4 max-w-lg">
-              <p className="text-sm font-medium">Formato de Exportação</p>
-              <div className="space-y-2">
-                {[
-                  { fmt: 'MP4',     desc: 'H.264/H.265 — widely compatible',    icon: FileVideo },
-                  { fmt: 'AVI',     desc: 'Uncompressed — maximum quality',      icon: FileVideo },
-                  { fmt: 'Native',  desc: 'Pacote assinado para cadeia de custodia', icon: Package },
-                ].map(({ fmt, desc, icon: Icon }) => (
-                  <label key={fmt} className={cn(
-                    'flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all',
-                    format === fmt ? 'border-primary bg-primary/5' : 'border-border bg-card/30 hover:bg-accent/40'
-                  )}>
-                    <input type="radio" name="fmt" value={fmt} checked={format === fmt} onChange={() => setFormat(fmt)} className="sr-only" />
-                    <div className={cn('h-8 w-8 rounded border flex items-center justify-center flex-shrink-0',
-                      format === fmt ? 'border-primary/50 bg-primary/10' : 'border-border bg-card'
-                    )}>
-                      <Icon className={cn('h-4 w-4', format === fmt ? 'text-primary' : 'text-muted-foreground')} />
-                    </div>
-                    <div>
-                      <p className="text-xs font-medium">{fmt}</p>
-                      <p className="text-[10px] text-muted-foreground">{desc}</p>
-                    </div>
-                    {format === fmt && <CheckCircle2 className="h-4 w-4 text-primary ml-auto" />}
-                  </label>
-                ))}
-              </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground block mb-1">Case / Incident Reference</label>
-                <input value={name} onChange={e => setNome(e.target.value)}
-                  placeholder="Caso 2026-0001 - exportacao operacional"
-                  className="h-8 w-full rounded border border-border bg-background text-xs px-3 font-mono focus:outline-none focus:ring-1 focus:ring-primary" />
-              </div>
-            </div>
-          )}
-
-          {step === 3 && (
-            <div className="space-y-4 max-w-lg">
-              <div className="p-4 rounded-lg border border-border bg-card/30 space-y-2 text-xs">
-                <p className="font-semibold text-sm mb-3">Export Summary</p>
-                <div className="flex justify-between"><span className="text-muted-foreground">Cameras</span><span className="font-mono">{selectedCams.length} selected</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Format</span><span>{format}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Watermark</span><span>{watermark ? 'Sim' : 'Não'}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Blur redaction</span><span>{blur ? 'Sim' : 'Não'}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Reference</span><span className="font-mono">{name || '—'}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Data/hora de exportação</span><span className="font-mono">{new Date().toISOString().replace('T', ' ').substring(0, 19)}</span></div>
-              </div>
-              <div className="flex items-center gap-2 p-3 rounded-lg border border-green-500/30 bg-green-500/5 text-xs">
-                <Shield className="h-4 w-4 text-green-400 flex-shrink-0" />
-                <p className="text-green-300">Chain of custody will be automatically recorded in the audit log upon export.</p>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center justify-between px-5 py-4 border-t border-border">
-          <button onClick={() => step === 0 ? onClose() : setStep(s => s - 1)} className="px-4 py-2 rounded border border-border text-xs hover:bg-[hsl(var(--accent))] transition-colors">
-            {step === 0 ? 'Cancelar' : 'Voltar'}
-          </button>
-          {step < WIZARD_STEPS.length - 1 ? (
-            <button onClick={() => setStep(s => Math.min(WIZARD_STEPS.length - 1, s + 1))} disabled={!canPróximo}
-              className="px-4 py-2 rounded bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold hover:opacity-90 transition-opacity disabled:opacity-50">
-              Continue
-            </button>
-          ) : (
-            <button onClick={submit} disabled={submitting}
-              className="flex items-center gap-2 px-4 py-2 rounded bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold hover:opacity-90 transition-opacity disabled:opacity-50">
-              {submitting ? (
-                <><span className="w-3.5 h-3.5 border-2 border-[hsl(var(--primary-foreground)_/_0.3)] border-t-[hsl(var(--primary-foreground))] rounded-full animate-spin" /> Compiling...</>
-              ) : (
-                <><Download className="w-3.5 h-3.5" /> Iniciar Exportação</>
-              )}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+function authHeaders(accessToken: string | null) {
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
 }
 
 export default function EvidencePage() {
-  const cameras = useVmsDataStore((state) => state.cameras);
-  const users = useVmsDataStore((state) => state.users);
-  const auditLogs = useVmsDataStore((state) => state.auditLogs);
-  const [showModal, setShowModal] = useState(false);
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const evidenceAuditEntries = auditLogs
-    .filter((log) => log.entityType === 'Evidence' || log.action.includes('evidence') || log.action.includes('export'))
-    .slice(0, 12)
-    .map((log) => ({
-      id: log.id,
-      ts: new Date(log.createdAt),
-      user: users.find((user) => user.id === log.userId)?.name ?? 'Sistema',
-      action: log.action,
-    }));
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const user = useAuthStore((state) => state.user);
+  const client = useMemo(() => axios.create({ baseURL: API_URL, headers: authHeaders(accessToken) }), [accessToken]);
+
+  const [investigations, setInvestigations] = useState<Investigation[]>([]);
+  const [investigationId, setInvestigationId] = useState('');
+  const [exportsList, setExportsList] = useState<ExportItem[]>([]);
+  const [reason, setReason] = useState('');
+  const [formatType, setFormatType] = useState<'MP4' | 'AVI' | 'NATIVE'>('MP4');
+  const [loading, setLoading] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
+
+  const load = async (targetId?: string) => {
+    if (!accessToken) return;
+    setLoading(true);
+    try {
+      const inv = await client.get<{ items: Investigation[] }>('/investigations');
+      const items = Array.isArray(inv.data.items) ? inv.data.items : [];
+      setInvestigations(items);
+      const active = targetId || investigationId || items[0]?.id || '';
+      if (active) {
+        setInvestigationId(active);
+        const exp = await client.get<{ items: ExportItem[] }>(`/investigations/${active}/exports`);
+        setExportsList(Array.isArray(exp.data.items) ? exp.data.items : []);
+      } else {
+        setExportsList([]);
+      }
+    } catch (error) {
+      toast({ title: 'Falha ao carregar evidências', description: error instanceof Error ? error.message : 'Erro inesperado', variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken]);
+
+  const requestExport = async () => {
+    if (!investigationId) return;
+    const clean = reason.trim();
+    if (!clean) {
+      toast({ title: 'Motivo obrigatório', description: 'Informe o motivo da solicitação.' , variant: 'destructive' });
+      return;
+    }
+    try {
+      await client.post(`/investigations/${investigationId}/exports/request`, { reason: clean, format: formatType });
+      setReason('');
+      await load(investigationId);
+      toast({ title: 'Solicitação criada', description: 'Exportação enviada para aprovação.' });
+    } catch (error) {
+      toast({ title: 'Falha ao solicitar exportação', description: error instanceof Error ? error.message : 'Erro inesperado', variant: 'destructive' });
+    }
+  };
+
+  const review = async (id: string, decision: 'APPROVED' | 'REJECTED') => {
+    const why = window.prompt(`Motivo para ${decision === 'APPROVED' ? 'aprovar' : 'rejeitar'}:`)?.trim() ?? '';
+    if (!why) return;
+    try {
+      await client.post(`/investigations/${investigationId}/exports/${id}/review`, { decision, reason: why });
+      await load(investigationId);
+      toast({ title: decision === 'APPROVED' ? 'Solicitação aprovada' : 'Solicitação rejeitada' });
+    } catch (error) {
+      toast({ title: 'Falha na revisão', description: error instanceof Error ? error.message : 'Erro inesperado', variant: 'destructive' });
+    }
+  };
+
+  const execute = async (id: string) => {
+    const why = window.prompt('Motivo da execução da exportação:')?.trim() ?? '';
+    if (!why) return;
+    try {
+      await client.post(`/investigations/${investigationId}/exports/${id}/execute`, { reason: why });
+      await load(investigationId);
+      toast({ title: 'Pacote gerado', description: 'Pacote exportado e assinado com sucesso.' });
+    } catch (error) {
+      toast({ title: 'Falha ao executar exportação', description: error instanceof Error ? error.message : 'Erro inesperado', variant: 'destructive' });
+    }
+  };
+
+  const downloadPackage = async (packageItemId: string) => {
+    if (!investigationId) return;
+    try {
+      const response = await client.get(`/investigations/${investigationId}/exports/${packageItemId}/download`, {
+        responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(response.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `investigation-${investigationId}-package-${packageItemId}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      toast({ title: 'Falha no download do pacote', description: error instanceof Error ? error.message : 'Erro inesperado', variant: 'destructive' });
+    }
+  };
+
+  const verifyPackageFile = async (file: File) => {
+    if (!file) return;
+    setVerifying(true);
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const response = await client.post<VerifyResult>('/evidence/verify', {
+        evidencePackage: parsed,
+      });
+      setVerifyResult(response.data);
+      toast({
+        title: response.data.ok ? 'Pacote íntegro' : 'Pacote com falha de integridade',
+        description: response.data.ok ? 'Hash e assinatura válidos.' : 'Verifique os detalhes de validação.',
+        variant: response.data.ok ? 'default' : 'destructive',
+      });
+    } catch (error) {
+      setVerifyResult(null);
+      toast({
+        title: 'Falha ao verificar pacote',
+        description: error instanceof Error ? error.message : 'Arquivo inválido ou erro inesperado',
+        variant: 'destructive',
+      });
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-4">
+    <div className="p-6 max-w-6xl space-y-4">
+      <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold">Exportar Evidências</h2>
-          <p className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">Cryptographically sealed video packages for legal and compliance use</p>
+          <h2 className="text-sm font-semibold">Evidências e Exportação</h2>
+          <p className="text-[11px] text-[hsl(var(--muted-foreground))]">Fluxo real com aprovação, execução e assinatura de pacote.</p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center gap-1.5 px-3 py-2 rounded bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold hover:opacity-90 transition-opacity"
-          data-testid="button-new-package"
-        >
-          <Plus className="w-4 h-4" /> New Package
-        </button>
+        <button onClick={() => void load(investigationId)} className="h-8 px-3 rounded border border-border text-xs hover:bg-[hsl(var(--accent))]">Atualizar</button>
       </div>
 
-      {/* Compliance notice */}
-      <div className="flex items-start gap-4 p-4 rounded-xl border border-[hsl(var(--chart-2)_/_0.3)] bg-[hsl(var(--chart-2)_/_0.06)]">
-        <CheckSquare className="w-4 h-4 text-[hsl(var(--chart-2))] shrink-0 mt-0.5" />
-        <div className="text-xs space-y-0.5">
-          <div className="font-medium text-[hsl(var(--chart-2))]">Modo de cadeia de custódia on-premise ativo</div>
-          <div className="text-[hsl(var(--muted-foreground))]">
-            All exported packages are SHA-256 signed and include an immutable audit trail. Packages are written to isolated storage and never transmitted externally.
+      <div className="grid gap-3 md:grid-cols-[320px_1fr]">
+        <div className="rounded-xl border border-border bg-card p-3 space-y-3">
+          <div>
+            <div className="text-xs font-medium mb-1">Investigação</div>
+            <Select value={investigationId || '__none__'} onValueChange={(value) => { if (value !== '__none__') void load(value); }}>
+              <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Selecione" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__" className="text-xs">Selecione</SelectItem>
+                {investigations.map((inv) => <SelectItem key={inv.id} value={inv.id} className="text-xs">{inv.title}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <div className="text-xs font-medium mb-1">Formato</div>
+            <Select value={formatType} onValueChange={(v) => setFormatType(v as 'MP4' | 'AVI' | 'NATIVE')}>
+              <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="MP4" className="text-xs">MP4</SelectItem>
+                <SelectItem value="AVI" className="text-xs">AVI</SelectItem>
+                <SelectItem value="NATIVE" className="text-xs">NATIVE</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <div className="text-xs font-medium mb-1">Motivo da solicitação</div>
+            <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={4} className="w-full rounded border border-border bg-background p-2 text-xs" />
+          </div>
+
+          <button onClick={() => void requestExport()} disabled={!investigationId || !reason.trim()} className="h-9 w-full rounded bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold disabled:opacity-50">
+            Solicitar Exportação
+          </button>
+          <button
+            onClick={async () => {
+              if (!investigationId) return;
+              setRetrying(true);
+              try {
+                await client.post(`/investigations/${investigationId}/exports/retry-signatures`);
+                await load(investigationId);
+                toast({ title: 'Reprocessamento enfileirado' });
+              } catch (error) {
+                toast({ title: 'Falha no reprocessamento', description: error instanceof Error ? error.message : 'Erro inesperado', variant: 'destructive' });
+              } finally {
+                setRetrying(false);
+              }
+            }}
+            disabled={!investigationId || retrying}
+            className="h-8 w-full rounded border border-border text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
+          >
+            {retrying ? 'Enfileirando...' : 'Reprocessar assinaturas pendentes'}
+          </button>
+          <div className="pt-1 border-t border-border space-y-2">
+            <div className="text-xs font-medium">Verificar pacote (.json)</div>
+            <input
+              type="file"
+              accept="application/json,.json"
+              disabled={verifying}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void verifyPackageFile(file);
+                event.currentTarget.value = '';
+              }}
+              className="block w-full text-[11px] file:mr-2 file:h-7 file:rounded file:border file:border-border file:bg-background file:px-2 file:text-[11px]"
+            />
+            {verifyResult ? (
+              <div className={`rounded border p-2 text-[11px] ${verifyResult.ok ? 'border-emerald-500/40 text-emerald-500' : 'border-rose-500/40 text-rose-500'}`}>
+                <div className="font-semibold">{verifyResult.ok ? 'Pacote válido' : 'Pacote inválido'}</div>
+                <div>Hash: {verifyResult.hashValid ? 'válido' : 'inválido'}</div>
+                <div>Assinatura: {verifyResult.signatureValid ? 'válida' : 'inválida'}</div>
+                {Array.isArray(verifyResult.details) && verifyResult.details.length > 0 ? (
+                  <div className="text-[10px] pt-1 text-[hsl(var(--muted-foreground))]">{verifyResult.details.join(' ')}</div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="px-4 py-3 border-b border-border text-xs font-medium">Histórico de Exportações</div>
+          <div className="max-h-[65vh] overflow-auto divide-y divide-border">
+            {loading && <div className="px-4 py-4 text-xs text-[hsl(var(--muted-foreground))]">Carregando...</div>}
+            {!loading && exportsList.length === 0 && <div className="px-4 py-4 text-xs text-[hsl(var(--muted-foreground))]">Sem registros de exportação.</div>}
+            {exportsList.map((entry) => {
+              const meta = (entry.metadata ?? {}) as Record<string, unknown>;
+              const status = String(meta.status ?? '').toUpperCase();
+              const progress = Number(meta.progress ?? 0);
+              return (
+                <div key={entry.id} className="px-4 py-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold">{entry.label}</div>
+                    <div className="text-[10px] font-mono text-[hsl(var(--muted-foreground))]">{format(new Date(entry.createdAt), 'yyyy-MM-dd HH:mm:ss')}</div>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    {entry.type === 'export_package' ? <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> : <Clock3 className="h-3.5 w-3.5 text-amber-500" />}
+                    <span className="font-mono">{entry.type}</span>
+                    {status && <span className="rounded border border-border px-1.5 py-0.5 text-[10px]">{status}</span>}
+                    {Number.isFinite(progress) && progress > 0 ? <span className="font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{progress}%</span> : null}
+                  </div>
+                  {Number.isFinite(progress) && progress > 0 && progress < 100 ? (
+                    <div className="h-1.5 rounded bg-[hsl(var(--muted))] overflow-hidden">
+                      <div className="h-full bg-[hsl(var(--primary))]" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
+                    </div>
+                  ) : null}
+                  {entry.notes ? <div className="text-xs text-[hsl(var(--muted-foreground))]">{entry.notes}</div> : null}
+                  {entry.type === 'export_request' && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {(user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN') && status === 'PENDING' && (
+                        <>
+                          <button onClick={() => void review(entry.id, 'APPROVED')} className="h-7 px-2.5 rounded border border-emerald-500/40 text-emerald-500 text-xs inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> Aprovar</button>
+                          <button onClick={() => void review(entry.id, 'REJECTED')} className="h-7 px-2.5 rounded border border-rose-500/40 text-rose-500 text-xs inline-flex items-center gap-1"><XCircle className="h-3.5 w-3.5" /> Rejeitar</button>
+                        </>
+                      )}
+                      {status === 'APPROVED' && (
+                        <button onClick={() => void execute(entry.id)} className="h-7 px-2.5 rounded border border-primary/40 text-primary text-xs inline-flex items-center gap-1"><FileArchive className="h-3.5 w-3.5" /> Executar Exportação</button>
+                      )}
+                    </div>
+                  )}
+                  {entry.type === 'export_package' && status !== 'PROCESSING' && status !== 'QUEUED' && (
+                    <div className="pt-1">
+                      <button onClick={() => void downloadPackage(entry.id)} className="h-7 px-2.5 rounded border border-primary/40 text-primary text-xs inline-flex items-center gap-1">
+                        <FileArchive className="h-3.5 w-3.5" /> Download Pacote
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
-
-      {/* Package list */}
-      <div className="space-y-3">
-        {REAL_PACKAGES.map(pkg => (
-          <div key={pkg.id} className="bg-card border border-card-border rounded-xl overflow-hidden shadow-sm">
-            <div
-              className="flex items-center gap-4 px-5 py-4 cursor-pointer hover:bg-[hsl(var(--accent))] transition-colors"
-              onClick={() => setExpanded(e => e === pkg.id ? null : pkg.id)}
-            >
-              <Archive className="w-4 h-4 text-[hsl(var(--muted-foreground))] shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-sm font-semibold truncate">{pkg.name}</span>
-                  <span className={`shrink-0 text-[9px] font-mono px-1.5 py-0.5 rounded border uppercase ${STATUS_BADGE[pkg.status]}`}>{pkg.status}</span>
-                </div>
-                <div className="flex items-center gap-3 text-[10px] text-[hsl(var(--muted-foreground))] font-mono">
-                  <span>{pkg.id}</span>
-                  <span>·</span>
-                  <span>{pkg.items} items</span>
-                  <span>·</span>
-                  <span>{pkg.cameras.length} cameras</span>
-                  {pkg.size && <><span>·</span><span>{pkg.size}</span></>}
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {pkg.status === 'ready' && (
-                  <button
-                    onClick={e => e.stopPropagation()}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold hover:opacity-90 transition-opacity"
-                  >
-                    <Download className="w-3.5 h-3.5" /> Download
-                  </button>
-                )}
-                {expanded === pkg.id ? <ChevronDown className="w-4 h-4 text-[hsl(var(--muted-foreground))]" /> : <ChevronRight className="w-4 h-4 text-[hsl(var(--muted-foreground))]" />}
-              </div>
-            </div>
-
-            {expanded === pkg.id && (
-              <div className="border-t border-border px-5 py-5 grid grid-cols-2 gap-8">
-                <div className="space-y-3">
-                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Package Details</h4>
-                  {[
-                    ['Case Reference', pkg.id],
-                    ['Date Range', pkg.dateRange],
-                    ['Created', format(new Date(pkg.createdAt), 'yyyy-MM-dd HH:mm:ss')],
-                    ['Format', pkg.format],
-                    ['Total Size', pkg.size ?? 'Calculating...'],
-                    ['Integrity Hash', pkg.hash ?? 'Pending...'],
-                  ].map(([k, v]) => (
-                    <div key={k} className="flex justify-between text-xs gap-4">
-                      <span className="text-[hsl(var(--muted-foreground))]">{k}</span>
-                      <span className="font-mono text-[10px] text-right truncate max-w-52">{v}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="space-y-3">
-                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cameras Included</h4>
-                  {pkg.cameras.map(cam => (
-                    <div key={cam} className="flex items-center gap-2 text-xs">
-                      <Camera className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-                      <span className="font-mono">{cam}</span>
-                    </div>
-                  ))}
-
-                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[hsl(var(--muted-foreground))] mt-4">Package Contents</h4>
-                  {[
-                    { type: 'Video clips', count: pkg.items - 2, icon: FileVideo },
-                    { type: 'Snapshots', count: 1, icon: Camera },
-                    { type: 'PDF Report', count: 1, icon: FileText },
-                  ].map(({ type, count, icon: Icon }) => (
-                    <div key={type} className="flex items-center gap-2 text-xs">
-                      <Icon className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-                      <span>{type}</span>
-                      <span className="ml-auto font-mono text-[hsl(var(--muted-foreground))]">{count}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Audit log */}
-      <div className="bg-card border border-card-border rounded-xl overflow-hidden shadow-sm">
-        <div className="px-5 py-4 border-b border-border">
-          <h3 className="text-sm font-semibold">Log de Auditoria de Exportação</h3>
-          <p className="text-[10px] text-[hsl(var(--muted-foreground))] mt-0.5">Immutable record of all evidence access and export operations</p>
-        </div>
-        <div className="divide-y divide-border max-h-48 overflow-y-auto">
-          {evidenceAuditEntries.map((entry) => (
-            <div key={entry.id} className="flex items-center gap-3 px-4 py-2.5 text-xs">
-              <Clock className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))] shrink-0" />
-              <span className="font-mono text-[10px] text-[hsl(var(--muted-foreground))] shrink-0 hidden sm:block">
-                {format(entry.ts, 'yyyy-MM-dd HH:mm:ss')}
-              </span>
-              <span className="font-medium shrink-0">{entry.user}</span>
-              <span className="text-[hsl(var(--muted-foreground))] truncate">{entry.action}</span>
-            </div>
-          ))}
-          {evidenceAuditEntries.length === 0 && (
-            <div className="px-4 py-6 text-xs text-[hsl(var(--muted-foreground))]">
-              Nenhuma acao de evidencia registrada ainda no backend.
-            </div>
-          )}
-        </div>
-      </div>
-
-      {REAL_PACKAGES.length === 0 && (
-        <div className="rounded-xl border border-card-border bg-card px-5 py-8 text-sm text-[hsl(var(--muted-foreground))]">
-          Nenhum pacote de evidência foi gerado ainda. Use as câmeras reais cadastradas ({cameras.length}) para criar o primeiro pacote.
-        </div>
-      )}
-      {showModal && <NewPackageModal onClose={() => setShowModal(false)} />}
     </div>
   );
 }

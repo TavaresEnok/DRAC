@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { type Request, type Response } from 'express';
 import { AccessControlService } from '../access-control/access-control.service';
@@ -10,6 +10,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { type AuthUser } from '../common/types/auth-user.type';
 import { ListRecordingsQueryDto } from './dto/list-recordings-query.dto';
 import { BulkThumbnailTokensDto } from './dto/bulk-thumbnail-tokens.dto';
+import { BulkRecordingDiagnosticsDto } from './dto/bulk-recording-diagnostics.dto';
 import { RegisterRecordingDto } from './dto/register-recording.dto';
 import { StartRecordingDto } from './dto/start-recording.dto';
 import { StopRecordingDto } from './dto/stop-recording.dto';
@@ -31,6 +32,33 @@ export class RecordingsController {
     private readonly auditService: AuditService,
   ) {}
 
+  private extractBearerToken(req: Request): string | null {
+    const authHeader = req.headers.authorization;
+    if (typeof authHeader !== 'string') return null;
+    if (!authHeader.toLowerCase().startsWith('bearer ')) return null;
+    const token = authHeader.slice(7).trim();
+    return token || null;
+  }
+
+  private extractCookieToken(req: Request, cookieName: string): string | null {
+    const cookieHeader = req.headers.cookie;
+    if (!cookieHeader) return null;
+    const parts = cookieHeader.split(';');
+    for (const part of parts) {
+      const [keyRaw, ...valueParts] = part.trim().split('=');
+      if (!keyRaw) continue;
+      if (keyRaw !== cookieName) continue;
+      const encoded = valueParts.join('=').trim();
+      if (!encoded) return null;
+      try {
+        return decodeURIComponent(encoded);
+      } catch {
+        return encoded;
+      }
+    }
+    return null;
+  }
+
   @Roles(UserRole.OPERATOR)
   @Post('cameras/:cameraId/recording/start')
   async startRecording(
@@ -42,7 +70,7 @@ export class RecordingsController {
     await this.accessControlService.assertCanRecordCamera(user, cameraId);
     const defaultSegment = Number(process.env.RECORDING_SEGMENT_SECONDS ?? 300);
     const segmentSeconds = dto.segmentSeconds ?? defaultSegment;
-    const result = await this.recordingManager.start(cameraId, segmentSeconds);
+    const result = await this.recordingManager.start(cameraId, segmentSeconds, { recordingMode: 'manual' });
     await this.auditService.log(user.id, 'recording.start', 'Camera', cameraId, { status: result.status }, req);
     return result;
   }
@@ -51,8 +79,23 @@ export class RecordingsController {
   @Post('cameras/:cameraId/recording/stop')
   async stopRecording(@CurrentUser() user: AuthUser, @Param('cameraId') cameraId: string, @Body() _dto: StopRecordingDto, @Req() req: Request) {
     await this.accessControlService.assertCanRecordCamera(user, cameraId);
-    const result = await this.recordingManager.stop(cameraId);
+    const result = await this.recordingManager.stop(cameraId, { recordingMode: 'manual' });
     await this.auditService.log(user.id, 'recording.stop', 'Camera', cameraId, { status: result.status }, req);
+    return result;
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('cameras/:cameraId/recording/motion')
+  async setMotionRecording(
+    @CurrentUser() user: AuthUser,
+    @Param('cameraId') cameraId: string,
+    @Body() body: { enabled?: boolean },
+    @Req() req: Request,
+  ) {
+    await this.accessControlService.assertCanRecordCamera(user, cameraId);
+    const enabled = body?.enabled !== false;
+    const result = await this.recordingManager.setMotionRecording(cameraId, enabled);
+    await this.auditService.log(user.id, enabled ? 'recording.motion.enable' : 'recording.motion.disable', 'Camera', cameraId, { status: result.status }, req);
     return result;
   }
 
@@ -61,6 +104,86 @@ export class RecordingsController {
   async getRecordingStatus(@CurrentUser() user: AuthUser, @Param('cameraId') cameraId: string) {
     await this.accessControlService.assertCanViewCamera(user, cameraId);
     return this.recordingManager.getStatus(cameraId);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('recordings/statuses')
+  async getRecordingStatuses(
+    @CurrentUser() user: AuthUser,
+    @Query('cameraIds') cameraIds?: string,
+  ) {
+    let ids = (cameraIds ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (user.role !== UserRole.ADMIN && user.role !== UserRole.SUPER_ADMIN) {
+      const accessible = new Set(await this.accessControlService.getAccessibleCameraIds(user));
+      ids = ids.length ? ids.filter((id) => accessible.has(id)) : [...accessible];
+    } else if (!ids.length) {
+      const all = await this.accessControlService.getAccessibleCameraIds(user);
+      ids = all;
+    }
+    return this.recordingManager.getStatuses(ids);
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('recordings/reconnect-stale')
+  async reconnectStaleRecordings(
+    @CurrentUser() user: AuthUser,
+    @Body() body: { cameraIds?: string[] },
+    @Req() req: Request,
+  ) {
+    const requestedIds = Array.isArray(body?.cameraIds) ? body.cameraIds.filter((id) => typeof id === 'string' && id.trim().length > 0) : [];
+    let candidateIds: string[];
+    if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
+      candidateIds = requestedIds;
+      if (!candidateIds.length) {
+        candidateIds = (await this.accessControlService.getAccessibleCameraIds(user)).slice(0, 500);
+      }
+    } else {
+      const accessible = new Set(await this.accessControlService.getAccessibleCameraIds(user));
+      candidateIds = requestedIds.length ? requestedIds.filter((id) => accessible.has(id)) : [...accessible].slice(0, 500);
+    }
+
+    const statuses = await this.recordingManager.getStatuses(candidateIds);
+    const staleIds = statuses.items
+      .filter((item: any) => item.stale && item.intendedRecording)
+      .map((item: any) => item.cameraId as string);
+
+    const results: Array<{ cameraId: string; status: 'restarted' | 'skipped'; reason?: string }> = [];
+    for (const cameraId of staleIds) {
+      try {
+        await this.accessControlService.assertCanRecordCamera(user, cameraId);
+        await this.recordingManager.stop(cameraId);
+        const defaultSegment = Number(process.env.RECORDING_SEGMENT_SECONDS ?? 300);
+        await this.recordingManager.start(cameraId, defaultSegment);
+        results.push({ cameraId, status: 'restarted' });
+      } catch (error) {
+        results.push({ cameraId, status: 'skipped', reason: (error as Error).message });
+      }
+    }
+
+    await this.auditService.log(
+      user.id,
+      'recording.reconnect_stale.bulk',
+      'Camera',
+      null,
+      {
+        totalCandidates: candidateIds.length,
+        totalStale: staleIds.length,
+        restarted: results.filter((item) => item.status === 'restarted').length,
+        skipped: results.filter((item) => item.status === 'skipped').length,
+      },
+      req,
+    );
+
+    return {
+      totalCandidates: candidateIds.length,
+      totalStale: staleIds.length,
+      restarted: results.filter((item) => item.status === 'restarted').length,
+      skipped: results.filter((item) => item.status === 'skipped').length,
+      results,
+    };
   }
 
   @Roles(UserRole.VIEWER)
@@ -74,13 +197,151 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @Get('recordings/health-summary')
+  async getRecordingHealthSummary(
+    @CurrentUser() user: AuthUser,
+    @Query('date') date?: string,
+    @Query('cameraId') cameraId?: string,
+    @Query('brokenAlertThreshold') brokenAlertThreshold?: string,
+  ) {
+    if (cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, cameraId);
+    }
+    const accessibleCameraIds =
+      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
+        ? undefined
+        : await this.accessControlService.getAccessibleCameraIds(user);
+    const threshold = brokenAlertThreshold ? Number(brokenAlertThreshold) : undefined;
+    return this.recordingsService.getRecordingHealthSummary({
+      date,
+      cameraId,
+      accessibleCameraIds,
+      brokenAlertThreshold: Number.isFinite(threshold) ? threshold : undefined,
+    });
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('recordings/gaps-report')
+  async getRecordingGapsReport(
+    @CurrentUser() user: AuthUser,
+    @Query('cameraId') cameraId?: string,
+    @Query('date') date?: string,
+  ) {
+    if (!cameraId) {
+      throw new BadRequestException('cameraId é obrigatório.');
+    }
+    await this.accessControlService.assertCanViewCamera(user, cameraId);
+    const accessibleCameraIds =
+      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
+        ? undefined
+        : await this.accessControlService.getAccessibleCameraIds(user);
+    return this.recordingsService.getRecordingGapsReport({
+      cameraId,
+      date,
+      accessibleCameraIds,
+    });
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('recordings/playback-readiness')
+  async getPlaybackReadiness(
+    @CurrentUser() user: AuthUser,
+    @Query('cameraId') cameraId?: string,
+    @Query('date') date?: string,
+  ) {
+    if (!cameraId) {
+      throw new BadRequestException('cameraId é obrigatório.');
+    }
+    await this.accessControlService.assertCanViewCamera(user, cameraId);
+    const accessibleCameraIds =
+      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
+        ? undefined
+        : await this.accessControlService.getAccessibleCameraIds(user);
+    return this.recordingsService.getPlaybackReadinessReport({
+      cameraId,
+      date,
+      accessibleCameraIds,
+    });
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('recordings/storage-usage')
+  async getStorageUsage(
+    @CurrentUser() user: AuthUser,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('cameraId') cameraId?: string,
+  ) {
+    if (cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, cameraId);
+    }
+    const accessibleCameraIds =
+      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
+        ? undefined
+        : await this.accessControlService.getAccessibleCameraIds(user);
+    return this.recordingsService.getStorageUsageAnalytics({
+      from,
+      to,
+      cameraId,
+      accessibleCameraIds,
+    });
+  }
+
+  @Roles(UserRole.VIEWER)
   @Post('recordings/:id/play-token')
-  async createPlayToken(@CurrentUser() user: AuthUser, @Param('id') recordingId: string, @Req() req: Request) {
+  async createPlayToken(
+    @CurrentUser() user: AuthUser,
+    @Param('id') recordingId: string,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const recording = await this.recordingsService.ensureRecordingExists(recordingId);
     await this.accessControlService.assertCanViewCamera(user, recording.cameraId);
     const token = await this.authService.createPlaybackToken(user.id, recordingId);
+    const expiresAtMs = token.expiresAt ? new Date(token.expiresAt).getTime() : Date.now() + 5 * 60 * 1000;
+    const maxAgeMs = Math.max(60_000, expiresAtMs - Date.now());
+    const secure = String(process.env.NODE_ENV ?? '').toLowerCase() === 'production';
+    res.cookie('vms_play_token', token.playToken, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure,
+      path: '/recordings',
+      maxAge: maxAgeMs,
+    });
     await this.auditService.log(user.id, 'playback.token.create', 'Recording', recordingId, null, req);
     return token;
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('recordings/:id/diagnostics')
+  async getDiagnostics(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    const recording = await this.recordingsService.ensureRecordingExists(id);
+    await this.accessControlService.assertCanViewCamera(user, recording.cameraId);
+    return this.recordingsService.getRecordingDiagnostics(id);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('recordings/:id/integrity')
+  async getIntegrity(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    const recording = await this.recordingsService.ensureRecordingExists(id);
+    await this.accessControlService.assertCanViewCamera(user, recording.cameraId);
+    return this.recordingsService.getRecordingIntegrity(id);
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Get('recordings/:id/snapshot')
+  async snapshotFrame(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query('seconds') seconds: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const recording = await this.recordingsService.ensureRecordingExists(id);
+    await this.accessControlService.assertCanViewCamera(user, recording.cameraId);
+    const frameSeconds = Math.max(0, Math.floor(Number(seconds ?? 0)));
+    await this.auditService.log(user.id, 'recording.snapshot', 'Recording', id, { seconds: frameSeconds }, req);
+    return this.recordingsService.streamSnapshotFrame(id, frameSeconds, res);
   }
 
   @Roles(UserRole.VIEWER)
@@ -89,36 +350,67 @@ export class RecordingsController {
     return this.recordingsService.createThumbnailTokens(user, dto.recordingIds);
   }
 
+  @Roles(UserRole.VIEWER)
+  @Post('recordings/diagnostics/bulk')
+  async getBulkDiagnostics(@CurrentUser() user: AuthUser, @Body() dto: BulkRecordingDiagnosticsDto) {
+    const ids = [...new Set(dto.recordingIds)].slice(0, 120);
+    for (const id of ids) {
+      const recording = await this.recordingsService.ensureRecordingExists(id);
+      await this.accessControlService.assertCanViewCamera(user, recording.cameraId);
+    }
+    return this.recordingsService.getRecordingDiagnosticsBulk(ids, Boolean(dto.includeIntegrity));
+  }
+
   @Public()
   @Get('recordings/:id/play')
   async playRecording(
     @Param('id') id: string,
     @Query('token') token: string | undefined,
     @Query('compatible') compatible: string | undefined,
+    @Query('forceDirect') forceDirect: string | undefined,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
-    if (!token) {
+    const bearerToken = this.extractBearerToken(req);
+    const cookieToken = this.extractCookieToken(req, 'vms_play_token');
+    const tokenValue = token?.trim() || bearerToken || cookieToken;
+    if (!tokenValue) {
       throw new UnauthorizedException('Token de playback ausente.');
     }
-    const payload = await this.authService.verifyPlaybackToken(token);
+    const payload = await this.authService.verifyPlaybackToken(tokenValue);
     if (payload.recordingId !== id) {
       throw new UnauthorizedException('Token inválido para esta gravação.');
     }
     const tokenUser = await this.authService.me(payload.sub);
     const recording = await this.recordingsService.ensureRecordingExists(id);
     await this.accessControlService.assertCanViewCamera(tokenUser, recording.cameraId);
-    const useCompatible = ['1', 'true', 'yes'].includes(String(compatible ?? '').toLowerCase());
+    const compatibleFlag = ['1', 'true', 'yes'].includes(String(compatible ?? '').toLowerCase());
+    const forceDirectFlag = ['1', 'true', 'yes'].includes(String(forceDirect ?? '').toLowerCase());
+    const autoPreferCompatible = forceDirectFlag ? false : await this.recordingsService.shouldPreferCompatiblePlayback(id);
+    const useCompatible = compatibleFlag || autoPreferCompatible;
+    await this.auditService.log(tokenUser.id, 'recording.play', 'Recording', id, {
+      compatible: useCompatible,
+      requestedCompatible: compatibleFlag,
+      autoPreferCompatible,
+      forceDirect: forceDirectFlag,
+    }, req);
     if (useCompatible) {
       return this.recordingsService.streamRecordingCompatible(id, res);
     }
     return this.recordingsService.streamRecording(id, res);
   }
 
-  @Roles(UserRole.VIEWER)
+  @Roles(UserRole.OPERATOR)
   @Get('recordings/:id/download')
-  async downloadRecording(@CurrentUser() user: AuthUser, @Param('id') id: string, @Res() res: Response) {
+  async downloadRecording(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
     const recording = await this.recordingsService.ensureRecordingExists(id);
     await this.accessControlService.assertCanViewCamera(user, recording.cameraId);
+    await this.auditService.log(user.id, 'recording.download', 'Recording', id, { immediate: true }, req);
     return this.recordingsService.downloadRecording(id, res);
   }
 
@@ -130,6 +422,8 @@ export class RecordingsController {
     @Body() dto: ExportClipDto,
     @Req() req: Request,
   ) {
+    const exportReason = dto.notes?.trim() ?? '';
+    if (!exportReason) throw new BadRequestException('Motivo é obrigatório para exportar clip.');
     const recording = await this.recordingsService.ensureRecordingExists(id);
     await this.accessControlService.assertCanViewCamera(user, recording.cameraId);
     const clip = await this.recordingsService.exportClip(user, id, dto);
@@ -155,15 +449,38 @@ export class RecordingsController {
       investigationItemId = item.id;
     }
 
-    await this.auditService.log(user.id, 'recording.clip.export', 'Recording', id, { clipId: clip.id, investigationId: dto.investigationId ?? null }, req);
+    await this.auditService.log(
+      user.id,
+      'recording.clip.export',
+      'Recording',
+      id,
+      { clipId: clip.id, investigationId: dto.investigationId ?? null, reason: exportReason },
+      req,
+    );
     return { ...clip, investigationItemId };
   }
 
-  @Roles(UserRole.VIEWER)
+  @Roles(UserRole.OPERATOR)
   @Get('recordings/clips/:clipId/download')
-  async downloadExportedClip(@CurrentUser() user: AuthUser, @Param('clipId') clipId: string, @Res() res: Response) {
+  async downloadExportedClip(
+    @CurrentUser() user: AuthUser,
+    @Param('clipId') clipId: string,
+    @Query('reason') reason: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const cleanReason = reason?.trim() ?? '';
+    if (!cleanReason) throw new BadRequestException('Motivo é obrigatório para download de clip.');
     const clip = await this.recordingsService.ensureExportedClipExists(clipId);
     await this.accessControlService.assertCanViewCamera(user, clip.cameraId);
+    await this.auditService.log(
+      user.id,
+      'clip.download',
+      'ExportedClip',
+      clipId,
+      { sourceRecordingId: clip.sourceRecordingId, reason: cleanReason },
+      req,
+    );
     return this.recordingsService.downloadExportedClip(clipId, res);
   }
 
@@ -172,12 +489,16 @@ export class RecordingsController {
   async getThumbnail(
     @Param('id') id: string,
     @Query('token') token: string | undefined,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
-    if (!token) {
+    const bearerToken = this.extractBearerToken(req);
+    const cookieToken = this.extractCookieToken(req, 'vms_play_token');
+    const tokenValue = token?.trim() || bearerToken || cookieToken;
+    if (!tokenValue) {
       throw new UnauthorizedException('Token de thumbnail ausente.');
     }
-    const payload = await this.authService.verifyPlaybackToken(token);
+    const payload = await this.authService.verifyPlaybackToken(tokenValue);
     if (payload.recordingId !== id) {
       throw new UnauthorizedException('Token inválido para esta gravação.');
     }

@@ -20,9 +20,13 @@ import { AuditModule } from '../audit/audit.module';
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
-        const jwtSecret = configService.get<string>('jwtSecret');
+        const jwtSecret = (configService.get<string>('jwtSecret') ?? '').trim();
+        const insecureSecrets = new Set(['change_me_jwt_secret', 'change_me_super_secret']);
         if (!jwtSecret) {
           throw new Error('JWT_SECRET é obrigatório.');
+        }
+        if (jwtSecret.length < 32 || insecureSecrets.has(jwtSecret)) {
+          throw new Error('JWT_SECRET fraco/inseguro. Use um segredo forte (>= 32 chars).');
         }
         return {
           secret: jwtSecret,

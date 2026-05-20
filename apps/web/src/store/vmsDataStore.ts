@@ -12,6 +12,7 @@ export interface Camera {
   building: string;
   floor: string;
   ipAddress: string;
+  rtspPort: number;
   model: string;
   status: 'online' | 'offline' | 'recording' | 'motion' | 'alarm' | 'no_signal' | 'maintenance';
   fps: number;
@@ -24,8 +25,29 @@ export interface Camera {
   signalStrength: number;
   recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
   retentionDays: number;
+  preferredRtspTransport: 'tcp' | 'udp';
+  preferredLiveProtocol: 'flv' | 'hls' | 'webrtc' | 'mjpeg';
+  rtspPath?: string;
+  streamVideoCodec?: string;
+  streamWidth?: number | null;
+  streamHeight?: number | null;
+  streamBitrateKbps?: number | null;
+  recordingVideoCodec?: string;
+  recordingWidth?: number | null;
+  recordingHeight?: number | null;
+  recordingFps?: number | null;
+  recordingBitrateKbps?: number | null;
+  detectedVideoCodec?: string;
+  detectedWidth?: number | null;
+  detectedHeight?: number | null;
+  detectedFps?: number | null;
+  detectedBitrateKbps?: number | null;
   lastMotion?: string;
   thumbnailColor: string;
+  recordingStatusDetail?: string;
+  recordingStale?: boolean;
+  lastSegmentAt?: string | null;
+  lastSegmentAgeSeconds?: number | null;
 }
 
 export interface User {
@@ -64,6 +86,13 @@ export interface Alarm {
   zone: string;
   description: string;
   notes?: string;
+  isSnoozed?: boolean;
+  snoozedUntil?: string;
+  transitionHistory?: Array<Record<string, unknown>>;
+  notificationDelivery?: Array<Record<string, unknown>>;
+  lastNotificationStatus?: string;
+  occurrenceCount?: number;
+  lastOccurredAt?: string;
 }
 
 export interface SavedLayout {
@@ -146,6 +175,20 @@ interface VmsDataState {
   overview: OverviewSummary | null;
   system: SystemSummary | null;
   auditLogs: AuditLogItem[];
+  operationsTimeline: Array<{
+    kind: 'event' | 'alarm' | 'action';
+    at: string;
+    cameraId: string | null;
+    cameraName: string | null;
+    severity: string;
+    type: string;
+    message: string;
+    eventId: string | null;
+    alarmId: string | null;
+    alarmStatus: string | null;
+    action: string | null;
+    actor: string | null;
+  }>;
   isLoading: boolean;
   loaded: boolean;
   error: string | null;
@@ -153,8 +196,21 @@ interface VmsDataState {
   updateUserActive: (id: string, active: boolean) => Promise<void>;
   acknowledgeAlarm: (id: string, note?: string) => Promise<void>;
   resolveAlarm: (id: string, note?: string) => Promise<void>;
+  snoozeAlarm: (id: string, minutes?: number, note?: string) => Promise<void>;
+  unsnoozeAlarm: (id: string, note?: string) => Promise<void>;
+  bulkAlarmAction: (action: 'ack' | 'resolve' | 'snooze' | 'unsnooze', eventIds: string[], opts?: { note?: string; minutes?: number }) => Promise<void>;
   addNote: (id: string, note: string) => void;
 }
+
+type RecordingRuntimeStatus = {
+  cameraId: string;
+  isRecording: boolean;
+  intendedRecording?: boolean;
+  stale?: boolean;
+  statusDetail?: string;
+  lastSegmentAt?: string | null;
+  lastSegmentAgeSeconds?: number | null;
+};
 
 const API_URL = getApiBaseUrl();
 const THUMBNAIL_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
@@ -179,8 +235,8 @@ function mapSeverity(severity: string): VMSEvent['severity'] {
   return 'info';
 }
 
-function mapCameraStatus(status: string, recordingEnabled: boolean): Camera['status'] {
-  if (status === 'ONLINE') return recordingEnabled ? 'recording' : 'online';
+function mapCameraStatus(status: string, recordingEnabled: boolean, runtime?: RecordingRuntimeStatus): Camera['status'] {
+  if (status === 'ONLINE') return (runtime?.isRecording ?? recordingEnabled) ? 'recording' : 'online';
   if (status === 'ERROR') return 'alarm';
   if (status === 'OFFLINE') return 'offline';
   return 'no_signal';
@@ -193,6 +249,16 @@ function cameraLayoutGridSize(count: number): SavedLayout['gridSize'] {
   return '4x4';
 }
 
+function formatResolution(width?: number | null, height?: number | null) {
+  if (!width || !height) return '—';
+  return `${width}x${height}`;
+}
+
+function formatCodec(codec?: string | null) {
+  if (!codec) return 'Câmera IP';
+  return codec.toUpperCase();
+}
+
 export const useVmsDataStore = create<VmsDataState>((set, get) => ({
   cameras: [],
   users: [],
@@ -203,12 +269,13 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
   overview: null,
   system: null,
   auditLogs: [],
+  operationsTimeline: [],
   isLoading: false,
   loaded: false,
   error: null,
   load: async () => {
     if (!useAuthStore.getState().accessToken) {
-      set({ cameras: [], users: [], events: [], alarms: [], recordings: [], layouts: [], overview: null, system: null, auditLogs: [], loaded: false });
+      set({ cameras: [], users: [], events: [], alarms: [], recordings: [], layouts: [], overview: null, system: null, auditLogs: [], operationsTimeline: [], loaded: false });
       return;
     }
 
@@ -223,23 +290,39 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
         eventsRes,
         alarmsRes,
         recordingsRes,
+        operationsTimelineRes,
+        recordingStatusesRes,
         systemRes,
         auditRes,
       ] = await Promise.all([
         client.get('/cameras'),
-        client.get('/users'),
+        client.get('/users').catch(() => ({ data: [] })),
         client.get('/cameras/overview'),
         client.get('/cameras/events-feed?limit=100'),
         client.get('/cameras/alarms?limit=100'),
         client.get('/recordings?limit=100&sort=desc'),
-        client.get('/health/system'),
+        client.get('/cameras/operations-timeline?limit=120').catch(() => ({ data: { items: [] } })),
+        client.get('/recordings/statuses').catch(() => ({ data: { items: [] } })),
+        client.get('/health/system').catch(() => ({ data: null })),
         client.get('/audit-logs?limit=100').catch(() => ({ data: { items: [] } })),
       ]);
 
       const rawEvents = Array.isArray(eventsRes.data?.items) ? eventsRes.data.items : [];
       const rawAlarms = Array.isArray(alarmsRes.data?.items) ? alarmsRes.data.items : [];
+      const runtimeStatuses = new Map<string, RecordingRuntimeStatus>(
+        Array.isArray(recordingStatusesRes.data?.items)
+          ? recordingStatusesRes.data.items.map((item: RecordingRuntimeStatus) => [item.cameraId, item] as const)
+          : [],
+      );
       const cameras: Camera[] = (Array.isArray(camerasRes.data) ? camerasRes.data : []).map((camera: any, index: number) => {
         const lastEvent = rawEvents.find((event: any) => event.cameraId === camera.id)?.occurredAt;
+        const runtime = runtimeStatuses.get(camera.id);
+        const configuredStreamWidth = camera.streamWidth ?? null;
+        const configuredStreamHeight = camera.streamHeight ?? null;
+        const detectedStreamWidth = camera.detectedWidth ?? configuredStreamWidth;
+        const detectedStreamHeight = camera.detectedHeight ?? configuredStreamHeight;
+        const effectiveFps = camera.streamFps ?? camera.detectedFps ?? (camera.status === 'ONLINE' ? 0 : 0);
+        const effectiveRecordingMode = (camera.recordingMode ?? (camera.recordingEnabled ? 'continuous' : 'manual')) as Camera['recordingMode'];
         return {
           id: camera.id,
           code: camera.name,
@@ -249,20 +332,42 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
           building: camera.site?.name ?? 'Sem unidade',
           floor: camera.group?.name ?? '-',
           ipAddress: camera.ip,
-          model: camera.rtspPath ? 'RTSP Camera' : 'Camera',
-          status: mapCameraStatus(camera.status, camera.recordingEnabled),
-          fps: camera.status === 'ONLINE' ? 25 : 0,
-          resolution: 'RTSP',
-          storage: camera.recordingEnabled ? 'Recording enabled' : 'Recording disabled',
+          rtspPort: camera.rtspPort ?? 554,
+          model: `${formatCodec(camera.streamVideoCodec ?? camera.detectedVideoCodec)}${camera.rtspPath ? ' / RTSP' : ''}`,
+          status: mapCameraStatus(camera.status, camera.recordingEnabled, runtime),
+          fps: effectiveFps ?? 0,
+          resolution: formatResolution(detectedStreamWidth, detectedStreamHeight),
+          storage: camera.recordingEnabled ? `${camera.retentionDays ?? 7} dias de retenção` : 'Gravação desabilitada',
           lastEvent,
           ptzCapable: Boolean(camera.onvifPath || camera.onvifProfileToken),
-          hasAudio: Boolean(camera.rtspPath),
+          hasAudio: Boolean(camera.audioEnabled),
           isOnline: camera.status === 'ONLINE',
           signalStrength: camera.status === 'ONLINE' ? 100 : 0,
-          recordingMode: camera.recordingEnabled ? 'continuous' : 'manual',
-          retentionDays: 0,
+          recordingMode: effectiveRecordingMode,
+          retentionDays: camera.retentionDays ?? 7,
+          preferredRtspTransport: camera.preferredRtspTransport ?? 'tcp',
+          preferredLiveProtocol: camera.preferredLiveProtocol ?? 'flv',
+          rtspPath: camera.rtspPath ?? undefined,
+          streamVideoCodec: camera.streamVideoCodec ?? undefined,
+          streamWidth: configuredStreamWidth,
+          streamHeight: configuredStreamHeight,
+          streamBitrateKbps: camera.streamBitrateKbps ?? null,
+          recordingVideoCodec: camera.recordingVideoCodec ?? undefined,
+          recordingWidth: camera.recordingWidth ?? null,
+          recordingHeight: camera.recordingHeight ?? null,
+          recordingFps: camera.recordingFps ?? null,
+          recordingBitrateKbps: camera.recordingBitrateKbps ?? null,
+          detectedVideoCodec: camera.detectedVideoCodec ?? undefined,
+          detectedWidth: camera.detectedWidth ?? null,
+          detectedHeight: camera.detectedHeight ?? null,
+          detectedFps: camera.detectedFps ?? null,
+          detectedBitrateKbps: camera.detectedBitrateKbps ?? null,
           lastMotion: lastEvent,
           thumbnailColor: THUMBNAIL_COLORS[index % THUMBNAIL_COLORS.length],
+          recordingStatusDetail: undefined,
+          recordingStale: false,
+          lastSegmentAt: runtime?.lastSegmentAt ?? null,
+          lastSegmentAgeSeconds: typeof runtime?.lastSegmentAgeSeconds === 'number' ? runtime.lastSegmentAgeSeconds : null,
         };
       });
 
@@ -301,6 +406,11 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
         zone: cameras.find((camera) => camera.id === alarm.cameraId)?.zone ?? 'Sem zona',
         description: alarm.message,
         notes: alarm.note ?? undefined,
+        isSnoozed: Boolean(alarm.isSnoozed),
+        snoozedUntil: alarm.snoozedUntil ?? undefined,
+        transitionHistory: Array.isArray(alarm.transitionHistory) ? alarm.transitionHistory : [],
+        notificationDelivery: Array.isArray(alarm.notificationDelivery) ? alarm.notificationDelivery : [],
+        lastNotificationStatus: typeof alarm.lastNotificationStatus === 'string' ? alarm.lastNotificationStatus : undefined,
       }));
 
       const recordings: RecordingItem[] = Array.isArray(recordingsRes.data?.items) ? recordingsRes.data.items : [];
@@ -326,6 +436,7 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
         overview: overviewRes.data?.summary ?? null,
         system: systemRes.data ?? null,
         auditLogs: Array.isArray(auditRes.data?.items) ? auditRes.data.items : [],
+        operationsTimeline: Array.isArray(operationsTimelineRes.data?.items) ? operationsTimelineRes.data.items : [],
         isLoading: false,
         loaded: true,
         error: null,
@@ -359,6 +470,18 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
     set((state) => ({
       alarms: state.alarms.map((alarm) => (alarm.id === id ? { ...alarm, status: 'resolved', notes: note ?? alarm.notes } : alarm)),
     }));
+  },
+  snoozeAlarm: async (id, minutes, note) => {
+    await api().post(`/cameras/alarms/${id}/snooze`, { minutes: minutes ?? 15, note });
+    await get().load();
+  },
+  unsnoozeAlarm: async (id, note) => {
+    await api().post(`/cameras/alarms/${id}/unsnooze`, { note });
+    await get().load();
+  },
+  bulkAlarmAction: async (action, eventIds, opts) => {
+    await api().post('/cameras/alarms/bulk', { action, eventIds, note: opts?.note, minutes: opts?.minutes });
+    await get().load();
   },
   addNote: (id, note) => {
     set((state) => ({

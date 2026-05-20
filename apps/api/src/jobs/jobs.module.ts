@@ -2,19 +2,31 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
 import { CAMERA_HEALTH_CHECK_QUEUE } from './queues/camera-health-check.queue';
+import { ALARM_NOTIFICATION_QUEUE } from './queues/alarm-notification.queue';
 import { RECORDING_CLEANUP_QUEUE } from './queues/recording-cleanup.queue';
 import { THUMBNAIL_GENERATION_QUEUE } from './queues/thumbnail-generation.queue';
+import { EVIDENCE_EXPORT_QUEUE } from './queues/evidence-export.queue';
+import { AlarmNotificationProcessor } from './processors/alarm-notification.processor';
 import { CameraHealthCheckProcessor } from './processors/camera-health-check.processor';
+import { EvidenceExportProcessor } from './processors/evidence-export.processor';
 import { RecordingCleanupProcessor } from './processors/recording-cleanup.processor';
 import { ThumbnailGenerationProcessor } from './processors/thumbnail-generation.processor';
 import { OnModuleInit } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { CamerasModule } from '../cameras/cameras.module';
+import { CameraStreamModule } from '../camera-stream/camera-stream.module';
+import { AuditModule } from '../audit/audit.module';
+import { EvidenceModule } from '../evidence/evidence.module';
+import { RecordingsModule } from '../recordings/recordings.module';
 
 @Module({
   imports: [
     CamerasModule,
+    CameraStreamModule,
+    AuditModule,
+    EvidenceModule,
+    RecordingsModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
@@ -25,17 +37,20 @@ import { CamerasModule } from '../cameras/cameras.module';
       }),
     }),
     BullModule.registerQueue(
+      { name: ALARM_NOTIFICATION_QUEUE },
       { name: CAMERA_HEALTH_CHECK_QUEUE },
       { name: RECORDING_CLEANUP_QUEUE },
       { name: THUMBNAIL_GENERATION_QUEUE },
+      { name: EVIDENCE_EXPORT_QUEUE },
     ),
   ],
-  providers: [CameraHealthCheckProcessor, RecordingCleanupProcessor, ThumbnailGenerationProcessor],
+  providers: [AlarmNotificationProcessor, CameraHealthCheckProcessor, RecordingCleanupProcessor, ThumbnailGenerationProcessor, EvidenceExportProcessor],
 })
 export class JobsModule implements OnModuleInit {
   constructor(
     @InjectQueue(CAMERA_HEALTH_CHECK_QUEUE) private readonly healthCheckQueue: Queue,
     @InjectQueue(RECORDING_CLEANUP_QUEUE) private readonly cleanupQueue: Queue,
+    @InjectQueue(EVIDENCE_EXPORT_QUEUE) private readonly evidenceExportQueue: Queue,
   ) {}
 
   async onModuleInit() {
@@ -64,5 +79,17 @@ export class JobsModule implements OnModuleInit {
         },
       );
     }
+
+    // Reprocessar assinaturas pendentes de pacotes de evidência a cada 5 minutos
+    await this.evidenceExportQueue.add(
+      'retry-all-pending-signatures',
+      {},
+      {
+        jobId: 'evidence-retry-signatures-cron',
+        repeat: { pattern: '*/5 * * * *' },
+        removeOnComplete: true,
+        removeOnFail: 50,
+      },
+    );
   }
 }

@@ -14,15 +14,36 @@ import {
   Volume2,
   ZoomIn,
   ZoomOut,
+  ExternalLink,
 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { toast } from '../hooks/use-toast';
 import { LiveStreamPlayer } from '../components/LiveStreamPlayer';
+import { getApiBaseUrl } from '../lib/api-base';
 import { sendPtzCommand, type PTZDirection } from '../lib/ptz';
+import { useAuthStore } from '../store/authStore';
 import { useVmsDataStore } from '../store/vmsDataStore';
 
 type CommandState = 'idle' | 'sending' | 'ok' | 'error';
+const API_URL = getApiBaseUrl();
+type PtzDiagnostics = {
+  cameraId: string;
+  ip: string;
+  configured: {
+    onvifPort: number | null;
+    onvifPath: string | null;
+    onvifProfileToken: string | null;
+    channel: number | null;
+  };
+  detected: {
+    ok: boolean;
+    onvifPort: number | null;
+    onvifPath: string | null;
+    onvifProfileToken: string | null;
+  };
+  ptzLikelyWorking: boolean;
+};
 
 function ControlButton({
   label,
@@ -70,7 +91,8 @@ function ControlButton({
 }
 
 export default function PTZPage() {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
+  const accessToken = useAuthStore((state) => state.accessToken);
   const ptzCameras = useVmsDataStore((state) => state.cameras.filter((camera) => camera.ptzCapable));
   const [selectedCamId, setSelectedCamId] = useState('');
   const [speed, setSpeed] = useState(5);
@@ -78,6 +100,8 @@ export default function PTZPage() {
   const [commandState, setCommandState] = useState<CommandState>('idle');
   const [lastCommand, setLastCommand] = useState<string>('Nenhum comando enviado');
   const [lastError, setLastError] = useState<string | null>(null);
+  const [diagnosing, setDiagnosing] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<PtzDiagnostics | null>(null);
 
   const requestedCameraId = useMemo(() => {
     if (typeof window === 'undefined') return null;
@@ -102,6 +126,7 @@ export default function PTZPage() {
 
   const selectedCam = ptzCameras.find((camera) => camera.id === selectedCamId) ?? null;
   const controlsDisabled = !selectedCam || !selectedCam.isOnline || commandState === 'sending';
+  const ptzRejectedByDevice = Boolean(lastError && lastError.includes('Nenhum endpoint PTZ aceitou o comando'));
 
   const startMove = useCallback(
     async (direction: PTZDirection) => {
@@ -112,7 +137,7 @@ export default function PTZPage() {
       setLastCommand(`Enviando ${direction} para ${selectedCam.name}`);
 
       try {
-        await sendPtzCommand(selectedCam.id, { action: 'start', direction });
+        await sendPtzCommand(selectedCam.id, { action: 'start', direction, speed });
         setCommandState('ok');
         setLastCommand(`Movimento ${direction} ativo em ${selectedCam.name}`);
       } catch (error) {
@@ -128,7 +153,7 @@ export default function PTZPage() {
         });
       }
     },
-    [controlsDisabled, selectedCam],
+    [controlsDisabled, selectedCam, speed],
   );
 
   const stopMove = useCallback(async () => {
@@ -139,7 +164,7 @@ export default function PTZPage() {
     setCommandState('sending');
 
     try {
-      await sendPtzCommand(selectedCam.id, { action: 'stop' });
+      await sendPtzCommand(selectedCam.id, { action: 'stop', direction: currentDirection });
       setCommandState('ok');
       setLastError(null);
       setLastCommand(`Movimento ${currentDirection} finalizado em ${selectedCam.name}`);
@@ -158,13 +183,52 @@ export default function PTZPage() {
 
   const sendSingleStep = useCallback(
     async (direction: PTZDirection) => {
-      await startMove(direction);
-      window.setTimeout(() => {
-        void stopMove();
-      }, Math.max(180, speed * 70));
+      if (!selectedCam || controlsDisabled) return;
+      setCommandState('sending');
+      setLastError(null);
+      try {
+        await sendPtzCommand(selectedCam.id, { action: 'step', direction, speed, durationMs: Math.max(180, speed * 70) });
+        setCommandState('ok');
+        setLastCommand(`Step ${direction} executado em ${selectedCam.name}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Falha no step PTZ.';
+        setCommandState('error');
+        setLastError(message);
+        setLastCommand(`Falha no step ${direction} em ${selectedCam.name}`);
+      }
     },
-    [speed, startMove, stopMove],
+    [controlsDisabled, selectedCam, speed],
   );
+
+  const runDiagnostics = useCallback(async () => {
+    if (!selectedCam || !accessToken) return;
+    setDiagnosing(true);
+    try {
+      const response = await fetch(`${API_URL}/ptz/${selectedCam.id}/diagnostics`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = (await response.json()) as PtzDiagnostics;
+      setDiagnostics(data);
+      toast({
+        title: data.ptzLikelyWorking ? 'Diagnóstico PTZ ok' : 'Diagnóstico PTZ com falha',
+        description: data.ptzLikelyWorking
+          ? `Endpoint detectado: ${data.detected.onvifPort ?? '-'} ${data.detected.onvifPath ?? '-'}` 
+          : 'Endpoint ONVIF não respondeu como esperado. Revise porta/path/token e credenciais.',
+        variant: data.ptzLikelyWorking ? undefined : 'destructive',
+      });
+    } catch (error) {
+      toast({
+        title: 'Falha no diagnóstico PTZ',
+        description: error instanceof Error ? error.message : 'Erro inesperado.',
+        variant: 'destructive',
+      });
+    } finally {
+      setDiagnosing(false);
+    }
+  }, [accessToken, selectedCam]);
 
   if (!ptzCameras.length) {
     return (
@@ -212,6 +276,26 @@ export default function PTZPage() {
           </div>
           <Slider value={[speed]} onValueChange={([value]) => setSpeed(value)} min={1} max={10} step={1} />
         </div>
+
+        <button
+          type="button"
+          onClick={() => selectedCam && setLocation(`/cameras/${selectedCam.id}?tab=ptz`)}
+          disabled={!selectedCam}
+          className="inline-flex h-10 items-center gap-2 rounded-xl border border-border px-3 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45"
+        >
+          Abrir painel da câmera
+          <ExternalLink className="h-3.5 w-3.5" />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => void runDiagnostics()}
+          disabled={!selectedCam || diagnosing}
+          className="inline-flex h-10 items-center gap-2 rounded-xl border border-border px-3 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45"
+        >
+          {diagnosing ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Radar className="h-3.5 w-3.5" />}
+          Diagnosticar PTZ
+        </button>
       </div>
 
       <div className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[minmax(0,1.35fr)_420px]">
@@ -290,6 +374,11 @@ export default function PTZPage() {
                 {commandState === 'error' ? 'Erro operacional' : commandState === 'sending' ? 'Enviando comando' : 'Pronto'}
               </div>
               <div className="mt-2 text-xs text-[hsl(var(--muted-foreground))]">{lastCommand}</div>
+              {ptzRejectedByDevice && (
+                <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                  O equipamento respondeu ao endpoint, mas rejeitou o PTZ externo. O stream segue online; o bloqueio está no protocolo de controle desta câmera.
+                </div>
+              )}
             </div>
 
             <div className="rounded-2xl border border-border bg-card/70 p-4 shadow-sm">
@@ -325,6 +414,29 @@ export default function PTZPage() {
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 Stop
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!selectedCam || controlsDisabled) return;
+                  setCommandState('sending');
+                  setLastError(null);
+                  try {
+                    await sendPtzCommand(selectedCam.id, { action: 'home' });
+                    setCommandState('ok');
+                    setLastCommand(`Home position executada em ${selectedCam.name}`);
+                  } catch (error) {
+                    const message = error instanceof Error ? error.message : 'Falha ao enviar home position.';
+                    setCommandState('error');
+                    setLastError(message);
+                    setLastCommand(`Falha no home em ${selectedCam.name}`);
+                  }
+                }}
+                disabled={controlsDisabled}
+                className="inline-flex h-9 items-center gap-2 rounded-xl border border-border px-3 text-xs text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <Camera className="h-3.5 w-3.5" />
+                Home
               </button>
             </div>
 
@@ -442,6 +554,14 @@ export default function PTZPage() {
             {lastError && (
               <div className="mt-4 rounded-xl border border-[hsl(var(--destructive)_/_0.28)] bg-[hsl(var(--destructive)_/_0.08)] px-3 py-2 text-xs text-[hsl(var(--destructive))]">
                 {lastError}
+              </div>
+            )}
+            {diagnostics && (
+              <div className="mt-4 rounded-xl border border-border bg-background/55 px-3 py-3 text-xs text-[hsl(var(--muted-foreground))]">
+                <div className="mb-1 font-semibold text-foreground">Diagnóstico ONVIF</div>
+                <div>Config: porta {diagnostics.configured.onvifPort ?? '-'} · path {diagnostics.configured.onvifPath ?? '-'} · token {diagnostics.configured.onvifProfileToken ?? '-'}</div>
+                <div className="mt-1">Detectado: porta {diagnostics.detected.onvifPort ?? '-'} · path {diagnostics.detected.onvifPath ?? '-'} · token {diagnostics.detected.onvifProfileToken ?? '-'}</div>
+                <div className="mt-1">Resultado: {diagnostics.ptzLikelyWorking ? 'provável funcional' : 'falha de comunicação PTZ'}</div>
               </div>
             )}
           </div>

@@ -4,11 +4,26 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypt
 @Injectable()
 export class CryptoService {
   private readonly key: Buffer;
+  private readonly legacyKeys: Buffer[];
+  private static readonly insecureSecrets = new Set([
+    '',
+    'change_me_32_chars_minimum',
+    'change_me_32_chars_minimum_vms_key',
+  ]);
 
   constructor() {
-    const secret = process.env.CAMERA_SECRET_KEY ?? 'change_me_32_chars_minimum';
-    // Em produção, isso deve evoluir para KMS/secret manager, nunca uma chave fixa no processo.
+    const secret = (process.env.CAMERA_SECRET_KEY ?? '').trim();
+    if (!secret || CryptoService.insecureSecrets.has(secret) || secret.length < 32) {
+      throw new Error(
+        'CAMERA_SECRET_KEY inválida. Defina um segredo forte (>= 32 chars) e não use valores padrão.',
+      );
+    }
     this.key = createHash('sha256').update(secret).digest();
+    this.legacyKeys = (process.env.CAMERA_SECRET_KEY_LEGACY ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0 && value !== secret)
+      .map((value) => createHash('sha256').update(value).digest());
   }
 
   encrypt(plainText: string): string {
@@ -22,14 +37,15 @@ export class CryptoService {
   decrypt(payload: string): string {
     try {
       return this._decryptWithKey(payload, this.key);
-    } catch (e) {
-      // Tenta com a chave padrão antiga caso a chave customizada tenha sido configurada recentemente
-      const fallbackKey = createHash('sha256').update('change_me_32_chars_minimum').digest();
-      try {
-        return this._decryptWithKey(payload, fallbackKey);
-      } catch (e2) {
-        throw e; // Lança o erro original se o fallback também falhar
+    } catch (error) {
+      for (const legacyKey of this.legacyKeys) {
+        try {
+          return this._decryptWithKey(payload, legacyKey);
+        } catch {
+          // Try the next legacy key. If none works, throw the original error below.
+        }
       }
+      throw error;
     }
   }
 

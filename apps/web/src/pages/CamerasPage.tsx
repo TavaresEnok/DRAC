@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   LayoutGrid, List, Search, Filter, Plus, Edit, PlaySquare,
   Crosshair, RefreshCw, ChevronRight, X, Wifi, HardDrive,
-  Camera as CameraIcon, Check, Trash2
+  Camera as CameraIcon, Check, Trash2, Circle, Radar
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Camera, useVmsDataStore } from '../store/vmsDataStore';
@@ -12,7 +12,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useLocation } from 'wouter';
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
-const STATUSES = ['All', 'online', 'recording', 'motion', 'alarm', 'offline', 'no_signal', 'maintenance'];
+const STATUSES = ['all', 'online', 'recording', 'motion', 'alarm', 'offline', 'no_signal', 'maintenance'] as const;
+const STATUS_LABEL: Record<(typeof STATUSES)[number], string> = {
+  all: 'Todos os status',
+  online: 'Online',
+  recording: 'Gravando',
+  motion: 'Movimento',
+  alarm: 'Alarme',
+  offline: 'Offline',
+  no_signal: 'Sem sinal',
+  maintenance: 'Manutenção',
+};
 
 const STATUS_BADGE: Record<string, string> = {
   online: 'bg-[hsl(150,65%,42%_/_0.12)] text-[hsl(150,65%,42%)] border-[hsl(150,65%,42%_/_0.3)]',
@@ -23,6 +33,43 @@ const STATUS_BADGE: Record<string, string> = {
   no_signal: 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border-border',
   maintenance: 'bg-[hsl(var(--chart-2)_/_0.12)] text-[hsl(var(--chart-2))] border-[hsl(var(--chart-2)_/_0.3)]',
 };
+
+type VideoCodec = 'h264' | 'h265' | 'mjpeg';
+type RecordingMode = Camera['recordingMode'];
+
+const RECORDING_MODE_COPY: Record<RecordingMode, { label: string; detail: string; className: string }> = {
+  manual: {
+    label: 'Manual',
+    detail: 'Só grava quando o operador liga.',
+    className: 'border-slate-500/35 bg-slate-500/10 text-slate-300',
+  },
+  motion: {
+    label: 'Movimento',
+    detail: 'Armada: grava quando detectar movimento.',
+    className: 'border-amber-500/35 bg-amber-500/10 text-amber-300',
+  },
+  continuous: {
+    label: 'Contínua',
+    detail: 'Intenção 24h: o sistema tenta manter gravando.',
+    className: 'border-sky-500/35 bg-sky-500/10 text-sky-300',
+  },
+  schedule: {
+    label: 'Agenda',
+    detail: 'Segue janela de agenda configurada.',
+    className: 'border-indigo-500/35 bg-indigo-500/10 text-indigo-300',
+  },
+};
+
+function getRecordingModeCopy(mode?: RecordingMode | null) {
+  return RECORDING_MODE_COPY[mode ?? 'manual'] ?? RECORDING_MODE_COPY.manual;
+}
+
+function normalizeVideoCodec(codec?: string | null): VideoCodec {
+  const value = codec?.trim().toLowerCase();
+  if (value === 'hevc' || value === 'h.265' || value === 'h265') return 'h265';
+  if (value === 'mjpeg' || value === 'mjpg' || value === 'jpeg') return 'mjpeg';
+  return 'h264';
+}
 
 function WizardModal({
   onClose,
@@ -45,6 +92,21 @@ function WizardModal({
     channel?: number;
     subtype?: number;
     recordingEnabled: boolean;
+    recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
+    retentionDays: number;
+    preferredRtspTransport: 'tcp' | 'udp';
+    preferredLiveProtocol: 'flv' | 'hls' | 'webrtc' | 'mjpeg';
+    streamVideoCodec: VideoCodec;
+    streamWidth?: number;
+    streamHeight?: number;
+    streamFps?: number;
+    streamBitrateKbps?: number;
+    recordingVideoCodec: 'h264';
+    recordingWidth?: number;
+    recordingHeight?: number;
+    recordingFps?: number;
+    recordingBitrateKbps?: number;
+    audioEnabled: boolean;
   }) => Promise<void>;
   onTestConnection: (payload: {
     ip: string;
@@ -74,11 +136,24 @@ function WizardModal({
     detectedOnvifProfileToken?: string | null;
     rtspProbeError?: string | null;
     status: string;
+    detectedStream?: {
+      codec?: string | null;
+      width?: number | null;
+      height?: number | null;
+      fps?: number | null;
+      bitrateKbps?: number | null;
+    } | null;
   }>;
 }) {
   const [step, setStep] = useState(0);
+  const [detectedMax, setDetectedMax] = useState<{
+    width: number | null;
+    height: number | null;
+    fps: number | null;
+    bitrateKbps: number | null;
+  } | null>(null);
   const steps = ['Conexão', 'Identidade', 'Gravação', 'Confirmar'];
-  const validZones = zones.filter((zone) => zone !== 'All');
+  const validZones = zones.filter((zone) => zone !== 'all');
   const [form, setForm] = useState({
     ip: '',
     port: '554',
@@ -96,6 +171,19 @@ function WizardModal({
     building: validZones[0] ?? '',
     recordingMode: 'continuous',
     retentionDays: '90',
+    preferredRtspTransport: 'tcp',
+    preferredLiveProtocol: 'flv',
+    streamVideoCodec: 'h264',
+    streamWidth: '',
+    streamHeight: '',
+    streamFps: '',
+    streamBitrateKbps: '',
+    recordingVideoCodec: 'h264' as const,
+    recordingWidth: '',
+    recordingHeight: '',
+    recordingFps: '',
+    recordingBitrateKbps: '',
+    audioEnabled: true,
   });
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
@@ -125,6 +213,42 @@ function WizardModal({
 
     setIsSaving(true);
     try {
+      const clampToDetected = (
+        label: string,
+        rawValue: string,
+        max: number | null | undefined,
+        changes: string[],
+      ): number | undefined => {
+        if (!rawValue.trim()) return undefined;
+        const value = Number(rawValue);
+        if (!Number.isFinite(value)) return undefined;
+        if (max && max > 0 && value > max) {
+          changes.push(`${label}: solicitado ${value}, aplicado ${max}`);
+          return max;
+        }
+        return value;
+      };
+
+      const adjusted: string[] = [];
+      const streamWidth = clampToDetected('Live largura', form.streamWidth, detectedMax?.width, adjusted);
+      const streamHeight = clampToDetected('Live altura', form.streamHeight, detectedMax?.height, adjusted);
+      const streamFps = clampToDetected('Live FPS', form.streamFps, detectedMax?.fps, adjusted);
+      const streamBitrateKbps = form.streamBitrateKbps.trim()
+        ? clampToDetected('Live bitrate', form.streamBitrateKbps, detectedMax?.bitrateKbps, adjusted)
+        : (detectedMax?.bitrateKbps ?? undefined);
+      const recordingWidth = clampToDetected('Rec largura', form.recordingWidth, detectedMax?.width, adjusted);
+      const recordingHeight = clampToDetected('Rec altura', form.recordingHeight, detectedMax?.height, adjusted);
+      const recordingFps = clampToDetected('Rec FPS', form.recordingFps, detectedMax?.fps, adjusted);
+      const recordingBitrateKbps = form.recordingBitrateKbps.trim()
+        ? clampToDetected('Rec bitrate', form.recordingBitrateKbps, detectedMax?.bitrateKbps, adjusted)
+        : (detectedMax?.bitrateKbps ?? undefined);
+
+      if (adjusted.length) {
+        window.alert(
+          `Alguns valores foram ajustados para o máximo detectado da câmera:\n- ${adjusted.join('\n- ')}`,
+        );
+      }
+
       await onCreated({
         name: form.name.trim(),
         ip: form.ip.trim(),
@@ -138,6 +262,21 @@ function WizardModal({
         channel: Number(form.channel),
         subtype: Number(form.subtype),
         recordingEnabled: form.recordingMode !== 'manual',
+        recordingMode: form.recordingMode as 'continuous' | 'motion' | 'schedule' | 'manual',
+        retentionDays: Number(form.retentionDays),
+        preferredRtspTransport: form.preferredRtspTransport as 'tcp' | 'udp',
+        preferredLiveProtocol: form.preferredLiveProtocol as 'flv' | 'hls' | 'webrtc' | 'mjpeg',
+        streamVideoCodec: normalizeVideoCodec(form.streamVideoCodec),
+        streamWidth,
+        streamHeight,
+        streamFps,
+        streamBitrateKbps,
+        recordingVideoCodec: 'h264',
+        recordingWidth,
+        recordingHeight,
+        recordingFps,
+        recordingBitrateKbps,
+        audioEnabled: form.audioEnabled,
       });
       onClose();
     } catch (error) {
@@ -167,6 +306,20 @@ function WizardModal({
         subtype: Number(form.subtype),
       });
       if (result.suggestedRtspPath && !form.rtspPath.trim()) updateField('rtspPath', result.suggestedRtspPath);
+      if (result.detectedStream?.codec) updateField('streamVideoCodec', normalizeVideoCodec(result.detectedStream.codec));
+      if (typeof result.detectedStream?.width === 'number') updateField('streamWidth', String(result.detectedStream.width));
+      if (typeof result.detectedStream?.height === 'number') updateField('streamHeight', String(result.detectedStream.height));
+      if (typeof result.detectedStream?.fps === 'number') updateField('streamFps', String(result.detectedStream.fps));
+      if (typeof result.detectedStream?.bitrateKbps === 'number') updateField('streamBitrateKbps', String(result.detectedStream.bitrateKbps));
+      if (typeof result.detectedStream?.bitrateKbps === 'number' && !form.recordingBitrateKbps.trim()) {
+        updateField('recordingBitrateKbps', String(result.detectedStream.bitrateKbps));
+      }
+      setDetectedMax({
+        width: typeof result.detectedStream?.width === 'number' ? result.detectedStream.width : null,
+        height: typeof result.detectedStream?.height === 'number' ? result.detectedStream.height : null,
+        fps: typeof result.detectedStream?.fps === 'number' ? result.detectedStream.fps : null,
+        bitrateKbps: typeof result.detectedStream?.bitrateKbps === 'number' ? result.detectedStream.bitrateKbps : null,
+      });
       const selectedPort = Number(form.port);
       if (
         typeof result.detectedRtspPort === 'number' &&
@@ -179,7 +332,7 @@ function WizardModal({
       if (result.detectedOnvifPath) updateField('onvifPath', result.detectedOnvifPath);
       if (result.detectedOnvifProfileToken) updateField('onvifProfileToken', result.detectedOnvifProfileToken);
       window.alert(
-        `Teste concluído\nRTSP porta informada: ${result.rtspReachable ? 'ok' : 'falhou'}\nRTSP auth na porta informada: ${result.selectedRtspPortAuthOk ? 'ok' : 'falhou'}\nRTSP válido (qualquer porta): ${result.rtspAuthOk ? 'ok' : 'falhou'}\nPortas RTSP detectadas: ${(result.reachableRtspPorts ?? []).join(', ') || '-'}\nPorta RTSP sugerida: ${result.detectedRtspPort ?? '-'}\nCaminho RTSP sugerido: ${result.detectedRtspPath ?? result.suggestedRtspPath ?? '-'}\nONVIF: ${result.onvifReachable ? 'ok' : 'falhou'}\nPTZ digest: ${result.ptzDigestOk ? 'ok' : 'falhou'}\nStatus: ${result.status}${result.rtspProbeError ? `\nErro RTSP: ${result.rtspProbeError}` : ''}`,
+        `Teste concluído\nRTSP porta informada: ${result.rtspReachable ? 'ok' : 'falhou'}\nRTSP auth na porta informada: ${result.selectedRtspPortAuthOk ? 'ok' : 'falhou'}\nRTSP válido (qualquer porta): ${result.rtspAuthOk ? 'ok' : 'falhou'}\nPortas RTSP detectadas: ${(result.reachableRtspPorts ?? []).join(', ') || '-'}\nPorta RTSP sugerida: ${result.detectedRtspPort ?? '-'}\nCaminho RTSP sugerido: ${result.detectedRtspPath ?? result.suggestedRtspPath ?? '-'}\nCodec detectado: ${result.detectedStream?.codec?.toUpperCase() ?? '-'}\nResolução detectada: ${result.detectedStream?.width && result.detectedStream?.height ? `${result.detectedStream.width}x${result.detectedStream.height}` : '-'}\nFPS detectado: ${result.detectedStream?.fps ?? '-'}\nBitrate detectado: ${result.detectedStream?.bitrateKbps ? `${result.detectedStream.bitrateKbps} kbps` : '-'}\nONVIF: ${result.onvifReachable ? 'ok' : 'falhou'}\nPTZ digest: ${result.ptzDigestOk ? 'ok' : 'falhou'}\nStatus: ${result.status}${result.rtspProbeError ? `\nErro RTSP: ${result.rtspProbeError}` : ''}`,
       );
     } catch (error) {
       window.alert(error instanceof Error ? error.message : 'Falha ao testar conexão.');
@@ -256,7 +409,7 @@ function WizardModal({
                   <input value={form.channel} onChange={(e) => updateField('channel', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="1" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Subtype</label>
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Subtipo</label>
                   <input value={form.subtype} onChange={(e) => updateField('subtype', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="0" />
                 </div>
                 <div className="space-y-1 col-span-2">
@@ -279,6 +432,18 @@ function WizardModal({
                 <Wifi className="w-3.5 h-3.5" />
                 {isTesting ? 'Testando...' : 'Testar Conexão'}
               </button>
+              {detectedMax && (
+                <div className="rounded border border-border bg-background px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+                  Capacidade máxima detectada:
+                  <span className="ml-1 font-mono text-foreground">
+                    {detectedMax.width && detectedMax.height ? `${detectedMax.width}x${detectedMax.height}` : '-'}
+                  </span>
+                  <span className="mx-2">|</span>
+                  <span className="font-mono text-foreground">{detectedMax.fps ?? '-'} FPS</span>
+                  <span className="mx-2">|</span>
+                  <span className="font-mono text-foreground">{detectedMax.bitrateKbps ? `${detectedMax.bitrateKbps} kbps` : '-'}</span>
+                </div>
+              )}
             </div>
           )}
           {step === 1 && (
@@ -307,21 +472,111 @@ function WizardModal({
           )}
           {step === 2 && (
             <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Modo de Gravação</label>
-                <Select value={form.recordingMode} onValueChange={(value) => updateField('recordingMode', value)}>
-                  <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="continuous" className="text-xs">Contínua</SelectItem>
-                    <SelectItem value="motion" className="text-xs">Por Movimento</SelectItem>
-                    <SelectItem value="schedule" className="text-xs">Agenda</SelectItem>
-                    <SelectItem value="manual" className="text-xs">Manual</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="rounded-lg border border-border bg-background p-3 space-y-3">
+                <div className="text-[11px] font-semibold">Perfil de Live</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Codec</label>
+                    <Select value={form.streamVideoCodec} onValueChange={(value) => updateField('streamVideoCodec', value)}>
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="h264" className="text-xs">H.264</SelectItem>
+                        <SelectItem value="h265" className="text-xs">H.265</SelectItem>
+                        <SelectItem value="mjpeg" className="text-xs">MJPEG</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Protocolo ao vivo</label>
+                    <Select value={form.preferredLiveProtocol} onValueChange={(value) => updateField('preferredLiveProtocol', value)}>
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="flv" className="text-xs">FLV</SelectItem>
+                        <SelectItem value="hls" className="text-xs">HLS</SelectItem>
+                        <SelectItem value="webrtc" className="text-xs">WebRTC</SelectItem>
+                        <SelectItem value="mjpeg" className="text-xs">MJPEG</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Transporte RTSP</label>
+                    <Select value={form.preferredRtspTransport} onValueChange={(value) => updateField('preferredRtspTransport', value)}>
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="tcp" className="text-xs">TCP</SelectItem>
+                        <SelectItem value="udp" className="text-xs">UDP</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1 flex items-end">
+                    <label className="flex items-center gap-2 text-xs font-medium">
+                      <input type="checkbox" checked={form.audioEnabled} onChange={(e) => updateField('audioEnabled', e.target.checked)} />
+                      Áudio habilitado
+                    </label>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Largura</label>
+                    <input value={form.streamWidth} onChange={(e) => updateField('streamWidth', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Altura</label>
+                    <input value={form.streamHeight} onChange={(e) => updateField('streamHeight', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">FPS</label>
+                    <input value={form.streamFps} onChange={(e) => updateField('streamFps', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Bitrate kbps</label>
+                    <input value={form.streamBitrateKbps} onChange={(e) => updateField('streamBitrateKbps', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  </div>
+                </div>
               </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Retenção (dias)</label>
-                <input value={form.retentionDays} onChange={(e) => updateField('retentionDays', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+
+              <div className="rounded-lg border border-border bg-background p-3 space-y-3">
+                <div className="text-[11px] font-semibold">Perfil de Gravação</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Modo de Gravação</label>
+                    <Select value={form.recordingMode} onValueChange={(value) => updateField('recordingMode', value)}>
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="continuous" className="text-xs">Contínua</SelectItem>
+                        <SelectItem value="motion" className="text-xs">Por Movimento</SelectItem>
+                        <SelectItem value="schedule" className="text-xs">Agenda</SelectItem>
+                        <SelectItem value="manual" className="text-xs">Manual</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Retenção (dias)</label>
+                    <input value={form.retentionDays} onChange={(e) => updateField('retentionDays', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Codec de Gravação</label>
+                    <div className="h-9 flex items-center gap-2 px-3 rounded border border-emerald-500/40 bg-emerald-500/8 text-xs">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                      <span className="font-mono font-semibold text-emerald-300">H.264 (libx264)</span>
+                      <span className="text-[hsl(var(--muted-foreground))] ml-auto">fixo</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Bitrate kbps</label>
+                    <input value={form.recordingBitrateKbps} onChange={(e) => updateField('recordingBitrateKbps', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Largura</label>
+                    <input value={form.recordingWidth} onChange={(e) => updateField('recordingWidth', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Altura</label>
+                    <input value={form.recordingHeight} onChange={(e) => updateField('recordingHeight', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">FPS</label>
+                    <input value={form.recordingFps} onChange={(e) => updateField('recordingFps', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -341,8 +596,18 @@ function WizardModal({
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">ONVIF Token</span><span className="font-mono">{form.onvifProfileToken || 'Profile000'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Zona</span><span>{form.zone || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Unidade</span><span>{form.building || '-'}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Codec Live</span><span className="font-mono uppercase">{form.streamVideoCodec}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Resolução Live</span><span className="font-mono">{form.streamWidth && form.streamHeight ? `${form.streamWidth}x${form.streamHeight}` : '-'}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">FPS Live</span><span className="font-mono">{form.streamFps || '-'}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Bitrate Live</span><span className="font-mono">{form.streamBitrateKbps ? `${form.streamBitrateKbps} kbps` : '-'}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Protocolo Live</span><span className="font-mono uppercase">{form.preferredLiveProtocol}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">RTSP Transport</span><span className="font-mono uppercase">{form.preferredRtspTransport}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Gravação</span><span className="capitalize">{form.recordingMode}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Retenção</span><span className="font-mono">{form.retentionDays || '-'} dias</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Codec Gravação</span><span className="font-mono text-emerald-400">H.264 (fixo)</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Resolução Gravação</span><span className="font-mono">{form.recordingWidth && form.recordingHeight ? `${form.recordingWidth}x${form.recordingHeight}` : '-'}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">FPS Gravação</span><span className="font-mono">{form.recordingFps || '-'}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Áudio</span><span className="font-mono">{form.audioEnabled ? 'Sim' : 'Não'}</span></div>
               </div>
             </div>
           )}
@@ -373,18 +638,83 @@ export default function CamerasPage() {
   const loadData = useVmsDataStore((state) => state.load);
   const [viewMode, setViewMode] = useState<'table' | 'card'>('table');
   const [search, setSearch] = useState('');
-  const [zoneFilter, setZonaFilter] = useState('All');
-  const [statusFilter, setStatusFilter] = useState('All');
+  const [zoneFilter, setZoneFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<(typeof STATUSES)[number]>('all');
   const [showWizard, setShowWizard] = useState(false);
   const [selectedCam, setSelectedCam] = useState<Camera | null>(null);
-  const zones = ['All', ...Array.from(new Set(cameras.map((camera) => camera.zone)))];
+  const [reconnectingStale, setReconnectingStale] = useState(false);
+  const [reconnectingSingleCameraId, setReconnectingSingleCameraId] = useState<string | null>(null);
+  const [manualRecordingLoading, setManualRecordingLoading] = useState<{ cameraId: string; action: 'start' | 'stop' } | null>(null);
+  const [motionRecordingLoadingCameraId, setMotionRecordingLoadingCameraId] = useState<string | null>(null);
+  const [recordingOverrides, setRecordingOverrides] = useState<Record<string, boolean>>({});
+  const [diagnosingPtzCameraId, setDiagnosingPtzCameraId] = useState<string | null>(null);
+  const [recordingHealthByCamera, setRecordingHealthByCamera] = useState<Record<string, {
+    total: number;
+    broken: number;
+    tooSmall: number;
+    compatibleRecommended: number;
+    directLikely: number;
+    withAudio: number;
+    lastRecordingAgeSeconds: number | null;
+    needsAttention?: boolean;
+    alertReason?: string | null;
+  }>>({});
+  const zones = ['all', ...Array.from(new Set(cameras.map((camera) => camera.zone)))];
+  const isRecordingAutoRecovering = useCallback((camera: Camera | null | undefined) => (
+    camera?.recordingStatusDetail === 'auto_reconnecting'
+  ), []);
+  const staleCameras = useMemo(
+    () => cameras.filter((camera) => camera.recordingStale && !isRecordingAutoRecovering(camera)),
+    [cameras, isRecordingAutoRecovering],
+  );
+  const isCameraRecording = useCallback((camera: Camera | null | undefined) => {
+    if (!camera) return false;
+    const override = recordingOverrides[camera.id];
+    if (typeof override === 'boolean') return override;
+    return camera.status === 'recording';
+  }, [recordingOverrides]);
+  const isMotionRecordingMode = useCallback((camera: Camera | null | undefined) => camera?.recordingMode === 'motion', []);
+  const isMotionRecordingActive = useCallback((camera: Camera | null | undefined) => Boolean(camera && isMotionRecordingMode(camera) && isCameraRecording(camera)), [isCameraRecording, isMotionRecordingMode]);
+  const selectedCamLive = useMemo(
+    () => (selectedCam ? cameras.find((camera) => camera.id === selectedCam.id) ?? selectedCam : null),
+    [cameras, selectedCam],
+  );
+  useEffect(() => {
+    if (!accessToken) return;
+    const today = format(new Date(), 'yyyy-MM-dd');
+    void axios.get(`${API_URL}/recordings/health-summary?date=${encodeURIComponent(today)}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }).then(({ data }) => {
+      const map: Record<string, { total: number; broken: number; tooSmall: number; compatibleRecommended: number; directLikely: number; withAudio: number; lastRecordingAgeSeconds: number | null; needsAttention?: boolean; alertReason?: string | null }> = {};
+      for (const item of Array.isArray(data?.cameras) ? data.cameras : []) {
+        if (!item?.cameraId) continue;
+        map[item.cameraId] = {
+          total: Number(item.total ?? 0),
+          broken: Number(item.broken ?? 0),
+          tooSmall: Number(item.tooSmall ?? 0),
+          compatibleRecommended: Number(item.compatibleRecommended ?? 0),
+          directLikely: Number(item.directLikely ?? 0),
+          withAudio: Number(item.withAudio ?? 0),
+          lastRecordingAgeSeconds: typeof item.lastRecordingAgeSeconds === 'number' ? item.lastRecordingAgeSeconds : null,
+          needsAttention: Boolean(item.needsAttention),
+          alertReason: null,
+        };
+        map[item.cameraId].needsAttention = false;
+      }
+      setRecordingHealthByCamera(map);
+    }).catch(() => setRecordingHealthByCamera({}));
+  }, [API_URL, accessToken]);
 
   const filtered = cameras.filter(c => {
     if (search && !c.name.toLowerCase().includes(search.toLowerCase()) && !c.code.toLowerCase().includes(search.toLowerCase())) return false;
-    if (zoneFilter !== 'All' && c.zone !== zoneFilter) return false;
-    if (statusFilter !== 'All' && c.status !== statusFilter) return false;
+    if (zoneFilter !== 'all' && c.zone !== zoneFilter) return false;
+    if (statusFilter !== 'all' && c.status !== statusFilter) return false;
     return true;
   });
+  const recordingAttentionItems = useMemo(
+    () => filtered.filter((camera) => recordingHealthByCamera[camera.id]?.needsAttention && !isRecordingAutoRecovering(camera)),
+    [filtered, recordingHealthByCamera, isRecordingAutoRecovering],
+  );
 
   const deleteCamera = async (camera: Camera) => {
     if (!accessToken) return;
@@ -414,6 +744,21 @@ export default function CamerasPage() {
     channel?: number;
     subtype?: number;
     recordingEnabled: boolean;
+    recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
+    retentionDays: number;
+    preferredRtspTransport: 'tcp' | 'udp';
+    preferredLiveProtocol: 'flv' | 'hls' | 'webrtc' | 'mjpeg';
+    streamVideoCodec: VideoCodec;
+    streamWidth?: number;
+    streamHeight?: number;
+    streamFps?: number;
+    streamBitrateKbps?: number;
+    recordingVideoCodec: 'h264';
+    recordingWidth?: number;
+    recordingHeight?: number;
+    recordingFps?: number;
+    recordingBitrateKbps?: number;
+    audioEnabled: boolean;
   }) => {
     if (!accessToken) throw new Error('Sessão inválida. Faça login novamente.');
     await axios.post(`${API_URL}/cameras`, payload, {
@@ -458,6 +803,149 @@ export default function CamerasPage() {
     };
   };
 
+  const reconnectStaleRecordings = async () => {
+    if (!accessToken) return;
+    if (!staleCameras.length) {
+      window.alert('Nenhuma câmera pendente para reconectar.');
+      return;
+    }
+    const confirmed = window.confirm(`Reconectar gravação em ${staleCameras.length} câmera(s)?`);
+    if (!confirmed) return;
+    setReconnectingStale(true);
+    try {
+      const { data } = await axios.post(
+        `${API_URL}/recordings/reconnect-stale`,
+        { cameraIds: staleCameras.map((camera) => camera.id) },
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      window.alert(`Reconexão concluída\nReiniciadas: ${data.restarted ?? 0}\nIgnoradas: ${data.skipped ?? 0}`);
+      await loadData();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Falha ao reconectar gravações.');
+    } finally {
+      setReconnectingStale(false);
+    }
+  };
+
+  const reconnectSingleCamera = async (cameraId: string) => {
+    if (!accessToken || reconnectingSingleCameraId) return;
+    setReconnectingSingleCameraId(cameraId);
+    try {
+      const { data } = await axios.post(
+        `${API_URL}/recordings/reconnect-stale`,
+        { cameraIds: [cameraId] },
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      window.alert(`Reconexão da câmera concluída\nReiniciadas: ${data.restarted ?? 0}\nIgnoradas: ${data.skipped ?? 0}`);
+      await loadData();
+      const today = format(new Date(), 'yyyy-MM-dd');
+      const summary = await axios.get(`${API_URL}/recordings/health-summary?date=${encodeURIComponent(today)}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const map: Record<string, { total: number; broken: number; tooSmall: number; compatibleRecommended: number; directLikely: number; withAudio: number; lastRecordingAgeSeconds: number | null; needsAttention?: boolean; alertReason?: string | null }> = {};
+      for (const item of Array.isArray(summary.data?.cameras) ? summary.data.cameras : []) {
+        if (!item?.cameraId) continue;
+        map[item.cameraId] = {
+          total: Number(item.total ?? 0),
+          broken: Number(item.broken ?? 0),
+          tooSmall: Number(item.tooSmall ?? 0),
+          compatibleRecommended: Number(item.compatibleRecommended ?? 0),
+          directLikely: Number(item.directLikely ?? 0),
+          withAudio: Number(item.withAudio ?? 0),
+          lastRecordingAgeSeconds: typeof item.lastRecordingAgeSeconds === 'number' ? item.lastRecordingAgeSeconds : null,
+          needsAttention: false,
+          alertReason: null,
+        };
+      }
+      setRecordingHealthByCamera(map);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Falha ao reconectar a câmera.');
+    } finally {
+      setReconnectingSingleCameraId(null);
+    }
+  };
+
+  const diagnosePtzCamera = async (camera: Camera) => {
+    if (!accessToken) return;
+    if (!camera.ptzCapable) {
+      window.alert('Esta câmera não possui PTZ habilitado.');
+      return;
+    }
+    if (diagnosingPtzCameraId) return;
+    setDiagnosingPtzCameraId(camera.id);
+    try {
+      const { data } = await axios.get<{
+        configured?: { onvifPort?: number | null; onvifPath?: string | null; onvifProfileToken?: string | null };
+        detected?: { onvifPort?: number | null; onvifPath?: string | null; onvifProfileToken?: string | null };
+        ptzLikelyWorking?: boolean;
+      }>(`${API_URL}/ptz/${camera.id}/diagnostics`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      const configured = data?.configured ?? {};
+      const detected = data?.detected ?? {};
+      const resultLine = data?.ptzLikelyWorking ? 'Resultado: PTZ provável funcional' : 'Resultado: falha de comunicação PTZ';
+      window.alert(
+        [
+          `Diagnóstico PTZ — ${camera.name}`,
+          `Config: porta ${configured.onvifPort ?? '-'} | path ${configured.onvifPath ?? '-'} | token ${configured.onvifProfileToken ?? '-'}`,
+          `Detectado: porta ${detected.onvifPort ?? '-'} | path ${detected.onvifPath ?? '-'} | token ${detected.onvifProfileToken ?? '-'}`,
+          resultLine,
+        ].join('\n'),
+      );
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Falha no diagnóstico PTZ.');
+    } finally {
+      setDiagnosingPtzCameraId(null);
+    }
+  };
+
+  const runManualRecording = async (camera: Camera, action: 'start' | 'stop') => {
+    if (!accessToken) return;
+    setManualRecordingLoading({ cameraId: camera.id, action });
+    setRecordingOverrides((current) => ({ ...current, [camera.id]: action === 'start' }));
+    try {
+      await axios.post(`${API_URL}/cameras/${camera.id}/recording/${action}`, {}, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      await loadData();
+      window.alert(action === 'start' ? `Gravação iniciada: ${camera.name}` : `Gravação parada: ${camera.name}`);
+    } catch (error) {
+      setRecordingOverrides((current) => ({ ...current, [camera.id]: camera.status === 'recording' }));
+      window.alert(error instanceof Error ? error.message : `Falha ao ${action === 'start' ? 'iniciar' : 'parar'} gravação manual.`);
+    } finally {
+      setManualRecordingLoading(null);
+    }
+  };
+
+  const runMotionRecording = async (camera: Camera) => {
+    if (!accessToken || motionRecordingLoadingCameraId) return;
+    setMotionRecordingLoadingCameraId(camera.id);
+    try {
+      if (isMotionRecordingActive(camera)) {
+        setRecordingOverrides((current) => ({ ...current, [camera.id]: false }));
+        await axios.post(`${API_URL}/cameras/${camera.id}/recording/stop`, {}, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        window.alert(`Clip por movimento parado: ${camera.name}\nA câmera continua armada para o próximo movimento.`);
+      } else if (!isMotionRecordingMode(camera)) {
+        setRecordingOverrides((current) => ({ ...current, [camera.id]: false }));
+        await axios.post(`${API_URL}/cameras/${camera.id}/recording/motion`, { enabled: true }, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        window.alert(`Gravação por movimento ativada: ${camera.name}\nDetectou movimento, grava. Sem novo movimento por 60s, para sozinho.`);
+      } else {
+        window.alert(`Gravação por movimento já está armada: ${camera.name}\nO botão ficará vermelho quando a câmera estiver gravando um movimento.`);
+      }
+      await loadData();
+    } catch (error) {
+      setRecordingOverrides((current) => ({ ...current, [camera.id]: camera.status === 'recording' }));
+      window.alert(error instanceof Error ? error.message : 'Falha ao atualizar gravação por movimento.');
+    } finally {
+      setMotionRecordingLoadingCameraId(null);
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 p-5">
       <div className="flex-1 flex flex-col min-w-0 min-h-0 gap-4">
@@ -473,13 +961,13 @@ export default function CamerasPage() {
               className="h-8 pl-8 pr-3 w-48 rounded border border-border bg-background text-xs focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))] placeholder:text-[hsl(var(--muted-foreground)_/_0.5)]"
             />
           </div>
-          <Select value={zoneFilter} onValueChange={setZonaFilter}>
+          <Select value={zoneFilter} onValueChange={setZoneFilter}>
             <SelectTrigger className="w-36 h-8 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>{zones.map(z => <SelectItem key={z} value={z} className="text-xs">{z === 'All' ? 'Todas as Zonas' : z}</SelectItem>)}</SelectContent>
+            <SelectContent>{zones.map(z => <SelectItem key={z} value={z} className="text-xs">{z === 'all' ? 'Todas as zonas' : z}</SelectItem>)}</SelectContent>
           </Select>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
             <SelectTrigger className="w-28 h-8 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>{STATUSES.map(s => <SelectItem key={s} value={s} className="text-xs capitalize">{s === 'All' ? 'Todos os Status' : s}</SelectItem>)}</SelectContent>
+            <SelectContent>{STATUSES.map(s => <SelectItem key={s} value={s} className="text-xs">{STATUS_LABEL[s]}</SelectItem>)}</SelectContent>
           </Select>
 
           <div className="ml-auto flex items-center gap-2">
@@ -505,13 +993,15 @@ export default function CamerasPage() {
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 bg-card z-10">
                 <tr className="border-b border-border">
-                  {['Código', 'Nome', 'Zona', 'Modelo', 'Endereço IP', 'Status', 'FPS', 'Gravação', 'Ações'].map(h => (
+                  {['Código', 'Nome', 'Zona', 'Codec', 'Resolução', 'FPS', 'IP', 'Status', 'Gravação', 'Ações'].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-medium text-[hsl(var(--muted-foreground))] whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filtered.map(cam => (
+                {filtered.map(cam => {
+                  const recordingModeCopy = getRecordingModeCopy(cam.recordingMode);
+                  return (
                   <tr
                     key={cam.id}
                     className="hover:bg-[hsl(var(--accent))] transition-colors cursor-pointer"
@@ -520,31 +1010,78 @@ export default function CamerasPage() {
                     <td className="px-3 py-2.5 font-mono text-[10px]">{cam.code}</td>
                     <td className="px-3 py-2.5 font-medium max-w-52 truncate">{cam.name}</td>
                     <td className="px-3 py-2.5 text-[hsl(var(--muted-foreground))]">{cam.zone}</td>
-                    <td className="px-3 py-2.5 text-[hsl(var(--muted-foreground))] hidden lg:table-cell">{cam.model}</td>
+                    <td className="px-3 py-2.5 text-[hsl(var(--muted-foreground))] hidden lg:table-cell uppercase">{cam.streamVideoCodec ?? cam.detectedVideoCodec ?? '-'}</td>
+                    <td className="px-3 py-2.5 font-mono text-[10px] hidden xl:table-cell">{cam.resolution}</td>
+                    <td className="px-3 py-2.5 font-mono text-[10px]">{cam.fps}</td>
                     <td className="px-3 py-2.5 font-mono text-[10px] text-[hsl(var(--muted-foreground))] hidden xl:table-cell">{cam.ipAddress}</td>
                     <td className="px-3 py-2.5">
                       <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-mono capitalize ${STATUS_BADGE[cam.status] ?? STATUS_BADGE.offline}`}>
                         {cam.status.replace('_', ' ')}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 font-mono text-[10px]">{cam.fps}</td>
-                    <td className="px-3 py-2.5 capitalize text-[hsl(var(--muted-foreground))]">{cam.recordingMode}</td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex flex-col gap-1">
+                        <span className={`inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 text-[10px] font-mono ${recordingModeCopy.className}`}>
+                          {recordingModeCopy.label}
+                        </span>
+                        <span className="text-[9px] text-[hsl(var(--muted-foreground))]">{cam.retentionDays}d · {recordingModeCopy.detail}</span>
+                      </div>
+                    </td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                        {recordingHealthByCamera[cam.id]?.needsAttention && !isRecordingAutoRecovering(cam) ? (
+                          <button
+                            onClick={() => void reconnectSingleCamera(cam.id)}
+                            className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors"
+                            title={reconnectingSingleCameraId === cam.id ? 'Reconectando...' : 'Reconectar gravação desta câmera'}
+                            disabled={reconnectingSingleCameraId === cam.id}
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${reconnectingSingleCameraId === cam.id ? 'animate-spin' : ''}`} />
+                          </button>
+                        ) : null}
                         <button onClick={() => setLocation(`/cameras/${cam.id}?tab=settings`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors" title="Editar câmera"><Edit className="w-3.5 h-3.5" /></button>
                         <button onClick={() => void deleteCamera(cam)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors" title="Excluir câmera"><Trash2 className="w-3.5 h-3.5" /></button>
                         <button onClick={() => setLocation(`/playback?cameraId=${encodeURIComponent(cam.id)}`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))] transition-colors" title="Reprodução"><PlaySquare className="w-3.5 h-3.5" /></button>
+                        <button
+                          onClick={() => void runManualRecording(cam, isCameraRecording(cam) ? 'stop' : 'start')}
+                          className={`w-6 h-6 flex items-center justify-center rounded border transition-colors disabled:opacity-45 ${
+                            isCameraRecording(cam)
+                              ? 'border-red-500/55 text-red-400 hover:bg-red-500/10'
+                              : 'border-emerald-500/55 text-emerald-400 hover:bg-emerald-500/10'
+                          }`}
+                          title={isCameraRecording(cam) ? 'Parar gravação manual' : 'Iniciar gravação manual'}
+                          disabled={manualRecordingLoading?.cameraId === cam.id}
+                        >
+                          {manualRecordingLoading?.cameraId === cam.id ? (
+                            <span className="text-[10px]">...</span>
+                          ) : (
+                            <Circle className={`w-3 h-3 ${isCameraRecording(cam) ? 'fill-current' : ''}`} />
+                          )}
+                        </button>
                         {cam.ptzCapable && <button onClick={() => setLocation(`/ptz?cameraId=${encodeURIComponent(cam.id)}`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))] transition-colors" title="PTZ"><Crosshair className="w-3.5 h-3.5" /></button>}
+                        {cam.ptzCapable && (
+                          <button
+                            onClick={() => void diagnosePtzCamera(cam)}
+                            className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors disabled:opacity-45"
+                            title={diagnosingPtzCameraId === cam.id ? 'Diagnosticando PTZ...' : 'Diagnosticar PTZ'}
+                            disabled={diagnosingPtzCameraId === cam.id}
+                          >
+                            <Wifi className={`w-3.5 h-3.5 ${diagnosingPtzCameraId === cam.id ? 'animate-pulse' : ''}`} />
+                          </button>
+                        )}
                         <button className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors" title="Reiniciar"><RefreshCw className="w-3.5 h-3.5" /></button>
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4 p-5">
-              {filtered.map(cam => (
+              {filtered.map(cam => {
+                const recordingModeCopy = getRecordingModeCopy(cam.recordingMode);
+                return (
                 <div
                   key={cam.id}
                   className="bg-card border border-card-border rounded-xl overflow-hidden hover:border-[hsl(var(--primary)_/_0.4)] cursor-pointer transition-colors shadow-sm"
@@ -565,16 +1102,56 @@ export default function CamerasPage() {
                       <div>{cam.zone} · {cam.building}</div>
                       <div className="font-mono">{cam.model}</div>
                       <div className="font-mono">{cam.ipAddress}</div>
+                      <div className={`mt-1 inline-flex rounded-md border px-1.5 py-0.5 font-mono text-[9px] ${recordingModeCopy.className}`}>
+                        {recordingModeCopy.label}
+                      </div>
                     </div>
                     <div className="mt-2 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {recordingHealthByCamera[cam.id]?.needsAttention && !isRecordingAutoRecovering(cam) ? (
+                        <button
+                          onClick={() => void reconnectSingleCamera(cam.id)}
+                          className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors"
+                          title={reconnectingSingleCameraId === cam.id ? 'Reconectando...' : 'Reconectar gravação desta câmera'}
+                          disabled={reconnectingSingleCameraId === cam.id}
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${reconnectingSingleCameraId === cam.id ? 'animate-spin' : ''}`} />
+                        </button>
+                      ) : null}
                       <button onClick={() => setLocation(`/cameras/${cam.id}?tab=settings`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors" title="Editar câmera"><Edit className="w-3.5 h-3.5" /></button>
                       <button onClick={() => void deleteCamera(cam)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors" title="Excluir câmera"><Trash2 className="w-3.5 h-3.5" /></button>
                       <button onClick={() => setLocation(`/playback?cameraId=${encodeURIComponent(cam.id)}`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))] transition-colors" title="Reprodução"><PlaySquare className="w-3.5 h-3.5" /></button>
+                      <button
+                        onClick={() => void runManualRecording(cam, isCameraRecording(cam) ? 'stop' : 'start')}
+                        className={`w-6 h-6 flex items-center justify-center rounded border transition-colors disabled:opacity-45 ${
+                          isCameraRecording(cam)
+                            ? 'border-red-500/55 text-red-400 hover:bg-red-500/10'
+                            : 'border-emerald-500/55 text-emerald-400 hover:bg-emerald-500/10'
+                        }`}
+                        title={isCameraRecording(cam) ? 'Parar gravação manual' : 'Iniciar gravação manual'}
+                        disabled={manualRecordingLoading?.cameraId === cam.id}
+                      >
+                        {manualRecordingLoading?.cameraId === cam.id ? (
+                          <span className="text-[10px]">...</span>
+                        ) : (
+                          <Circle className={`w-3 h-3 ${isCameraRecording(cam) ? 'fill-current' : ''}`} />
+                        )}
+                      </button>
                       {cam.ptzCapable && <button onClick={() => setLocation(`/ptz?cameraId=${encodeURIComponent(cam.id)}`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))] transition-colors" title="PTZ"><Crosshair className="w-3.5 h-3.5" /></button>}
+                      {cam.ptzCapable && (
+                        <button
+                          onClick={() => void diagnosePtzCamera(cam)}
+                          className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors disabled:opacity-45"
+                          title={diagnosingPtzCameraId === cam.id ? 'Diagnosticando PTZ...' : 'Diagnosticar PTZ'}
+                          disabled={diagnosingPtzCameraId === cam.id}
+                        >
+                          <Wifi className={`w-3.5 h-3.5 ${diagnosingPtzCameraId === cam.id ? 'animate-pulse' : ''}`} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -582,7 +1159,12 @@ export default function CamerasPage() {
 
       {/* Camera detail panel */}
       <AnimatePresence>
-        {selectedCam && (
+        {selectedCam && (() => {
+          const liveCam = selectedCamLive ?? selectedCam;
+          const recordingModeCopy = getRecordingModeCopy(liveCam.recordingMode);
+          const recordingActive = isCameraRecording(liveCam);
+          const motionActive = isMotionRecordingActive(liveCam);
+          return (
           <motion.div
             initial={{ width: 0, opacity: 0 }}
             animate={{ width: 320, opacity: 1 }}
@@ -602,9 +1184,14 @@ export default function CamerasPage() {
               </div>
               <div>
                 <div className="text-sm font-semibold mb-0.5">{selectedCam.name}</div>
-                <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-mono capitalize ${STATUS_BADGE[selectedCam.status] ?? STATUS_BADGE.offline}`}>
-                  {selectedCam.status.replace('_', ' ')}
-                </span>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-mono capitalize ${STATUS_BADGE[liveCam.status] ?? STATUS_BADGE.offline}`}>
+                    {liveCam.status.replace('_', ' ')}
+                  </span>
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-mono ${recordingModeCopy.className}`}>
+                    {recordingModeCopy.label}
+                  </span>
+                </div>
               </div>
               <div className="space-y-2 text-xs">
                 {[
@@ -616,7 +1203,7 @@ export default function CamerasPage() {
                   ['Modelo', selectedCam.model],
                   ['Resolução', selectedCam.resolution],
                   ['FPS', selectedCam.fps.toString()],
-                  ['Gravação', selectedCam.recordingMode],
+                  ['Gravação', recordingModeCopy.label],
                   ['Retenção', `${selectedCam.retentionDays} dias`],
                   ['PTZ', selectedCam.ptzCapable ? 'Sim' : 'Não'],
                   ['Áudio', selectedCam.hasAudio ? 'Sim' : 'Não'],
@@ -628,6 +1215,50 @@ export default function CamerasPage() {
                 ))}
               </div>
               <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    onClick={() => void reconnectSingleCamera(selectedCam.id)}
+                    className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors text-[hsl(var(--destructive))] disabled:opacity-45"
+                    disabled={reconnectingSingleCameraId === selectedCam.id || !recordingHealthByCamera[selectedCam.id]?.needsAttention || isRecordingAutoRecovering(selectedCam)}
+                    title="Reconectar gravação"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${reconnectingSingleCameraId === selectedCam.id ? 'animate-spin' : ''}`} />
+                    {reconnectingSingleCameraId === selectedCam.id ? '...' : 'Reconectar'}
+                  </button>
+                  <button
+                    onClick={() => void runManualRecording(liveCam, recordingActive ? 'stop' : 'start')}
+                    className={`w-full h-9 rounded border text-xs flex items-center justify-center hover:bg-[hsl(var(--accent))] transition-colors disabled:opacity-45 ${
+                      recordingActive
+                        ? 'border-red-500/55 text-red-400'
+                        : 'border-emerald-500/55 text-emerald-400'
+                    }`}
+                    disabled={manualRecordingLoading?.cameraId === selectedCam.id}
+                    title={recordingActive ? 'Parar gravação manual' : 'Iniciar gravação manual'}
+                  >
+                    {manualRecordingLoading?.cameraId === selectedCam.id ? (
+                      <span className="text-[10px]">...</span>
+                    ) : (
+                      <Circle className={`w-4 h-4 ${recordingActive ? 'fill-current' : ''}`} />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => void runMotionRecording(liveCam)}
+                    className={`w-full h-9 rounded border text-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-45 ${
+                      motionActive
+                        ? 'border-red-500/55 bg-red-500/10 text-red-400 hover:bg-red-500/15'
+                        : 'border-emerald-500/55 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15'
+                    }`}
+                    disabled={motionRecordingLoadingCameraId === selectedCam.id}
+                    title={motionActive ? 'Parar clip atual por movimento' : 'Armar gravação por movimento'}
+                  >
+                    <Radar className={`w-4 h-4 ${motionRecordingLoadingCameraId === selectedCam.id ? 'animate-pulse' : ''}`} />
+                    Movimento
+                  </button>
+                </div>
+                <div className="rounded-lg border border-border bg-background/60 px-3 py-2 text-[10px] text-[hsl(var(--muted-foreground))]">
+                  <span className="font-semibold text-foreground">Regra atual:</span> {recordingModeCopy.detail}
+                  {recordingActive ? ' Está gravando agora.' : ' Não está gravando agora.'}
+                </div>
                 <button onClick={() => setLocation(`/cameras/${selectedCam.id}?tab=settings`)} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors">
                   <Edit className="w-4 h-4" /> Editar Câmera
                 </button>
@@ -642,10 +1273,21 @@ export default function CamerasPage() {
                     <Crosshair className="w-4 h-4" /> Controle PTZ
                   </button>
                 )}
+                {selectedCam.ptzCapable && (
+                  <button
+                    onClick={() => void diagnosePtzCamera(selectedCam)}
+                    className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors"
+                    disabled={diagnosingPtzCameraId === selectedCam.id}
+                  >
+                    <Wifi className={`w-4 h-4 ${diagnosingPtzCameraId === selectedCam.id ? 'animate-pulse' : ''}`} />
+                    {diagnosingPtzCameraId === selectedCam.id ? 'Diagnosticando PTZ...' : 'Diagnosticar PTZ'}
+                  </button>
+                )}
               </div>
             </div>
           </motion.div>
-        )}
+          );
+        })()}
       </AnimatePresence>
 
       {showWizard && <WizardModal onClose={() => setShowWizard(false)} zones={zones} onCreated={createCamera} onTestConnection={testConnectionDraft} />}

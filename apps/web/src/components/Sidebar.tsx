@@ -1,15 +1,14 @@
 import { Link, useLocation } from 'wouter';
 import { motion } from 'framer-motion';
 import {
-  LayoutDashboard, Monitor, PlaySquare, Activity, Bell,
-  Camera, Map, Search, Archive, Settings,
-  HardDrive, ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
-  Server, Users, Wrench, Radar, Brain, FileText, ClipboardList, Maximize2
+  LayoutDashboard, Monitor, PlaySquare,
+  Camera, Settings,
+  Gauge, ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
+  Server, Users, Radar
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSidebarStore } from '../store/sidebarStore';
 import { useAuthStore } from '../store/authStore';
-import { useAlarmStore } from '../store/alarmStore';
 
 const NAV_SECTIONS = [
   {
@@ -19,17 +18,6 @@ const NAV_SECTIONS = [
       { path: '/dashboard', label: 'Painel', icon: LayoutDashboard },
       { path: '/live', label: 'Ao Vivo', icon: Monitor },
       { path: '/playback', label: 'Reprodução', icon: PlaySquare },
-      { path: '/events', label: 'Eventos', icon: Activity },
-      { path: '/alarms', label: 'Alertas', icon: Bell, alarms: true },
-    ],
-  },
-  {
-    label: 'Operações',
-    icon: Wrench,
-    items: [
-      { path: '/investigation', label: 'Investigação', icon: Search },
-      { path: '/evidence', label: 'Exportar Evidências', icon: Archive },
-      { path: '/ai', label: 'Assistente IA', icon: Brain },
     ],
   },
   {
@@ -37,8 +25,7 @@ const NAV_SECTIONS = [
     icon: Server,
     items: [
       { path: '/cameras', label: 'Câmeras', icon: Camera },
-      { path: '/map', label: 'Mapa / Planta', icon: Map },
-      { path: '/storage', label: 'Armazenamento', icon: HardDrive },
+      { path: '/storage', label: 'Monitoramento', icon: Gauge },
     ],
   },
   {
@@ -46,9 +33,6 @@ const NAV_SECTIONS = [
     icon: Users,
     items: [
       { path: '/users', label: 'Usuários', icon: Users },
-      { path: '/roles', label: 'Perfis', icon: Shield },
-      { path: '/audit', label: 'Logs de Auditoria', icon: ClipboardList },
-      { path: '/reports', label: 'Relatórios', icon: FileText },
       { path: '/settings', label: 'Configurações', icon: Settings },
     ],
   },
@@ -64,11 +48,15 @@ const ROLE_COLOR: Record<string, string> = {
 export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
   const { isExpanded, toggle } = useSidebarStore();
   const { user, logout } = useAuthStore();
-  const { alarms } = useAlarmStore();
   const [location] = useLocation();
 
-  const activeAlarmCount = alarms.filter(a => a.status === 'active').length;
   const roleColor = ROLE_COLOR[user?.role ?? 'operator'] ?? ROLE_COLOR.operator;
+  const visibleSections = NAV_SECTIONS
+    .map((section) => ({
+      ...section,
+      items: section.label === 'Administração' && user?.role !== 'admin' ? [] : section.items,
+    }))
+    .filter((section) => section.items.length > 0);
 
   return (
     <motion.aside
@@ -106,7 +94,7 @@ export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
 
       {/* ── Navigation ── */}
       <nav className="flex-1 overflow-y-auto px-2 py-4 space-y-5">
-        {NAV_SECTIONS.map(section => (
+        {visibleSections.map(section => (
           <div key={section.label} className="space-y-1.5">
             {isExpanded && (
               <div className="flex items-center gap-2 px-3 pt-1 text-[9px] font-mono uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground)_/_0.7)]">
@@ -115,7 +103,7 @@ export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
               </div>
             )}
             <div className="space-y-1.5">
-              {section.items.map(({ path, label, icon: Icon, alarms: hasAlertas }) => {
+              {section.items.map(({ path, label, icon: Icon }) => {
                 const isActive = location === path || (path !== '/dashboard' && location.startsWith(path));
                 return isExpanded ? (
                   <Link key={path} href={path}>
@@ -129,11 +117,6 @@ export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
                     >
                       <Icon className="w-4 h-4 shrink-0" />
                       <span className="text-[12.5px] font-medium flex-1 truncate">{label}</span>
-                      {hasAlertas && activeAlarmCount > 0 && (
-                        <span className="shrink-0 min-w-[20px] h-[18px] flex items-center justify-center px-1 rounded-full bg-[hsl(var(--destructive)_/_0.16)] border border-[hsl(var(--destructive)_/_0.28)] text-[hsl(var(--destructive))] text-[9px] font-bold font-mono">
-                          {activeAlarmCount}
-                        </span>
-                      )}
                     </div>
                   </Link>
                 ) : (
@@ -148,7 +131,6 @@ export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
                             }`}
                         >
                           <Icon className="w-4 h-4 shrink-0" />
-                          {hasAlertas && activeAlarmCount > 0 && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[hsl(var(--destructive))]" />}
                         </div>
                       </Link>
                     </TooltipTrigger>

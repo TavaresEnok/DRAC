@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import * as os from 'node:os';
-import { statfs } from 'node:fs/promises';
+import { statfs, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 @Injectable()
 export class HealthService {
@@ -9,6 +10,8 @@ export class HealthService {
 
   async getSystemSummary() {
     const recordingsRoot = process.env.RECORDINGS_ROOT ?? '/storage';
+    const storageBackend = process.env.STORAGE_BACKEND ?? 'local';
+    const writeProbeEnabled = String(process.env.STORAGE_WRITE_PROBE_ENABLED ?? 'true') !== 'false';
 
     const [disk, recordings] = await Promise.all([
       statfs(recordingsRoot),
@@ -22,11 +25,30 @@ export class HealthService {
     const totalBytes = Number(disk.blocks) * Number(disk.bsize);
     const freeBytes = Number(disk.bavail) * Number(disk.bsize);
     const usedBytes = Math.max(totalBytes - freeBytes, 0);
+    let writable = null as null | boolean;
+    let writeProbeError: string | null = null;
+    if (writeProbeEnabled) {
+      const probePath = join(recordingsRoot, `.health-write-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
+      try {
+        await writeFile(probePath, 'health_probe');
+        await unlink(probePath);
+        writable = true;
+      } catch (error) {
+        writable = false;
+        writeProbeError = error instanceof Error ? error.message : String(error);
+      }
+    }
 
     return {
       status: 'ok',
       service: 'api',
       recordingsRoot,
+      storage: {
+        backend: storageBackend,
+        writeProbeEnabled,
+        writable,
+        writeProbeError,
+      },
       server: {
         hostname: os.hostname(),
         platform: os.platform(),

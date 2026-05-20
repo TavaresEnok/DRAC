@@ -16,6 +16,13 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   ptz_tour_started: 'Ronda PTZ Iniciada',
   recording_gap: 'Lacuna de Gravação',
   face_detected: 'Rosto Detectado',
+  HEALTH_CAMERA_OFFLINE: 'Câmera Offline (Saúde)',
+  HEALTH_RECORDING_STALE: 'Rotina interna de gravação',
+  HEALTH_RECORDING_RECOVERED: 'Gravação Recuperada',
+  HEALTH_AUTO_RECOVERED: 'Câmera Recuperada (Saúde)',
+  HEALTH_RECORDING_RECONNECT_REQUESTED: 'Reconexão de Gravação Solicitada',
+  HEALTH_RECORDING_RECONNECT_SUCCESS: 'Reconexão de Gravação Concluída',
+  HEALTH_RECORDING_RECONNECT_FAILED: 'Falha na Reconexão de Gravação',
 };
 
 const SEV_STYLES: Record<string, string> = {
@@ -42,6 +49,7 @@ export default function EventosPage() {
   const [sevFilter, setSevFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [ackFilter, setAckFilter] = useState('all');
+  const [healthFilter, setHealthFilter] = useState('all');
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [drawerEvent, setDrawerEvent] = useState<VMSEvent | null>(events[0] ?? null);
@@ -52,6 +60,10 @@ export default function EventosPage() {
     if (typeFilter !== 'all' && evt.type !== typeFilter) return false;
     if (ackFilter === 'unacknowledged' && evt.acknowledged) return false;
     if (ackFilter === 'acknowledged' && !evt.acknowledged) return false;
+    if (healthFilter === 'health' && !evt.type.startsWith('HEALTH_')) return false;
+    if (healthFilter === 'stream' && !evt.type.startsWith('STREAM_')) return false;
+    if (healthFilter === 'degraded' && evt.type !== 'HEALTH_RECORDING_STALE') return false;
+    if (healthFilter === 'recovered' && evt.type !== 'HEALTH_RECORDING_RECOVERED' && evt.type !== 'HEALTH_AUTO_RECOVERED') return false;
     return true;
   });
 
@@ -134,6 +146,16 @@ export default function EventosPage() {
                   <SelectItem value="acknowledged" className="text-xs">Reconhecido</SelectItem>
                 </SelectContent>
               </Select>
+              <Select value={healthFilter} onValueChange={v => { setHealthFilter(v); setPage(0); }}>
+                <SelectTrigger className="w-36 h-8 text-[11px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" className="text-xs">Operação: todas</SelectItem>
+                  <SelectItem value="health" className="text-xs">Somente saúde</SelectItem>
+                  <SelectItem value="stream" className="text-xs">Somente transmissão</SelectItem>
+                  <SelectItem value="degraded" className="text-xs">Rotina de gravação</SelectItem>
+                  <SelectItem value="recovered" className="text-xs">Eventos de recuperação</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             {selected.size > 0 && (
@@ -183,7 +205,7 @@ export default function EventosPage() {
                           <span>•</span>
                           <span>{format(new Date(evt.timestamp), 'HH:mm:ss')}</span>
                           <span>•</span>
-                          <span>{evt.acknowledged ? 'ACK' : 'OPEN'}</span>
+                          <span>{evt.acknowledged ? 'RECONHECIDO' : 'ABERTO'}</span>
                         </div>
                       </div>
                     </div>
@@ -238,7 +260,7 @@ export default function EventosPage() {
                     <div className="absolute inset-0 flex items-center justify-center">
                       <div className="text-center">
                         <Video className="w-9 h-9 mx-auto text-[hsl(var(--primary))] opacity-80" />
-                        <div className="mt-2 text-[10px] font-mono tracking-[0.18em] text-[hsl(var(--muted-foreground))]">RECONHECIMENTO DA CÂMERA</div>
+                        <div className="mt-2 text-[10px] font-mono tracking-[0.18em] text-[hsl(var(--muted-foreground))]">VISUALIZAÇÃO DA CÂMERA</div>
                         <div className="mt-1 text-[12px] font-semibold">{currentCamera?.code ?? 'CAM-000'}</div>
                       </div>
                     </div>

@@ -1,5 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import { Public } from '../auth/decorators/public.decorator';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { HealthService } from './health.service';
 
 @Controller('health')
@@ -16,7 +18,7 @@ export class HealthController {
     };
   }
 
-  @Public()
+  @Roles(UserRole.ADMIN)
   @Get('system')
   system() {
     return this.healthService.getSystemSummary();

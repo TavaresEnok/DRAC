@@ -4,10 +4,11 @@ import { AuditModule } from '../audit/audit.module';
 import { CamerasModule } from '../cameras/cameras.module';
 import { PtzController } from './ptz.controller';
 import { OnvifPtzService } from './onvif-ptz.service';
+import { PtzStateStore } from './ptz-state.store';
 
 @Module({
   imports: [CamerasModule, AuditModule, AccessControlModule],
   controllers: [PtzController],
-  providers: [OnvifPtzService],
+  providers: [OnvifPtzService, PtzStateStore],
 })
 export class PtzModule {}

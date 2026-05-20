@@ -10,8 +10,8 @@ authInternalUsers:
       - action: publish
       - action: read
       - action: playback
-  - user: nexusguard
-    pass: nexusguard123
+  - user: ${MEDIAMTX_API_USER}
+    pass: ${MEDIAMTX_API_PASS}
     permissions:
       - action: api
       - action: metrics

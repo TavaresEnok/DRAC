@@ -14,6 +14,10 @@ export class AiManagerService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    if (String(process.env.AI_AUTO_START_ENABLED ?? 'true') === 'false') {
+      this.logger.log('Sincronização automática de IA desativada por AI_AUTO_START_ENABLED=false.');
+      return;
+    }
     this.logger.log('Sincronizando IA com as câmeras...');
     // Aguarda um pouco para os serviços estarem prontos
     setTimeout(() => void this.syncAll(), 5000);
@@ -41,8 +45,21 @@ export class AiManagerService implements OnModuleInit {
 
   private buildRtspUrl(cam: any, password: string): string {
     const port = cam.rtspPort || 554;
-    let path = cam.rtspPath || `/Streaming/Channels/${cam.channel}${cam.subtype.toString().padStart(2, '0')}`;
+    const configuredSubtype = Number(process.env.AI_RTSP_SUBTYPE ?? '1');
+    const aiSubtype = Number.isFinite(configuredSubtype) && configuredSubtype >= 0 ? configuredSubtype : cam.subtype;
+    let path = cam.rtspPath || `/Streaming/Channels/${cam.channel}${aiSubtype.toString().padStart(2, '0')}`;
     if (!path.startsWith('/')) path = '/' + path;
+
+    if (Number.isFinite(aiSubtype)) {
+      if (/[?&]subtype=\d+/i.test(path)) {
+        path = path.replace(/([?&]subtype=)\d+/i, `$1${aiSubtype}`);
+      } else {
+        path = path.replace(
+          /(\/Streaming\/Channels\/\d)\d{2}/i,
+          (_match: string, prefix: string) => `${prefix}${aiSubtype.toString().padStart(2, '0')}`,
+        );
+      }
+    }
     
     // URL format: rtsp://user:pass@ip:port/path
     return `rtsp://${cam.username}:${password}@${cam.ip}:${port}${path}`;

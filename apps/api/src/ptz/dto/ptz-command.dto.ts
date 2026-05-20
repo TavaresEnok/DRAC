@@ -1,7 +1,7 @@
-import { IsIn, IsOptional, IsString, ValidateIf } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, Min, ValidateIf } from 'class-validator';
 
 export const PTZ_DIRECTIONS = ['Up', 'Down', 'Left', 'Right', 'ZoomIn', 'ZoomOut'] as const;
-export const PTZ_ACTIONS = ['start', 'stop'] as const;
+export const PTZ_ACTIONS = ['start', 'stop', 'step', 'home'] as const;
 
 export class PtzCommandDto {
   @IsString()
@@ -9,8 +9,20 @@ export class PtzCommandDto {
   action!: (typeof PTZ_ACTIONS)[number];
 
   @IsOptional()
-  @ValidateIf((object: PtzCommandDto) => object.action === 'start')
+  @ValidateIf((object: PtzCommandDto) => object.action === 'start' || object.action === 'stop' || object.action === 'step')
   @IsString()
   @IsIn(PTZ_DIRECTIONS)
   direction?: (typeof PTZ_DIRECTIONS)[number];
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  speed?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(120)
+  @Max(2500)
+  durationMs?: number;
 }

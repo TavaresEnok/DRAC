@@ -29,14 +29,14 @@ export default function RelatóriosPage() {
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         <div className="flex items-center gap-2 pb-2 border-b border-border">
           <BarChart3 className="h-4 w-4 text-primary" />
-          <h2 className="font-semibold">Operational Summary</h2>
+          <h2 className="font-semibold">Resumo Operacional</h2>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
               <Camera className="h-3.5 w-3.5" />
-              Cameras
+              Câmeras
             </div>
             <div className="mt-3 text-2xl font-semibold">{cameras.length}</div>
             <div className="mt-1 text-xs text-muted-foreground">{cameras.filter((camera) => camera.isOnline).length} online</div>
@@ -48,13 +48,13 @@ export default function RelatóriosPage() {
               Eventos
             </div>
             <div className="mt-3 text-2xl font-semibold">{events.length}</div>
-            <div className="mt-1 text-xs text-muted-foreground">{alarms.filter((alarm) => alarm.status === 'active').length} alarms ativas</div>
+            <div className="mt-1 text-xs text-muted-foreground">{alarms.filter((alarm) => alarm.status === 'active').length} alertas ativos</div>
           </div>
 
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
               <FileText className="h-3.5 w-3.5" />
-              Gravaçãos
+              Gravações
             </div>
             <div className="mt-3 text-2xl font-semibold">{recordings.length}</div>
             <div className="mt-1 text-xs text-muted-foreground">
@@ -65,7 +65,7 @@ export default function RelatóriosPage() {
           <div className="bg-card rounded-lg border border-border p-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
               <HardDrive className="h-3.5 w-3.5" />
-              Disk
+              Disco
             </div>
             <div className="mt-3 text-2xl font-semibold">{system?.disk.usagePercent ?? 0}%</div>
             <div className="mt-1 text-xs text-muted-foreground">
@@ -75,7 +75,7 @@ export default function RelatóriosPage() {
         </div>
 
         <div className="bg-card rounded-lg border border-border p-5">
-          <div className="text-sm font-semibold">Current Report Scope</div>
+          <div className="text-sm font-semibold">Escopo Atual do Relatório</div>
           <div className="mt-2 text-sm text-muted-foreground">
             Esta página agora exibe apenas dados reais do ambiente atual. Relatórios analíticos avançados ainda dependem de agregações específicas no backend.
           </div>
@@ -85,7 +85,7 @@ export default function RelatóriosPage() {
               <div className="mt-1 font-mono">{system?.server.hostname ?? 'N/D'}</div>
             </div>
             <div className="rounded-lg border border-border bg-background px-4 py-3">
-              <div className="text-muted-foreground uppercase tracking-wider text-[10px]">Gravaçãos Root</div>
+              <div className="text-muted-foreground uppercase tracking-wider text-[10px]">Pasta Raiz das Gravações</div>
               <div className="mt-1 font-mono">{system?.recordingsRoot ?? 'N/D'}</div>
             </div>
           </div>

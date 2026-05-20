@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Camera as CameraIcon, PlaySquare, Crosshair, Maximize2, Info, Volume2, VolumeX, AlertTriangle } from 'lucide-react';
+import { Camera as CameraIcon, PlaySquare, Crosshair, Maximize2, Info, Volume2, VolumeX, AlertTriangle, Circle } from 'lucide-react';
 import { Camera } from '../store/vmsDataStore';
 import { LiveStreamPlayer } from './LiveStreamPlayer';
 
@@ -11,6 +11,7 @@ interface CameraTileProps {
   onDoubleClick?: () => void;
   onAction?: (action: string, camera: Camera) => void;
   compact?: boolean;
+  streamStartDelayMs?: number;
 }
 
 /* Muted, professional status colors — no neon */
@@ -33,16 +34,17 @@ const TILE_BG = [
   'linear-gradient(145deg, hsl(220 20% 9%), hsl(222 18% 12%))',
 ];
 
-export function CameraTile({ camera, selected, onClick, onDoubleClick, onAction, compact }: CameraTileProps) {
+export function CameraTile({ camera, selected, onClick, onDoubleClick, onAction, compact, streamStartDelayMs = 0 }: CameraTileProps) {
   const [hovered, setHovered] = useState(false);
   const [muted, setMuted] = useState(true);
 
   const isOffline  = camera.status === 'offline' || camera.status === 'no_signal';
   const isAlarm    = camera.status === 'alarm';
-  const isGravação = camera.status === 'recording' || camera.status === 'online';
+  const isGravação = camera.status === 'recording';
   const isMotion   = camera.status === 'motion';
+  const isManualRecordingActive = camera.status === 'recording';
 
-  const bgIdx = parseInt(camera.id.replace('cam-', '')) % TILE_BG.length;
+  const bgIdx = camera.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % TILE_BG.length;
 
   return (
     <motion.div
@@ -60,7 +62,14 @@ export function CameraTile({ camera, selected, onClick, onDoubleClick, onAction,
     >
       {!isOffline && (
         <div className="absolute inset-0">
-          <LiveStreamPlayer cameraId={camera.id} cameraName={camera.name} showOverlay className="h-full w-full" muted={muted} />
+          <LiveStreamPlayer
+            cameraId={camera.id}
+            cameraName={camera.name}
+            showOverlay
+            className="h-full w-full"
+            muted={muted}
+            startDelayMs={streamStartDelayMs}
+          />
         </div>
       )}
 
@@ -87,7 +96,7 @@ export function CameraTile({ camera, selected, onClick, onDoubleClick, onAction,
       )}
 
       {/* Top-left: camera code + status badge */}
-      <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
+      <div className="absolute top-1.5 left-1.5 z-20 flex items-center gap-1">
         <span className="font-mono text-[9px] text-white/55 tracking-wider bg-black/35 px-1.5 py-px rounded-sm">
           {camera.code}
         </span>
@@ -105,10 +114,24 @@ export function CameraTile({ camera, selected, onClick, onDoubleClick, onAction,
 
       {/* Top-right: recording dot + fps */}
       {!isOffline && (
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-1.5">
+        <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-1.5">
           {isGravação && (
             <span className="w-1.5 h-1.5 rounded-full rec-pulse" style={{ background: 'hsl(354 50% 50%)' }} />
           )}
+          <button
+            className={`h-5 w-5 flex items-center justify-center rounded border bg-black/55 transition-colors ${
+              isManualRecordingActive
+                ? 'border-red-500/60 text-red-300 hover:bg-red-500/20'
+                : 'border-emerald-500/60 text-emerald-300 hover:bg-emerald-500/20'
+            }`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onAction?.(isManualRecordingActive ? 'record-stop' : 'record-start', camera);
+            }}
+            title={isManualRecordingActive ? 'Parar gravação manual' : 'Iniciar gravação manual'}
+          >
+            <Circle className={`h-2.5 w-2.5 ${isManualRecordingActive ? 'fill-current' : ''}`} />
+          </button>
           {!compact && (
             <span className="font-mono text-[9px] text-white/35">{camera.fps}fps</span>
           )}
@@ -116,7 +139,7 @@ export function CameraTile({ camera, selected, onClick, onDoubleClick, onAction,
       )}
 
       {/* Bottom gradient + info */}
-      <div className="absolute bottom-0 left-0 right-0 px-2 py-1.5 bg-gradient-to-t from-black/65 to-transparent">
+      <div className="absolute bottom-0 left-0 right-0 z-10 px-2 py-1.5 bg-gradient-to-t from-black/65 to-transparent">
         <div className="flex items-end justify-between gap-1">
           <div className="flex-1 min-w-0">
             <div className={`text-white/90 font-medium truncate ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
@@ -146,7 +169,7 @@ export function CameraTile({ camera, selected, onClick, onDoubleClick, onAction,
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.12 }}
-            className="absolute bottom-0 left-0 right-0 flex items-center justify-center gap-0.5 py-1.5 px-2 bg-black/75 backdrop-blur-[2px]"
+            className="absolute bottom-1 left-2 z-30 flex items-center gap-0.5 rounded-md py-1.5 px-2 bg-black/75 backdrop-blur-[2px]"
             onClick={e => e.stopPropagation()}
           >
             {camera.ptzCapable && (
@@ -158,6 +181,17 @@ export function CameraTile({ camera, selected, onClick, onDoubleClick, onAction,
                 <Crosshair className="w-3 h-3" />
               </button>
             )}
+            <button
+              className={`w-6 h-6 flex items-center justify-center rounded border transition-colors ${
+                isManualRecordingActive
+                  ? 'border-red-500/60 bg-red-500/10 text-red-300 hover:bg-red-500/20'
+                  : 'border-emerald-500/60 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+              }`}
+              onClick={() => onAction?.(isManualRecordingActive ? 'record-stop' : 'record-start', camera)}
+              title={isManualRecordingActive ? 'Parar gravação manual' : 'Iniciar gravação manual'}
+            >
+              <Circle className={`w-3 h-3 ${isManualRecordingActive ? 'fill-current' : ''}`} />
+            </button>
             <button
               className="w-6 h-6 flex items-center justify-center rounded text-white/50 hover:text-[hsl(var(--primary))] hover:bg-white/8 transition-colors"
               onClick={() => onAction?.('playback', camera)}

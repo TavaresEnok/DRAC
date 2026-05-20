@@ -5,6 +5,7 @@ import requests
 import os
 import numpy as np
 from queue import Queue
+from urllib.parse import urlsplit, urlunsplit
 
 class StreamProcessor:
     def __init__(self, camera_id, rtsp_url, api_url, service_token):
@@ -15,7 +16,12 @@ class StreamProcessor:
         self.running = False
         self.thread = None
         self.capture_thread = None
-        self.frame_queue = Queue(maxsize=5)
+        self.process_fps = max(0.2, float(os.getenv("AI_PROCESS_FPS", "2")))
+        self.frame_width = max(160, int(os.getenv("AI_FRAME_WIDTH", "320")))
+        self.frame_height = max(90, int(os.getenv("AI_FRAME_HEIGHT", "180")))
+        self.motion_pixels_threshold = max(1, int(os.getenv("AI_MOTION_PIXELS_THRESHOLD", "1800")))
+        self.motion_debounce_seconds = max(5, int(os.getenv("AI_MOTION_DEBOUNCE_SECONDS", "30")))
+        self.frame_queue = Queue(maxsize=1)
         self.last_event_time = 0
         self.last_seen = 0
 
@@ -41,9 +47,20 @@ class StreamProcessor:
         if self.thread:
             self.thread.join(timeout=2)
 
+    def _sanitize_url(self, url):
+        try:
+            parsed = urlsplit(url)
+            if "@" not in parsed.netloc:
+                return url
+            safe_netloc = f"***:***@{parsed.netloc.rsplit('@', 1)[1]}"
+            return urlunsplit((parsed.scheme, safe_netloc, parsed.path, parsed.query, parsed.fragment))
+        except Exception:
+            return "<rtsp-url-redacted>"
+
     def _capture_frames(self):
-        print(f"[{self.camera_id}] Iniciando captura: {self.rtsp_url}")
-        cap = cv2.VideoCapture(self.rtsp_url)
+        print(f"[{self.camera_id}] Iniciando captura: {self._sanitize_url(self.rtsp_url)}")
+        cap = self._open_capture()
+        capture_interval = 1.0 / self.process_fps
         
         while self.running:
             ret, frame = cap.read()
@@ -51,7 +68,7 @@ class StreamProcessor:
                 print(f"[{self.camera_id}] Falha na captura, reconectando em 5s...")
                 cap.release()
                 time.sleep(5)
-                cap = cv2.VideoCapture(self.rtsp_url)
+                cap = self._open_capture()
                 continue
             
             self.last_seen = time.time()
@@ -65,11 +82,18 @@ class StreamProcessor:
                     self.frame_queue.put(frame)
                 except:
                     pass
+
+            time.sleep(capture_interval)
         
         cap.release()
 
+    def _open_capture(self):
+        cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        return cap
+
     def _process(self):
-        print(f"[{self.camera_id}] Iniciando processamento de movimento...")
+        print(f"[{self.camera_id}] Iniciando processamento de movimento ({self.process_fps} fps, {self.frame_width}x{self.frame_height})...")
         fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=True)
         
         while self.running:
@@ -80,7 +104,7 @@ class StreamProcessor:
             frame = self.frame_queue.get()
             
             # Reduzir resolução para processamento rápido (mais eficiente para IA local)
-            small_frame = cv2.resize(frame, (640, 360))
+            small_frame = cv2.resize(frame, (self.frame_width, self.frame_height))
             fgmask = fgbg.apply(small_frame)
             
             # Limpeza de ruído morfológica
@@ -90,15 +114,14 @@ class StreamProcessor:
             # Contagem de pixels de movimento
             motion_pixels = np.count_nonzero(fgmask)
             
-            # Se mais de 1% da tela mudou
-            if motion_pixels > 8000: 
+            if motion_pixels > self.motion_pixels_threshold: 
                 current_time = time.time()
-                if current_time - self.last_event_time > 15:  # Debounce de 15 segundos
+                if current_time - self.last_event_time > self.motion_debounce_seconds:
                     self._report_event("MOTION_DETECTED", motion_pixels)
                     self.last_event_time = current_time
 
             # Pequena pausa para aliviar CPU em sistemas standalone
-            time.sleep(0.05)
+            time.sleep(0.02)
 
     def _report_event(self, event_type, value):
         print(f"[{self.camera_id}] Evento: {event_type} ({value})")

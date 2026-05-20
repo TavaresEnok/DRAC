@@ -1,138 +1,617 @@
-import { useState } from 'react';
-import { Users, Plus, UserX, Unlock, Edit2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import axios from 'axios';
+import { Users, Plus, UserX, Unlock, Edit2, FolderLock, Camera, Save, Trash2, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { useVmsDataStore } from '../store/vmsDataStore';
+import { useAuthStore } from '../store/authStore';
+import { getApiBaseUrl } from '../lib/api-base';
+import { toast } from '../hooks/use-toast';
+
+const API_URL = getApiBaseUrl();
+
+type PermissionLevel = 'VIEW' | 'CONTROL' | 'RECORD' | 'ADMIN';
+type ApiUserRole = 'ADMIN' | 'OPERATOR' | 'VIEWER';
+
+type AccessGroup = {
+  id: string;
+  name: string;
+  description?: string | null;
+  isActive: boolean;
+  cameras: Array<{ id: string; name: string }>;
+};
+
+type AccessPermission = {
+  id: string;
+  userId: string;
+  cameraId?: string | null;
+  groupId?: string | null;
+  level: PermissionLevel;
+  user?: { id: string; name: string; email: string };
+  group?: { id: string; name: string } | null;
+  camera?: { id: string; name: string } | null;
+};
 
 const roleColor = (r: string) => {
-  if (r === 'admin') return 'bg-purple-500/15 text-purple-400 border-purple-500/30';
-  if (r === 'supervisor') return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
-  if (r === 'operator') return 'bg-slate-500/15 text-slate-400 border-slate-500/30';
+  if (r === 'admin') return 'bg-[hsl(var(--primary)_/_0.12)] text-[hsl(var(--primary))] border-[hsl(var(--primary)_/_0.25)]';
+  if (r === 'supervisor') return 'bg-slate-500/15 text-slate-300 border-slate-500/30';
+  if (r === 'operator') return 'bg-slate-500/10 text-slate-400 border-slate-500/25';
   return 'bg-orange-500/15 text-orange-400 border-orange-500/30';
 };
 
-export default function UsuáriosPage() {
+const levelLabel: Record<PermissionLevel, string> = {
+  VIEW: 'Ver ao vivo e playback',
+  CONTROL: 'Ver e controlar PTZ',
+  RECORD: 'Ver, controlar e gravação',
+  ADMIN: 'Administrar câmeras do grupo',
+};
+
+const roleOptions: Array<{ value: ApiUserRole; label: string }> = [
+  { value: 'VIEWER', label: 'Visualizador' },
+  { value: 'OPERATOR', label: 'Operador' },
+  { value: 'ADMIN', label: 'Administrador' },
+];
+
+function apiClient() {
+  const accessToken = useAuthStore.getState().accessToken;
+  return axios.create({
+    baseURL: API_URL,
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+  });
+}
+
+export default function UsuariosPage() {
   const userList = useVmsDataStore((state) => state.users);
-  const updateUserAtivo = useVmsDataStore((state) => state.updateUserAtivo);
+  const cameras = useVmsDataStore((state) => state.cameras);
+  const updateUserActive = useVmsDataStore((state) => state.updateUserActive);
+  const loadData = useVmsDataStore((state) => state.load);
+  const accessToken = useAuthStore((state) => state.accessToken);
   const [addOpen, setAddOpen] = useState(false);
   const [editUser, setEditUser] = useState<(typeof userList)[number] | null>(null);
   const [search, setSearch] = useState('');
+  const [groups, setGroups] = useState<AccessGroup[]>([]);
+  const [permissions, setPermissions] = useState<AccessPermission[]>([]);
+  const [accessLoading, setAccessLoading] = useState(false);
+  const [selectedUserId, setSelectedUserId] = useState('');
+  const [selectedGroupId, setSelectedGroupId] = useState('');
+  const [selectedLevel, setSelectedLevel] = useState<PermissionLevel>('VIEW');
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupDescription, setNewGroupDescription] = useState('');
+  const [userSaving, setUserSaving] = useState(false);
+  const [userForm, setUserForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'VIEWER' as ApiUserRole,
+    isActive: true,
+  });
 
   const filtered = userList.filter(u =>
-    !search || u.name.toLowerCase().includes(search.toLowerCase())
+    !search || u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase())
   );
 
+  const selectedGroup = groups.find((group) => group.id === selectedGroupId) ?? groups[0] ?? null;
+  const selectedUser = userList.find((user) => user.id === selectedUserId) ?? userList[0] ?? null;
+
+  const permissionsByUser = useMemo(() => {
+    const map = new Map<string, AccessPermission[]>();
+    for (const permission of permissions) {
+      const list = map.get(permission.userId) ?? [];
+      list.push(permission);
+      map.set(permission.userId, list);
+    }
+    return map;
+  }, [permissions]);
+
+  const groupCameraIds = useMemo(() => new Set(selectedGroup?.cameras.map((camera) => camera.id) ?? []), [selectedGroup]);
+
+  const loadAccess = async () => {
+    if (!accessToken) return;
+    setAccessLoading(true);
+    try {
+      const client = apiClient();
+      const [groupsRes, permissionsRes] = await Promise.all([
+        client.get('/camera-groups'),
+        client.get('/camera-permissions'),
+      ]);
+      const loadedGroups = Array.isArray(groupsRes.data) ? groupsRes.data : [];
+      setGroups(loadedGroups);
+      setPermissions(Array.isArray(permissionsRes.data) ? permissionsRes.data : []);
+      if (!selectedGroupId && loadedGroups[0]?.id) setSelectedGroupId(loadedGroups[0].id);
+      if (!selectedUserId && userList[0]?.id) setSelectedUserId(userList[0].id);
+    } catch (error) {
+      toast({
+        title: 'Falha ao carregar acessos',
+        description: error instanceof Error ? error.message : 'Nao foi possivel carregar grupos e permissoes.',
+        variant: 'destructive',
+      });
+    } finally {
+      setAccessLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadAccess();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, userList.length]);
+
+  useEffect(() => {
+    if (!selectedUserId && userList[0]?.id) setSelectedUserId(userList[0].id);
+  }, [selectedUserId, userList]);
+
+  useEffect(() => {
+    if (editUser) {
+      setUserForm({
+        name: editUser.name,
+        email: editUser.email,
+        password: '',
+        role: editUser.role === 'admin' ? 'ADMIN' : editUser.role === 'operator' ? 'OPERATOR' : 'VIEWER',
+        isActive: editUser.active,
+      });
+      return;
+    }
+    if (addOpen) {
+      setUserForm({ name: '', email: '', password: '', role: 'VIEWER', isActive: true });
+    }
+  }, [addOpen, editUser]);
+
   const toggleLock = async (id: string, active: boolean) => {
-    await updateUserAtivo(id, active);
+    await updateUserActive(id, active);
+  };
+
+  const createGroup = async () => {
+    const name = newGroupName.trim();
+    if (!name) return;
+    setAccessLoading(true);
+    try {
+      const { data } = await apiClient().post('/camera-groups', {
+        name,
+        description: newGroupDescription.trim() || undefined,
+      });
+      setNewGroupName('');
+      setNewGroupDescription('');
+      setSelectedGroupId(data.id);
+      await loadAccess();
+      toast({ title: 'Grupo criado', description: `${name} pronto para receber cameras e usuarios.` });
+    } catch (error) {
+      toast({
+        title: 'Falha ao criar grupo',
+        description: error instanceof Error ? error.message : 'Nao foi possivel criar o grupo.',
+        variant: 'destructive',
+      });
+    } finally {
+      setAccessLoading(false);
+    }
+  };
+
+  const setCameraInGroup = async (cameraId: string, shouldAdd: boolean) => {
+    if (!selectedGroup) return;
+    setAccessLoading(true);
+    try {
+      if (shouldAdd) {
+        await apiClient().post(`/camera-groups/${selectedGroup.id}/cameras/${cameraId}`);
+      } else {
+        await apiClient().delete(`/camera-groups/${selectedGroup.id}/cameras/${cameraId}`);
+      }
+      await Promise.all([loadAccess(), loadData()]);
+    } catch (error) {
+      toast({
+        title: shouldAdd ? 'Falha ao adicionar camera' : 'Falha ao remover camera',
+        description: error instanceof Error ? error.message : 'Nao foi possivel atualizar o grupo.',
+        variant: 'destructive',
+      });
+    } finally {
+      setAccessLoading(false);
+    }
+  };
+
+  const grantGroupAccess = async () => {
+    const userId = selectedUser?.id;
+    const groupId = selectedGroup?.id;
+    if (!userId || !groupId) return;
+    setAccessLoading(true);
+    try {
+      await apiClient().post('/camera-permissions', { userId, groupId, level: selectedLevel });
+      await loadAccess();
+      toast({ title: 'Acesso liberado', description: `${selectedUser?.name} agora acessa ${selectedGroup?.name}.` });
+    } catch (error) {
+      toast({
+        title: 'Falha ao liberar acesso',
+        description: error instanceof Error ? error.message : 'Nao foi possivel salvar a permissao.',
+        variant: 'destructive',
+      });
+    } finally {
+      setAccessLoading(false);
+    }
+  };
+
+  const revokeAccess = async (permissionId: string) => {
+    setAccessLoading(true);
+    try {
+      await apiClient().delete(`/camera-permissions/${permissionId}`);
+      await loadAccess();
+    } catch (error) {
+      toast({
+        title: 'Falha ao remover acesso',
+        description: error instanceof Error ? error.message : 'Nao foi possivel remover a permissao.',
+        variant: 'destructive',
+      });
+    } finally {
+      setAccessLoading(false);
+    }
+  };
+
+  const saveUser = async () => {
+    const name = userForm.name.trim();
+    const email = userForm.email.trim().toLowerCase();
+    if (!name || !email) {
+      toast({ title: 'Dados incompletos', description: 'Informe nome e e-mail.', variant: 'destructive' });
+      return;
+    }
+    if (!editUser && !userForm.password) {
+      toast({ title: 'Senha obrigatoria', description: 'Crie uma senha inicial para o usuario.', variant: 'destructive' });
+      return;
+    }
+
+    setUserSaving(true);
+    try {
+      if (editUser) {
+        await apiClient().patch(`/users/${editUser.id}`, {
+          name,
+          email,
+          role: userForm.role,
+          isActive: userForm.isActive,
+          ...(userForm.password ? { password: userForm.password } : {}),
+        });
+        toast({ title: 'Usuario atualizado', description: `${name} foi atualizado.` });
+      } else {
+        await apiClient().post('/users', {
+          name,
+          email,
+          password: userForm.password,
+          role: userForm.role,
+        });
+        toast({ title: 'Usuario criado', description: `${name} ja pode receber acesso a grupos.` });
+      }
+      setAddOpen(false);
+      setEditUser(null);
+      setUserForm({ name: '', email: '', password: '', role: 'VIEWER', isActive: true });
+      await Promise.all([loadData(), loadAccess()]);
+    } catch (error) {
+      toast({
+        title: editUser ? 'Falha ao atualizar usuario' : 'Falha ao criar usuario',
+        description: error instanceof Error ? error.message : 'Nao foi possivel salvar o usuario.',
+        variant: 'destructive',
+      });
+    } finally {
+      setUserSaving(false);
+    }
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-6 py-3 border-b border-border shrink-0">
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-6 py-3">
         <div className="flex items-center gap-2">
           <Users className="h-4 w-4 text-primary" />
-          <h1 className="text-lg font-semibold">Gestão de Usuários</h1>
+          <h1 className="text-lg font-semibold">Usuarios e Acessos</h1>
         </div>
         <div className="flex items-center gap-2">
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar usuários..."
-            className="h-7 px-3 rounded border border-border bg-card text-xs focus:outline-none focus:ring-1 focus:ring-primary w-44"
+            placeholder="Buscar usuarios..."
+            className="h-7 w-44 rounded border border-border bg-card px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
           />
           <button
+            onClick={() => void loadAccess()}
+            disabled={accessLoading}
+            className="flex h-7 items-center gap-1.5 rounded border border-border bg-card px-3 text-xs hover:bg-accent disabled:opacity-50"
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5', accessLoading && 'animate-spin')} />
+            Atualizar
+          </button>
+          <button
             onClick={() => setAddOpen(true)}
-            className="flex items-center gap-1.5 h-7 px-3 rounded bg-primary text-primary-foreground text-xs hover:bg-primary/90 transition-colors"
+            className="flex h-7 items-center gap-1.5 rounded bg-primary px-3 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
           >
             <Plus className="h-3.5 w-3.5" />
-            Adicionar Usuário
+            Adicionar Usuario
           </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-card border-b border-border z-10">
-            <tr>
-              {['Nome', 'Badge', 'Email', 'Perfil', 'Shift', 'Status', 'Ações'].map(h => (
-                <th key={h} className="text-left px-6 py-2 text-xs font-medium text-muted-foreground">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((u, i) => (
-              <tr
-                key={u.id}
-                className={cn('border-b border-border transition-colors',
-                  i % 2 === 0 ? 'bg-transparent hover:bg-accent/40' : 'bg-card/30 hover:bg-accent/40',
-                  !u.active && 'opacity-60'
-                )}
-              >
-                <td className="px-6 py-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center text-primary text-xs font-bold">
-                      {u.name.split(' ').map(n => n[0]).join('')}
-                    </div>
-                    <span className="font-medium">{u.name}</span>
-                  </div>
-                </td>
-                <td className="px-6 py-3 font-mono text-xs text-muted-foreground">{u.badge}</td>
-                <td className="px-6 py-3 text-xs text-muted-foreground">{u.email}</td>
-                <td className="px-6 py-3">
-                  <Badge variant="outline" className={cn('text-[10px]', roleColor(u.role))}>{u.role}</Badge>
-                </td>
-                <td className="px-6 py-3 text-xs text-muted-foreground font-mono capitalize">{u.shift}</td>
-                <td className="px-6 py-3">
-                  <Badge variant="outline" className={cn('text-[10px]',
-                    u.active ? 'bg-green-500/15 text-green-400 border-green-500/30' : 'bg-red-500/15 text-red-400 border-red-500/30'
-                  )}>{u.active ? 'Ativo' : 'Bloqueado'}</Badge>
-                </td>
-                <td className="px-6 py-3">
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => setEditUser(u)} className="h-6 w-6 rounded border border-border bg-card flex items-center justify-center hover:bg-accent">
-                      <Edit2 className="h-3 w-3" />
-                    </button>
-                    <button
-                      onClick={() => void toggleLock(u.id, !u.active)}
-                      className={cn('h-6 w-6 rounded border flex items-center justify-center transition-colors',
-                        !u.active ? 'border-green-500/30 bg-green-500/10 hover:bg-green-500/20' : 'border-border bg-card hover:bg-accent'
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(420px,0.85fr)]">
+        <section className="overflow-hidden rounded-xl border border-border bg-card/45">
+          <div className="border-b border-border px-4 py-3">
+            <p className="text-sm font-semibold">Usuarios do sistema</p>
+            <p className="text-xs text-muted-foreground">O perfil define o que a pessoa pode fazer. O grupo define quais cameras ela enxerga.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-card/80">
+                <tr>
+                  {['Nome', 'Email', 'Perfil', 'Grupos liberados', 'Status', 'Acoes'].map(h => (
+                    <th key={h} className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((u, i) => {
+                  const userPermissions = permissionsByUser.get(u.id) ?? [];
+                  const groupPermissions = userPermissions.filter((permission) => permission.groupId);
+                  return (
+                    <tr
+                      key={u.id}
+                      className={cn('border-t border-border transition-colors',
+                        i % 2 === 0 ? 'bg-transparent hover:bg-accent/35' : 'bg-background/30 hover:bg-accent/35',
+                        !u.active && 'opacity-60'
                       )}
                     >
-                      {!u.active ? <Unlock className="h-3 w-3 text-green-400" /> : <UserX className="h-3 w-3" />}
-                    </button>
+                      <td className="px-4 py-3">
+                        <button className="flex items-center gap-2.5 text-left" onClick={() => setSelectedUserId(u.id)}>
+                          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary">
+                            {u.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                          </div>
+                          <span className="font-medium">{u.name}</span>
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{u.email}</td>
+                      <td className="px-4 py-3">
+                        <Badge variant="outline" className={cn('text-[10px]', roleColor(u.role))}>{u.role}</Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        {groupPermissions.length ? (
+                          <div className="flex max-w-[260px] flex-wrap gap-1.5">
+                            {groupPermissions.map((permission) => (
+                              <Badge key={permission.id} variant="outline" className="border-border bg-background/70 text-[10px] text-muted-foreground">
+                                {permission.group?.name ?? 'Grupo'}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">Sem grupo</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant="outline" className={cn('text-[10px]',
+                          u.active ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-400' : 'border-red-500/30 bg-red-500/15 text-red-400'
+                        )}>{u.active ? 'Ativo' : 'Bloqueado'}</Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => setEditUser(u)} className="flex h-6 w-6 items-center justify-center rounded border border-border bg-card hover:bg-accent">
+                            <Edit2 className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={() => void toggleLock(u.id, !u.active)}
+                            className={cn('flex h-6 w-6 items-center justify-center rounded border transition-colors',
+                              !u.active ? 'border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20' : 'border-border bg-card hover:bg-accent'
+                            )}
+                          >
+                            {!u.active ? <Unlock className="h-3 w-3 text-emerald-400" /> : <UserX className="h-3 w-3" />}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <aside className="space-y-4">
+          <section className="rounded-xl border border-border bg-card/45 p-4">
+            <div className="mb-4 flex items-start gap-2">
+              <FolderLock className="mt-0.5 h-4 w-4 text-primary" />
+              <div>
+                <p className="text-sm font-semibold">Grupos de acesso</p>
+                <p className="text-xs text-muted-foreground">Use um grupo para cada cliente/local: mercado, academia, condominio ou filial.</p>
+              </div>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <input
+                value={newGroupName}
+                onChange={(event) => setNewGroupName(event.target.value)}
+                placeholder="Ex: Mercado Sao Jose"
+                className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <button
+                onClick={() => void createGroup()}
+                disabled={accessLoading || !newGroupName.trim()}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Criar
+              </button>
+            </div>
+            <input
+              value={newGroupDescription}
+              onChange={(event) => setNewGroupDescription(event.target.value)}
+              placeholder="Descricao opcional"
+              className="mt-2 h-9 w-full rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+
+            <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {groups.map((group) => (
+                <button
+                  key={group.id}
+                  onClick={() => setSelectedGroupId(group.id)}
+                  className={cn('rounded-lg border p-3 text-left transition-colors',
+                    selectedGroup?.id === group.id
+                      ? 'border-primary/40 bg-primary/10 text-foreground'
+                      : 'border-border bg-background/65 text-muted-foreground hover:bg-accent/45 hover:text-foreground'
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs font-semibold">{group.name}</span>
+                    <span className="rounded-full bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground">{group.cameras.length} cam.</span>
                   </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  {group.description ? <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{group.description}</p> : null}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-border bg-card/45 p-4">
+            <div className="mb-4 flex items-start gap-2">
+              <Camera className="mt-0.5 h-4 w-4 text-primary" />
+              <div>
+                <p className="text-sm font-semibold">Cameras do grupo</p>
+                <p className="text-xs text-muted-foreground">{selectedGroup ? `Selecionado: ${selectedGroup.name}` : 'Crie ou selecione um grupo para vincular cameras.'}</p>
+              </div>
+            </div>
+
+            <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+              {cameras.map((camera) => {
+                const checked = groupCameraIds.has(camera.id);
+                return (
+                  <label key={camera.id} className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-background/55 px-3 py-2 text-xs hover:bg-accent/40">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{camera.name}</p>
+                      <p className="truncate text-[11px] text-muted-foreground">{camera.ipAddress} · {camera.resolution}</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={!selectedGroup || accessLoading}
+                      onChange={(event) => void setCameraInGroup(camera.id, event.target.checked)}
+                      className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
+                    />
+                  </label>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-border bg-card/45 p-4">
+            <div className="mb-4 flex items-start gap-2">
+              <Save className="mt-0.5 h-4 w-4 text-primary" />
+              <div>
+                <p className="text-sm font-semibold">Liberar usuario para grupo</p>
+                <p className="text-xs text-muted-foreground">O usuario so vera as cameras dos grupos em que tiver permissao.</p>
+              </div>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-3">
+              <select
+                value={selectedUser?.id ?? ''}
+                onChange={(event) => setSelectedUserId(event.target.value)}
+                className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {userList.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+              </select>
+              <select
+                value={selectedGroup?.id ?? ''}
+                onChange={(event) => setSelectedGroupId(event.target.value)}
+                className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+              </select>
+              <select
+                value={selectedLevel}
+                onChange={(event) => setSelectedLevel(event.target.value as PermissionLevel)}
+                className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {(Object.keys(levelLabel) as PermissionLevel[]).map((level) => <option key={level} value={level}>{levelLabel[level]}</option>)}
+              </select>
+            </div>
+            <button
+              onClick={() => void grantGroupAccess()}
+              disabled={accessLoading || !selectedUser || !selectedGroup}
+              className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              <Save className="h-3.5 w-3.5" />
+              Salvar acesso ao grupo
+            </button>
+
+            <div className="mt-4 space-y-2">
+              {(selectedUser ? permissionsByUser.get(selectedUser.id) ?? [] : []).filter((permission) => permission.groupId).map((permission) => (
+                <div key={permission.id} className="flex items-center justify-between rounded-lg border border-border bg-background/55 px-3 py-2 text-xs">
+                  <div>
+                    <p className="font-medium">{permission.group?.name ?? 'Grupo removido'}</p>
+                    <p className="text-[11px] text-muted-foreground">{levelLabel[permission.level]}</p>
+                  </div>
+                  <button
+                    onClick={() => void revokeAccess(permission.id)}
+                    disabled={accessLoading}
+                    className="flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                    title="Remover acesso"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        </aside>
       </div>
 
       <Dialog open={addOpen || !!editUser} onOpenChange={(o) => { if (!o) { setAddOpen(false); setEditUser(null); } }}>
-        <DialogContent className="bg-card border-border max-w-md">
+        <DialogContent className="max-w-md border-border bg-card">
           <DialogHeader>
-            <DialogTitle>{editUser ? `Editar Usuário — ${editUser.name}` : 'Novo Usuário'}</DialogTitle>
+            <DialogTitle>{editUser ? `Editar Usuario - ${editUser.name}` : 'Novo Usuario'}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 mt-2">
-            {[
-              { label: 'Nome completo',   placeholder: 'John Doe',            value: editUser?.name ?? '' },
-              { label: 'Email',       placeholder: 'jdoe@nexusguard.local',value: editUser?.email ?? '' },
-              { label: 'Badge',       placeholder: 'SEC-XXXX',           value: editUser?.badge ?? '' },
-            ].map(f => (
-              <div key={f.label}>
-                <label className="text-xs font-medium text-muted-foreground block mb-1">{f.label}</label>
-                <input defaultValue={f.value} placeholder={f.placeholder} className="w-full h-8 rounded border border-border bg-background text-xs px-3 focus:outline-none focus:ring-1 focus:ring-primary" />
-              </div>
-            ))}
-            <div className="flex items-center gap-2">
-              <input type="checkbox" id="force-pw" className="rounded" />
-              <label htmlFor="force-pw" className="text-xs text-muted-foreground">Forçar troca de senha no próximo login</label>
+          <div className="mt-2 space-y-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Nome completo</label>
+              <input
+                value={userForm.name}
+                onChange={(event) => setUserForm((current) => ({ ...current, name: event.target.value }))}
+                placeholder="Nome do usuario"
+                className="h-8 w-full rounded border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              />
             </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Email</label>
+              <input
+                value={userForm.email}
+                onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))}
+                placeholder="cliente@empresa.com"
+                className="h-8 w-full rounded border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Perfil</label>
+              <select
+                value={userForm.role}
+                onChange={(event) => setUserForm((current) => ({ ...current, role: event.target.value as ApiUserRole }))}
+                className="h-8 w-full rounded border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {roleOptions.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">{editUser ? 'Nova senha' : 'Senha inicial'}</label>
+              <input
+                type="password"
+                value={userForm.password}
+                onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
+                placeholder={editUser ? 'Deixe em branco para manter' : 'Minimo 10, maiuscula, numero e simbolo'}
+                className="h-8 w-full rounded border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+            {editUser ? (
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={userForm.isActive}
+                  onChange={(event) => setUserForm((current) => ({ ...current, isActive: event.target.checked }))}
+                  className="rounded"
+                />
+                <span className="text-xs text-muted-foreground">Usuario ativo</span>
+              </label>
+            ) : null}
             <div className="flex justify-end gap-2 pt-2">
-              <button onClick={() => { setAddOpen(false); setEditUser(null); }} className="h-8 px-4 rounded border border-border text-xs hover:bg-accent">Cancelar</button>
-              <button onClick={() => { setAddOpen(false); setEditUser(null); }} className="h-8 px-4 rounded bg-primary text-primary-foreground text-xs hover:bg-primary/90">
-                {editUser ? 'Salvar alterações' : 'Criar usuário'}
+              <button onClick={() => { setAddOpen(false); setEditUser(null); }} className="h-8 rounded border border-border px-4 text-xs hover:bg-accent">Cancelar</button>
+              <button
+                onClick={() => void saveUser()}
+                disabled={userSaving}
+                className="h-8 rounded bg-primary px-4 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {editUser ? 'Salvar alteracoes' : 'Criar usuario'}
               </button>
             </div>
           </div>

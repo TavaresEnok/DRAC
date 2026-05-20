@@ -2,10 +2,12 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job } from 'bullmq';
-import { CameraStatus } from '@prisma/client';
+import { AlarmStatus, CameraStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CAMERA_HEALTH_CHECK_QUEUE } from '../queues/camera-health-check.queue';
 import { CamerasService } from '../../cameras/cameras.service';
+import { RecordingProcessManagerService } from '../../recordings/recording-process-manager.service';
+import { FfmpegMjpegService } from '../../camera-stream/ffmpeg-mjpeg.service';
 
 @Processor(CAMERA_HEALTH_CHECK_QUEUE)
 @Injectable()
@@ -16,6 +18,8 @@ export class CameraHealthCheckProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly camerasService: CamerasService,
+    private readonly recordingManager: RecordingProcessManagerService,
+    private readonly streamService: FfmpegMjpegService,
   ) {
     super();
   }
@@ -45,11 +49,24 @@ export class CameraHealthCheckProcessor extends WorkerHost {
           where: { id: cam.id },
           data: { status: CameraStatus.OFFLINE },
         });
+        await this.camerasService.registerEvent(
+          cam.id,
+          'HEALTH_CAMERA_OFFLINE',
+          'WARNING',
+          'Câmera marcada como offline por ausência de heartbeat.',
+          {
+            staleThreshold: staleThreshold.toISOString(),
+            offlineMinutes,
+          },
+        );
         this.logger.debug(`Status atualizado para OFFLINE: ${cam.name} (${cam.id})`);
       }
     } else {
       this.logger.log('Todas as câmeras online estão reportando normalmente.');
     }
+
+    await this.checkRecordingStaleness();
+    await this.checkLiveStreamHealth();
 
     const autoRemediationEnabled = this.configService.get<boolean>('healthAutoRemediationEnabled') ?? true;
     if (!autoRemediationEnabled) {
@@ -85,6 +102,402 @@ export class CameraHealthCheckProcessor extends WorkerHost {
         }
       } catch (error) {
         this.logger.warn(`Auto-remediação falhou camera=${cam.id}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  private async checkRecordingStaleness() {
+    const configuredThresholdSeconds = Number(process.env.RECORDING_STALE_THRESHOLD_SECONDS ?? 180);
+    const defaultSegmentSeconds = Number(this.configService.get<number>('recordingSegmentSeconds') ?? 300);
+    const staleThresholdSeconds = Math.max(
+      configuredThresholdSeconds,
+      defaultSegmentSeconds + Math.max(60, Math.round(defaultSegmentSeconds * 0.25)),
+    );
+    const staleCooldownSeconds = Number(process.env.HEALTH_RECORDING_STALE_COOLDOWN_SECONDS ?? 300);
+    const envAutoReconnectEnabled = String(process.env.HEALTH_RECORDING_STALE_AUTO_RECONNECT_ENABLED ?? 'true') !== 'false';
+    const autoReconnectEnabled = envAutoReconnectEnabled;
+    const autoReconnectCooldownSeconds = Number(process.env.HEALTH_RECORDING_STALE_RECONNECT_COOLDOWN_SECONDS ?? 180);
+    const staleAt = new Date(Date.now() - staleThresholdSeconds * 1000);
+    const cooldownAt = new Date(Date.now() - staleCooldownSeconds * 1000);
+    const reconnectCooldownAt = new Date(Date.now() - autoReconnectCooldownSeconds * 1000);
+
+    const cameras = await this.prisma.camera.findMany({
+      where: { recordingEnabled: true },
+      select: { id: true, name: true, status: true },
+    });
+    if (!cameras.length) return;
+
+    const recordingByCamera = await this.prisma.recording.groupBy({
+      by: ['cameraId'],
+      where: { cameraId: { in: cameras.map((camera) => camera.id) } },
+      _max: { endedAt: true, startedAt: true },
+    });
+    const latestByCamera = new Map<string, Date>();
+    for (const item of recordingByCamera) {
+      const latest = item._max.endedAt ?? item._max.startedAt;
+      if (latest) latestByCamera.set(item.cameraId, latest);
+    }
+
+    for (const camera of cameras) {
+      const latest = latestByCamera.get(camera.id);
+      const stale = !latest || latest < staleAt;
+      const staleAgeSeconds = latest ? Math.max(0, Math.floor((Date.now() - latest.getTime()) / 1000)) : null;
+      const lastStaleEvent = await this.prisma.cameraEvent.findFirst({
+        where: {
+          cameraId: camera.id,
+          type: 'HEALTH_RECORDING_STALE',
+        },
+        orderBy: { occurredAt: 'desc' },
+        select: { occurredAt: true },
+      });
+      const hasRecentStaleEvent = Boolean(lastStaleEvent && lastStaleEvent.occurredAt >= cooldownAt);
+
+      if (stale) {
+        if (!hasRecentStaleEvent) {
+          await this.camerasService.registerEvent(
+            camera.id,
+            'HEALTH_RECORDING_STALE',
+            'WARNING',
+            'Gravação habilitada sem segmento recente detectado.',
+            {
+              staleThresholdSeconds,
+              latestSegmentAt: latest ? latest.toISOString() : null,
+              cameraStatus: camera.status,
+            },
+          );
+        }
+        const shouldEmitStopped = await this.shouldEmitWithCooldown(camera.id, 'HEALTH_RECORDING_STOPPED', staleCooldownSeconds);
+        if (shouldEmitStopped) {
+          await this.camerasService.registerEvent(
+            camera.id,
+            'HEALTH_RECORDING_STOPPED',
+            camera.status === CameraStatus.ONLINE ? 'ERROR' : 'WARNING',
+            'Gravação parou ou não gerou segmento dentro da janela esperada.',
+            {
+              staleThresholdSeconds,
+              staleAgeSeconds,
+              latestSegmentAt: latest ? latest.toISOString() : null,
+              cameraStatus: camera.status,
+              diagnosis: {
+                recordingEnabled: true,
+                lastSegmentMissing: !latest,
+                staleBeyondThreshold: true,
+              },
+            },
+          );
+        }
+        if (autoReconnectEnabled) {
+          const lastReconnectAttempt = await this.prisma.cameraEvent.findFirst({
+            where: {
+              cameraId: camera.id,
+              type: { in: ['HEALTH_RECORDING_RECONNECT_REQUESTED', 'HEALTH_RECORDING_RECONNECT_SUCCESS', 'HEALTH_RECORDING_RECONNECT_FAILED'] },
+            },
+            orderBy: { occurredAt: 'desc' },
+            select: { occurredAt: true },
+          });
+          const canReconnect = !lastReconnectAttempt || lastReconnectAttempt.occurredAt < reconnectCooldownAt;
+          if (canReconnect) {
+            await this.camerasService.registerEvent(
+              camera.id,
+              'HEALTH_RECORDING_RECONNECT_REQUESTED',
+              'INFO',
+              'Auto-reconexão de gravação iniciada pelo health-check.',
+              { autoReconnectCooldownSeconds, staleThresholdSeconds },
+            );
+            try {
+              const defaultSegment = Number(process.env.RECORDING_SEGMENT_SECONDS ?? 300);
+              await this.recordingManager.stop(camera.id);
+              await this.recordingManager.start(camera.id, defaultSegment);
+              await this.camerasService.registerEvent(
+                camera.id,
+                'HEALTH_RECORDING_RECONNECT_SUCCESS',
+                'INFO',
+                'Auto-reconexão de gravação concluída com sucesso.',
+                { defaultSegment, staleThresholdSeconds },
+              );
+            } catch (error) {
+              await this.camerasService.registerEvent(
+                camera.id,
+                'HEALTH_RECORDING_RECONNECT_FAILED',
+                'WARNING',
+                'Falha na auto-reconexão da gravação.',
+                {
+                  error: error instanceof Error ? error.message : 'unknown_error',
+                  staleThresholdSeconds,
+                },
+              );
+            }
+          }
+        }
+        continue;
+      }
+
+      const openAlarm = await this.prisma.alarmInstance.findFirst({
+        where: {
+          cameraId: camera.id,
+          type: { in: ['HEALTH_RECORDING_STALE', 'HEALTH_RECORDING_STOPPED'] },
+          status: { in: [AlarmStatus.OPEN, AlarmStatus.ACKED] },
+        },
+        select: { id: true },
+      });
+      if (!openAlarm) continue;
+      await this.camerasService.registerEvent(
+        camera.id,
+        'HEALTH_RECORDING_RECOVERED',
+        'INFO',
+        'Gravação voltou a gerar segmentos recentes.',
+        {
+          staleThresholdSeconds,
+          latestSegmentAt: latest ? latest.toISOString() : null,
+          cameraStatus: camera.status,
+        },
+      );
+    }
+  }
+
+  private async shouldEmitWithCooldown(cameraId: string, eventType: string, cooldownSeconds: number) {
+    const threshold = new Date(Date.now() - cooldownSeconds * 1000);
+    const recent = await this.prisma.cameraEvent.findFirst({
+      where: { cameraId, type: eventType, occurredAt: { gte: threshold } },
+      orderBy: { occurredAt: 'desc' },
+      select: { id: true },
+    });
+    return !recent;
+  }
+
+  private async checkLiveStreamHealth() {
+    const maxPerRun = Math.max(1, Number(process.env.HEALTH_STREAM_CHECK_MAX_PER_RUN ?? 40));
+    const cooldownSeconds = Math.max(30, Number(process.env.HEALTH_STREAM_EVENT_COOLDOWN_SECONDS ?? 300));
+    const latencyThresholdMs = Math.max(500, Number(process.env.HEALTH_STREAM_LATENCY_THRESHOLD_MS ?? 5000));
+    const fpsDriftEnabled = String(process.env.HEALTH_STREAM_FPS_DRIFT_ENABLED ?? 'true') !== 'false';
+    const fpsDriftRatioThreshold = Math.max(0.05, Number(process.env.HEALTH_STREAM_FPS_DRIFT_RATIO ?? 0.25));
+    const fpsDriftAbsThreshold = Math.max(1, Number(process.env.HEALTH_STREAM_FPS_DRIFT_ABS ?? 2));
+    const fpsAutoRemediationEnabled = String(process.env.HEALTH_STREAM_FPS_AUTO_REMEDIATION_ENABLED ?? 'true') !== 'false';
+    const fpsAutoRemediationCooldownSeconds = Math.max(60, Number(process.env.HEALTH_STREAM_FPS_REMEDIATION_COOLDOWN_SECONDS ?? 900));
+    const fpsRemediationCooldownAt = new Date(Date.now() - fpsAutoRemediationCooldownSeconds * 1000);
+    const cameras = await this.prisma.camera.findMany({
+      where: { recordingEnabled: true },
+      select: { id: true, name: true, preferredLiveProtocol: true, streamFps: true, recordingEnabled: true },
+      take: maxPerRun,
+      orderBy: { updatedAt: 'asc' },
+    });
+    if (!cameras.length) return;
+
+    for (const camera of cameras) {
+      try {
+        const status = await this.camerasService.getStatus(camera.id);
+        const liveUnavailable = !status.rtspReachable || !status.rtspAuthOk || status.status !== CameraStatus.ONLINE;
+        if (liveUnavailable) {
+          if (await this.shouldEmitWithCooldown(camera.id, 'HEALTH_STREAM_UNAVAILABLE', cooldownSeconds)) {
+            await this.camerasService.registerEvent(
+              camera.id,
+              'HEALTH_STREAM_UNAVAILABLE',
+              'WARNING',
+              'Stream live indisponível para a câmera.',
+              {
+                rtspReachable: status.rtspReachable,
+                rtspAuthOk: status.rtspAuthOk,
+                onvifReachable: status.onvifReachable,
+                status: status.status,
+              },
+            );
+          }
+        } else {
+          const openUnavailable = await this.prisma.alarmInstance.findFirst({
+            where: {
+              cameraId: camera.id,
+              type: 'HEALTH_STREAM_UNAVAILABLE',
+              status: { in: [AlarmStatus.OPEN, AlarmStatus.ACKED] },
+            },
+            select: { id: true },
+          });
+          if (openUnavailable) {
+            await this.camerasService.registerEvent(
+              camera.id,
+              'HEALTH_STREAM_RECOVERED',
+              'INFO',
+              'Stream live voltou a ficar disponível.',
+              {
+                rtspReachable: status.rtspReachable,
+                rtspAuthOk: status.rtspAuthOk,
+                onvifReachable: status.onvifReachable,
+                status: status.status,
+              },
+            );
+          }
+        }
+
+        const codec = String(status.detectedVideoCodec ?? '').toLowerCase();
+        const liveProtocol = String(status.preferredLiveProtocol ?? camera.preferredLiveProtocol ?? 'flv').toLowerCase();
+        const incompatibleCodecForFlv = liveProtocol === 'flv' && (codec.includes('h265') || codec.includes('hevc') || codec.includes('265'));
+        if (incompatibleCodecForFlv && await this.shouldEmitWithCooldown(camera.id, 'HEALTH_STREAM_CODEC_INCOMPATIBLE', cooldownSeconds)) {
+          await this.camerasService.registerEvent(
+            camera.id,
+            'HEALTH_STREAM_CODEC_INCOMPATIBLE',
+            'WARNING',
+            'Codec detectado com alta chance de incompatibilidade no modo live atual.',
+            {
+              codec,
+              preferredLiveProtocol: liveProtocol,
+            },
+          );
+        }
+
+        const probeLatency = Number(status.liveProbeLatencyMs ?? 0);
+        const streamStats = this.streamService.getStreamStats(camera.id) as any;
+        const startupLatency = Number(streamStats?.lastStartupLatencyMs ?? 0);
+        const latencyMs = Math.max(probeLatency, startupLatency);
+        if (latencyMs > latencyThresholdMs) {
+          if (await this.shouldEmitWithCooldown(camera.id, 'HEALTH_STREAM_LATENCY_HIGH', cooldownSeconds)) {
+            await this.camerasService.registerEvent(
+              camera.id,
+              'HEALTH_STREAM_LATENCY_HIGH',
+              'WARNING',
+              'Latência de stream acima do limiar configurado.',
+              {
+                probeLatencyMs: probeLatency,
+                startupLatencyMs: startupLatency,
+                thresholdMs: latencyThresholdMs,
+              },
+            );
+          }
+        } else {
+          const openLatency = await this.prisma.alarmInstance.findFirst({
+            where: {
+              cameraId: camera.id,
+              type: 'HEALTH_STREAM_LATENCY_HIGH',
+              status: { in: [AlarmStatus.OPEN, AlarmStatus.ACKED] },
+            },
+            select: { id: true },
+          });
+          if (openLatency && await this.shouldEmitWithCooldown(camera.id, 'HEALTH_STREAM_LATENCY_RECOVERED', cooldownSeconds)) {
+            await this.camerasService.registerEvent(
+              camera.id,
+              'HEALTH_STREAM_LATENCY_RECOVERED',
+              'INFO',
+              'Latência do stream voltou ao patamar esperado.',
+              {
+                probeLatencyMs: probeLatency,
+                startupLatencyMs: startupLatency,
+                thresholdMs: latencyThresholdMs,
+              },
+            );
+          }
+        }
+
+        if (fpsDriftEnabled) {
+          const configuredFps = Number(status.configuredFps ?? camera.streamFps ?? 0);
+          const detectedFps = Number(status.detectedFps ?? 0);
+          const hasComparableFps = configuredFps > 0 && detectedFps > 0;
+          if (hasComparableFps) {
+            const absDiff = Math.abs(configuredFps - detectedFps);
+            const ratioDiff = absDiff / configuredFps;
+            const drifted = absDiff >= fpsDriftAbsThreshold && ratioDiff >= fpsDriftRatioThreshold;
+            if (drifted) {
+              if (await this.shouldEmitWithCooldown(camera.id, 'HEALTH_STREAM_FPS_DRIFT', cooldownSeconds)) {
+                await this.camerasService.registerEvent(
+                  camera.id,
+                  'HEALTH_STREAM_FPS_DRIFT',
+                  'WARNING',
+                  'Diferença relevante entre FPS configurado e FPS detectado no stream.',
+                  {
+                    configuredFps,
+                    detectedFps,
+                    absDiff,
+                    ratioDiff,
+                    fpsDriftAbsThreshold,
+                    fpsDriftRatioThreshold,
+                  },
+                );
+              }
+
+              if (fpsAutoRemediationEnabled && camera.recordingEnabled) {
+                const lastRemediation = await this.prisma.cameraEvent.findFirst({
+                  where: {
+                    cameraId: camera.id,
+                    type: {
+                      in: [
+                        'HEALTH_STREAM_FPS_REMEDIATION_REQUESTED',
+                        'HEALTH_STREAM_FPS_REMEDIATION_SUCCESS',
+                        'HEALTH_STREAM_FPS_REMEDIATION_FAILED',
+                      ],
+                    },
+                  },
+                  orderBy: { occurredAt: 'desc' },
+                  select: { occurredAt: true },
+                });
+                const canRemediate = !lastRemediation || lastRemediation.occurredAt < fpsRemediationCooldownAt;
+                if (canRemediate) {
+                  await this.camerasService.registerEvent(
+                    camera.id,
+                    'HEALTH_STREAM_FPS_REMEDIATION_REQUESTED',
+                    'INFO',
+                    'Auto-correção de FPS iniciada pelo health-check.',
+                    {
+                      configuredFps,
+                      detectedFps,
+                      absDiff,
+                      ratioDiff,
+                    },
+                  );
+                  try {
+                    const defaultSegment = Number(process.env.RECORDING_SEGMENT_SECONDS ?? 300);
+                    await this.recordingManager.stop(camera.id);
+                    await this.recordingManager.start(camera.id, defaultSegment);
+                    await this.camerasService.registerEvent(
+                      camera.id,
+                      'HEALTH_STREAM_FPS_REMEDIATION_SUCCESS',
+                      'INFO',
+                      'Auto-correção de FPS concluída com sucesso.',
+                      {
+                        defaultSegment,
+                        configuredFps,
+                        detectedFps,
+                      },
+                    );
+                  } catch (error) {
+                    await this.camerasService.registerEvent(
+                      camera.id,
+                      'HEALTH_STREAM_FPS_REMEDIATION_FAILED',
+                      'WARNING',
+                      'Falha na auto-correção de FPS.',
+                      {
+                        configuredFps,
+                        detectedFps,
+                        error: error instanceof Error ? error.message : 'unknown_error',
+                      },
+                    );
+                  }
+                }
+              }
+            } else {
+              const openFpsDrift = await this.prisma.alarmInstance.findFirst({
+                where: {
+                  cameraId: camera.id,
+                  type: 'HEALTH_STREAM_FPS_DRIFT',
+                  status: { in: [AlarmStatus.OPEN, AlarmStatus.ACKED] },
+                },
+                select: { id: true },
+              });
+              if (openFpsDrift && await this.shouldEmitWithCooldown(camera.id, 'HEALTH_STREAM_FPS_RECOVERED', cooldownSeconds)) {
+                await this.camerasService.registerEvent(
+                  camera.id,
+                  'HEALTH_STREAM_FPS_RECOVERED',
+                  'INFO',
+                  'FPS detectado voltou ao patamar esperado.',
+                  {
+                    configuredFps,
+                    detectedFps,
+                    absDiff,
+                    ratioDiff,
+                  },
+                );
+              }
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.warn(`checkLiveStreamHealth falhou camera=${camera.id}: ${(error as Error).message}`);
       }
     }
   }

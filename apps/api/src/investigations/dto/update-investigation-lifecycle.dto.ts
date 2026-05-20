@@ -1,8 +1,8 @@
 import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateInvestigationLifecycleDto {
-  @IsIn(['OPEN', 'ACTIVE', 'REVIEW', 'CLOSED', 'ARCHIVED'])
-  status!: 'OPEN' | 'ACTIVE' | 'REVIEW' | 'CLOSED' | 'ARCHIVED';
+  @IsIn(['OPEN', 'IN_REVIEW', 'PENDING_APPROVAL', 'CLOSED', 'ARCHIVED', 'ACTIVE', 'REVIEW'])
+  status!: 'OPEN' | 'IN_REVIEW' | 'PENDING_APPROVAL' | 'CLOSED' | 'ARCHIVED' | 'ACTIVE' | 'REVIEW';
 
   @IsOptional()
   @IsString()

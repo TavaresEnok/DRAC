@@ -26,6 +26,9 @@ type StreamMetrics = {
   fallbackStarts: number;
   activeStreams: number;
   lastStartAt: string | null;
+  lastStartupLatencyMs: number | null;
+  avgStartupLatencyMs: number | null;
+  startupSamples: number;
   lastEndAt: string | null;
   lastError: string | null;
   lastErrorAt: string | null;
@@ -80,6 +83,9 @@ export class FfmpegMjpegService {
       fallbackStarts: 0,
       activeStreams: 0,
       lastStartAt: null,
+      lastStartupLatencyMs: null,
+      avgStartupLatencyMs: null,
+      startupSamples: 0,
       lastEndAt: null,
       lastError: null,
       lastErrorAt: null,
@@ -139,9 +145,9 @@ export class FfmpegMjpegService {
     return url.replace(/(rtsp:\/\/[^:]+:)([^@]+)(@)/i, '$1***$3');
   }
 
-  private getTransportCandidates(): RtspTransport[] {
+  private getTransportCandidates(camera?: Camera): RtspTransport[] {
     const raw = [
-      this.config.rtspTransport,
+      camera?.preferredRtspTransport?.toLowerCase() ?? this.config.rtspTransport,
       ...(this.configService.get<string>('ffmpegRtspFallbackTransports') ?? 'tcp,udp')
         .split(',')
         .map((item) => item.trim().toLowerCase()),
@@ -150,7 +156,7 @@ export class FfmpegMjpegService {
     return Array.from(new Set(valid.length ? valid : ['tcp', 'udp', 'http']));
   }
 
-  buildFfmpegFlvArgs(rtspUrl: string, transport: RtspTransport, transcodeVideo: boolean): string[] {
+  buildFfmpegFlvArgs(rtspUrl: string, transport: RtspTransport, transcodeVideo: boolean, camera?: Camera): string[] {
     const commonInput = [
       '-hide_banner',
       '-loglevel',
@@ -180,11 +186,14 @@ export class FfmpegMjpegService {
           '-pix_fmt',
           'yuv420p',
           '-g',
-          '30',
+          String(Math.max(10, camera?.streamFps ?? 30)),
           '-keyint_min',
-          '30',
+          String(Math.max(10, camera?.streamFps ?? 30)),
           '-sc_threshold',
           '0',
+          ...(camera?.streamWidth && camera?.streamHeight ? ['-vf', `scale=${camera.streamWidth}:${camera.streamHeight}`] : []),
+          ...(camera?.streamFps ? ['-r', String(camera.streamFps)] : []),
+          ...(camera?.streamBitrateKbps ? ['-b:v', `${camera.streamBitrateKbps}k`, '-maxrate', `${camera.streamBitrateKbps}k`] : []),
         ]
       : [
           '-c:v',
@@ -217,19 +226,30 @@ export class FfmpegMjpegService {
     ];
   }
 
-  private buildAttempts(urls: string[]): StreamAttempt[] {
-    const transports = this.getTransportCandidates();
+  private buildAttempts(urls: string[], camera?: Camera): StreamAttempt[] {
+    const transports = this.getTransportCandidates(camera);
+    const codec = (camera?.streamVideoCodec ?? camera?.detectedVideoCodec ?? '').toLowerCase();
+    const browserNeedsH264 = codec.includes('h265') || codec.includes('hevc') || codec.includes('265');
+    const forceTranscode = Boolean(
+      browserNeedsH264 ||
+      camera?.streamFps ||
+      camera?.streamWidth ||
+      camera?.streamHeight ||
+      camera?.streamBitrateKbps,
+    );
     const copyAttempts: StreamAttempt[] = [];
     const transcodeAttempts: StreamAttempt[] = [];
 
-    for (const transport of transports) {
-      for (const [urlIndex, url] of urls.entries()) {
-        copyAttempts.push({
-          url,
-          transport,
-          transcodeVideo: false,
-          label: `url${urlIndex + 1}-${transport}-copy`,
-        });
+    if (!forceTranscode) {
+      for (const transport of transports) {
+        for (const [urlIndex, url] of urls.entries()) {
+          copyAttempts.push({
+            url,
+            transport,
+            transcodeVideo: false,
+            label: `url${urlIndex + 1}-${transport}-copy`,
+          });
+        }
       }
     }
     for (const transport of transports) {
@@ -280,8 +300,8 @@ export class FfmpegMjpegService {
   }
 
   // Deprecated overload kept internal for compatibility with existing call sites.
-  private tryStartFlvProcess(rtspUrl: string, transport: RtspTransport, transcodeVideo: boolean) {
-    const ffmpegArgs = this.buildFfmpegFlvArgs(rtspUrl, transport, transcodeVideo);
+  private tryStartFlvProcess(rtspUrl: string, transport: RtspTransport, transcodeVideo: boolean, camera?: Camera) {
+    const ffmpegArgs = this.buildFfmpegFlvArgs(rtspUrl, transport, transcodeVideo, camera);
     return spawn('ffmpeg', ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
   }
 
@@ -333,7 +353,7 @@ export class FfmpegMjpegService {
     ffmpegProc.stderr.on('data', (chunk) => {
       const message = chunk.toString().trim();
       if (!message) return;
-      this.logger.debug(`FFmpeg: ${message}`);
+      this.logger.debug(`FFmpeg: ${this.sanitizeRtspUrl(message)}`);
     });
 
     const onClose = () => {
@@ -385,7 +405,7 @@ export class FfmpegMjpegService {
     const fallbackUrl = camera.subtype !== 0 ? this.buildCameraRtspUrl(camera, password, 0) : null;
     const urls = fallbackUrl ? [primaryUrl, fallbackUrl] : [primaryUrl];
     const expandedUrls = this.expandUrlsWithPortFallbacks(urls, camera.rtspPort);
-    const attempts = this.buildAttempts(expandedUrls);
+    const attempts = this.buildAttempts(expandedUrls, camera);
 
     let index = 0;
     let activeProc: ChildProcessByStdio<null, Readable, Readable> | null = null;
@@ -438,8 +458,9 @@ export class FfmpegMjpegService {
       this.logger.log(
         `Iniciando FFmpeg FLV camera=${camera.id} attempt=${attemptNumber}/${attempts.length} mode=${attempt.label} url=${this.sanitizeRtspUrl(attempt.url)}`,
       );
-      const proc = this.tryStartFlvProcess(attempt.url, attempt.transport, attempt.transcodeVideo);
+      const proc = this.tryStartFlvProcess(attempt.url, attempt.transport, attempt.transcodeVideo, camera);
       activeProc = proc;
+      const attemptStartedAt = Date.now();
 
       this.wireStreamToResponse(
         req,
@@ -450,6 +471,16 @@ export class FfmpegMjpegService {
             streamStarted = true;
             metric.successfulStarts += 1;
             metric.lastStartAt = new Date().toISOString();
+            const startupLatencyMs = Math.max(0, Date.now() - attemptStartedAt);
+            metric.lastStartupLatencyMs = startupLatencyMs;
+            metric.startupSamples += 1;
+            if (metric.avgStartupLatencyMs == null) {
+              metric.avgStartupLatencyMs = startupLatencyMs;
+            } else {
+              metric.avgStartupLatencyMs = Math.round(
+                (metric.avgStartupLatencyMs * (metric.startupSamples - 1) + startupLatencyMs) / metric.startupSamples,
+              );
+            }
             if (attemptNumber > 1) {
               metric.fallbackStarts += 1;
             }

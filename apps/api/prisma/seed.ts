@@ -3,10 +3,31 @@ import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
+const insecureSeedPasswords = new Set([
+  'admin123',
+  'operador123',
+  'viewer123',
+  '123456',
+  'password',
+  'changeme',
+  'change_me',
+]);
+
+function assertStrongPassword(password: string, context: string) {
+  if (!password || password.length < 10 || insecureSeedPasswords.has(password.toLowerCase())) {
+    throw new Error(
+      `${context} inválida. Defina uma senha forte via ENV (mínimo 10 caracteres, sem valores padrão).`,
+    );
+  }
+}
+
 async function main() {
   const email = (process.env.ADMIN_EMAIL ?? 'admin@local.dev').trim().toLowerCase();
-  const password = process.env.ADMIN_PASSWORD ?? 'admin123';
+  const password = (process.env.ADMIN_PASSWORD ?? '').trim();
   const name = process.env.ADMIN_NAME ?? 'Administrador';
+  const allowSampleUsers = String(process.env.SEED_SAMPLE_USERS ?? 'false') === 'true';
+
+  assertStrongPassword(password, 'ADMIN_PASSWORD');
 
   // 1. Criar/Sincronizar Super Admin padrão
   const passwordHash = await bcrypt.hash(password, 10);
@@ -27,25 +48,27 @@ async function main() {
     },
   });
 
-  // 2. Criar outros usuários de exemplo
-  const users = [
-    { name: 'Admin Local', email: 'admin.local@local.dev', password: 'admin123', role: UserRole.ADMIN },
-    { name: 'Operador Local', email: 'operador.local@local.dev', password: 'operador123', role: UserRole.OPERATOR },
-    { name: 'Viewer Local', email: 'viewer.local@local.dev', password: 'viewer123', role: UserRole.VIEWER },
-  ];
+  // 2. Criar usuários de exemplo apenas quando explicitamente habilitado
+  if (allowSampleUsers) {
+    const users = [
+      { name: 'Admin Local', email: 'admin.local@local.dev', password: 'admin123', role: UserRole.ADMIN },
+      { name: 'Operador Local', email: 'operador.local@local.dev', password: 'operador123', role: UserRole.OPERATOR },
+      { name: 'Viewer Local', email: 'viewer.local@local.dev', password: 'viewer123', role: UserRole.VIEWER },
+    ];
 
-  for (const item of users) {
-    const found = await prisma.user.findUnique({ where: { email: item.email } });
-    if (!found) {
-      await prisma.user.create({
-        data: {
-          name: item.name,
-          email: item.email,
-          passwordHash: await bcrypt.hash(item.password, 10),
-          role: item.role,
-          isActive: true,
-        },
-      });
+    for (const item of users) {
+      const found = await prisma.user.findUnique({ where: { email: item.email } });
+      if (!found) {
+        await prisma.user.create({
+          data: {
+            name: item.name,
+            email: item.email,
+            passwordHash: await bcrypt.hash(item.password, 10),
+            role: item.role,
+            isActive: true,
+          },
+        });
+      }
     }
   }
 

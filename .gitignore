@@ -31,3 +31,6 @@ services/*/dist
 apps/api/prisma/dev.db
 storage/
 infra/storage/
+.android-sdk/
+infra/backups/
+concorrente/

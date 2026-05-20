@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
-import { UserRole, CameraStatus } from '@prisma/client';
+import { UserRole, CameraStatus, AlarmPriority, AlarmSource } from '@prisma/client';
 import { type Request, type Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { AccessControlService } from '../access-control/access-control.service';
 import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -13,6 +14,7 @@ import { TestCameraConnectionDto } from './dto/test-camera-connection.dto';
 import { UpdateCameraDto } from './dto/update-camera.dto';
 import { Public } from '../auth/decorators/public.decorator';
 import { ServiceTokenGuard } from '../auth/guards/service-token.guard';
+import { RecordingProcessManagerService } from '../recordings/recording-process-manager.service';
 
 @Controller('cameras')
 export class CamerasController {
@@ -21,6 +23,7 @@ export class CamerasController {
     private readonly alarmsService: AlarmsService,
     private readonly accessControlService: AccessControlService,
     private readonly auditService: AuditService,
+    private readonly recordingManager: RecordingProcessManagerService,
   ) {}
 
   private async withCapabilities(user: AuthUser, camera: Record<string, unknown> & { id: string }) {
@@ -44,7 +47,8 @@ export class CamerasController {
     return camera;
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.ADMIN)
+  @Throttle({ default: { limit: 6, ttl: 60000 } })
   @Post('test-connection-draft')
   async testConnectionDraft(@CurrentUser() user: AuthUser, @Body() dto: TestCameraConnectionDto, @Req() req: Request) {
     const result = await this.camerasService.testConnectionDraft(dto);
@@ -153,15 +157,33 @@ export class CamerasController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('status') status?: 'OPEN' | 'ACKED' | 'RESOLVED',
+    @Query('severity') severity?: string,
+    @Query('priority') priority?: AlarmPriority,
+    @Query('source') source?: AlarmSource,
+    @Query('type') type?: string,
+    @Query('zone') zone?: string,
     @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
   ) {
     if (cameraId) {
       await this.accessControlService.assertCanViewCamera(user, cameraId);
     }
-    const accessibleCameraIds =
+    let accessibleCameraIds =
       user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
         ? (await this.camerasService.findAll()).map((c: any) => c.id)
         : await this.accessControlService.getAccessibleCameraIds(user);
+
+    if (zone?.trim()) {
+      const normalizedZone = zone.trim().toLowerCase();
+      const cameras = await this.camerasService.findAll(accessibleCameraIds);
+      accessibleCameraIds = cameras
+        .filter((camera: any) =>
+          [camera.area?.name, camera.site?.name, camera.group?.name]
+            .filter((value: unknown): value is string => typeof value === 'string' && Boolean(value.trim()))
+            .some((value) => value.trim().toLowerCase().includes(normalizedZone)),
+        )
+        .map((camera: any) => camera.id);
+    }
 
     return this.alarmsService.list({
       accessibleCameraIds,
@@ -169,7 +191,12 @@ export class CamerasController {
       from,
       to,
       status,
+      severity,
+      priority,
+      source,
+      type,
       limit: limit ? parseInt(limit, 10) : 100,
+      offset: offset ? parseInt(offset, 10) : 0,
     });
   }
 
@@ -220,6 +247,81 @@ export class CamerasController {
     const updated = await this.alarmsService.resolve(eventId, { id: user.id, name: user.name }, body.note);
     await this.auditService.log(user.id, 'alarm.resolve', 'AlarmInstance', eventId, { cameraId: updated.cameraId }, req);
     return updated;
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('alarms/:eventId/snooze')
+  async snoozeAlarm(
+    @CurrentUser() user: AuthUser,
+    @Param('eventId') eventId: string,
+    @Body() body: { minutes?: number; note?: string },
+    @Req() req: Request,
+  ) {
+    const alarm = await this.alarmsService.ensureExists(eventId);
+    if (alarm.cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, alarm.cameraId);
+    }
+    const updated = await this.alarmsService.snooze(eventId, { id: user.id, name: user.name }, body.minutes ?? 15, body.note);
+    await this.auditService.log(user.id, 'alarm.snooze', 'AlarmInstance', eventId, { cameraId: updated.cameraId, minutes: body.minutes ?? 15 }, req);
+    return updated;
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('alarms/:eventId/unsnooze')
+  async unsnoozeAlarm(
+    @CurrentUser() user: AuthUser,
+    @Param('eventId') eventId: string,
+    @Body() body: { note?: string },
+    @Req() req: Request,
+  ) {
+    const alarm = await this.alarmsService.ensureExists(eventId);
+    if (alarm.cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, alarm.cameraId);
+    }
+    const updated = await this.alarmsService.unsnooze(eventId, { id: user.id, name: user.name }, body.note);
+    await this.auditService.log(user.id, 'alarm.unsnooze', 'AlarmInstance', eventId, { cameraId: updated.cameraId }, req);
+    return updated;
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('alarms/:eventId/note')
+  async addAlarmNote(
+    @CurrentUser() user: AuthUser,
+    @Param('eventId') eventId: string,
+    @Body() body: { note?: string },
+    @Req() req: Request,
+  ) {
+    const alarm = await this.alarmsService.ensureExists(eventId);
+    if (alarm.cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, alarm.cameraId);
+    }
+    const note = body.note?.trim() ?? '';
+    const updated = await this.alarmsService.addNote(eventId, { id: user.id, name: user.name }, note);
+    await this.auditService.log(user.id, 'alarm.note.add', 'AlarmInstance', eventId, { cameraId: updated.cameraId }, req);
+    return updated;
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('alarms/bulk')
+  async bulkAlarmAction(
+    @CurrentUser() user: AuthUser,
+    @Body() body: { action: 'ack' | 'resolve' | 'snooze' | 'unsnooze'; eventIds: string[]; note?: string; minutes?: number },
+    @Req() req: Request,
+  ) {
+    const action = body.action;
+    const eventIds = Array.isArray(body.eventIds) ? body.eventIds : [];
+    for (const eventId of eventIds.slice(0, 200)) {
+      const alarm = await this.alarmsService.ensureExists(eventId);
+      if (alarm.cameraId) {
+        await this.accessControlService.assertCanViewCamera(user, alarm.cameraId);
+      }
+    }
+    const result = await this.alarmsService.bulkAction(action, eventIds, { id: user.id, name: user.name }, {
+      note: body.note,
+      snoozeMinutes: body.minutes,
+    });
+    await this.auditService.log(user.id, 'alarm.bulk', 'AlarmInstance', null, { action, totalRequested: result.totalRequested, ok: result.ok }, req);
+    return result;
   }
 
   @Roles(UserRole.OPERATOR)
@@ -333,6 +435,31 @@ export class CamerasController {
   }
 
   @Roles(UserRole.VIEWER)
+  @Get('operations-timeline')
+  async getOperationsTimeline(
+    @CurrentUser() user: AuthUser,
+    @Query('cameraId') cameraId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('limit') limit?: string,
+  ) {
+    if (cameraId) {
+      await this.accessControlService.assertCanViewCamera(user, cameraId);
+    }
+    const accessibleCameraIds =
+      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
+        ? (await this.camerasService.findAll()).map((c: any) => c.id)
+        : await this.accessControlService.getAccessibleCameraIds(user);
+    return this.camerasService.getOperationsTimeline({
+      accessibleCameraIds,
+      cameraId,
+      from,
+      to,
+      limit: limit ? parseInt(limit, 10) : 120,
+    });
+  }
+
+  @Roles(UserRole.VIEWER)
   @Get(':id/diagnostics')
   async getDiagnostics(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     await this.accessControlService.assertCanViewCamera(user, id);
@@ -408,7 +535,7 @@ export class CamerasController {
       ...(dto.metadata ?? {}),
       ...(dto.value !== undefined ? { value: dto.value } : {}),
     };
-    return this.camerasService.registerEvent(
+    const event = await this.camerasService.registerEvent(
       id,
       dto.type,
       dto.severity ?? 'INFO',
@@ -416,6 +543,10 @@ export class CamerasController {
       metadata,
       dto.occurredAt ? new Date(dto.occurredAt) : undefined,
     );
+    if (dto.type === 'MOTION_DETECTED') {
+      await this.recordingManager.handleMotionDetected(id, metadata).catch(() => undefined);
+    }
+    return event;
   }
 
   @Public()

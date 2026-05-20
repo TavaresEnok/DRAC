@@ -6,9 +6,10 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { type Camera } from '@prisma/client';
+import { RecordingSource, type Camera } from '@prisma/client';
 import { spawn, spawnSync, type ChildProcessByStdio } from 'child_process';
 import { mkdirSync, readdirSync, statSync } from 'node:fs';
+import { statfs, unlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { type Readable } from 'stream';
 import Redis from 'ioredis';
@@ -49,7 +50,12 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
   private readonly audioCodec: string;
   private readonly controlMode: 'local' | 'worker';
   private readonly workerCommandChannel: string;
+  private readonly storageBackend: string;
+  private readonly storageWriteProbeEnabled: boolean;
+  private readonly minFreeBytes: number;
+  private readonly minFreePercent: number;
   private redisPublisher: Redis | null = null;
+  private readonly motionStopTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly configService: ConfigService,
@@ -63,6 +69,167 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
     this.audioCodec = this.configService.get<string>('ffmpegRecordingAudioCodec') ?? 'aac';
     this.controlMode = (this.configService.get<string>('recordingControlMode') ?? 'local') === 'worker' ? 'worker' : 'local';
     this.workerCommandChannel = this.configService.get<string>('workerCommandChannel') ?? 'camera:commands';
+    this.storageBackend = this.configService.get<string>('storageBackend') ?? 'local';
+    this.storageWriteProbeEnabled = this.configService.get<boolean>('storageWriteProbeEnabled') ?? true;
+    this.minFreeBytes = Number(this.configService.get<number>('recordingMinFreeBytes') ?? 2147483648);
+    this.minFreePercent = Number(this.configService.get<number>('recordingMinFreePercent') ?? 5);
+  }
+
+  private async assertMinimumStorageFree() {
+    const disk = await statfs(this.recordingsRoot);
+    const totalBytes = Number(disk.blocks) * Number(disk.bsize);
+    const freeBytes = Number(disk.bavail) * Number(disk.bsize);
+    const freePercent = totalBytes > 0 ? (freeBytes / totalBytes) * 100 : 0;
+    if (freeBytes < this.minFreeBytes || freePercent < this.minFreePercent) {
+      throw new ServiceUnavailableException(
+        `Espaço livre insuficiente para iniciar gravação (livre=${Math.round(freeBytes / (1024 * 1024))}MB, mínimo=${Math.round(this.minFreeBytes / (1024 * 1024))}MB, livre%=${freePercent.toFixed(2)}%, mínimo%=${this.minFreePercent}%).`,
+      );
+    }
+  }
+
+  private async assertStorageWritable() {
+    if (!this.storageWriteProbeEnabled) return;
+    const now = Date.now();
+    const probePath = join(this.recordingsRoot, `.write-probe-${now}-${Math.random().toString(36).slice(2)}.tmp`);
+    try {
+      await writeFile(probePath, `probe:${now}`);
+      await unlink(probePath);
+    } catch (error) {
+      throw new ServiceUnavailableException(
+        `Storage (${this.storageBackend}) indisponível para escrita em ${this.recordingsRoot}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private getRecordingStaleThresholdSeconds(segmentSeconds?: number | null) {
+    const configuredThreshold = Number(process.env.RECORDING_STALE_THRESHOLD_SECONDS ?? 180);
+    const defaultSegmentSeconds = Number(this.configService.get<number>('recordingSegmentSeconds') ?? 300);
+    const effectiveSegmentSeconds = Number(segmentSeconds && segmentSeconds > 0 ? segmentSeconds : defaultSegmentSeconds);
+    const graceSeconds = Math.max(60, Math.round(effectiveSegmentSeconds * 0.25));
+    return Math.max(configuredThreshold, effectiveSegmentSeconds + graceSeconds);
+  }
+
+  private getMotionPostRollSeconds() {
+    const configured = Number(process.env.MOTION_RECORDING_POST_ROLL_SECONDS ?? 60);
+    return Number.isFinite(configured) && configured > 0 ? configured : 60;
+  }
+
+  private getMotionSegmentSeconds() {
+    const configured = Number(process.env.MOTION_RECORDING_SEGMENT_SECONDS ?? 60);
+    return Number.isFinite(configured) && configured > 0 ? configured : 60;
+  }
+
+  private clearMotionStopTimer(cameraId: string) {
+    const timer = this.motionStopTimers.get(cameraId);
+    if (timer) {
+      clearTimeout(timer);
+      this.motionStopTimers.delete(cameraId);
+    }
+  }
+
+  private scheduleMotionStop(cameraId: string, postRollSeconds: number) {
+    this.clearMotionStopTimer(cameraId);
+    const timer = setTimeout(() => {
+      void this.stopMotionRecordingAfterQuiet(cameraId, postRollSeconds);
+    }, postRollSeconds * 1000);
+    timer.unref();
+    this.motionStopTimers.set(cameraId, timer);
+  }
+
+  private async stopMotionRecordingAfterQuiet(cameraId: string, postRollSeconds: number) {
+    this.motionStopTimers.delete(cameraId);
+    const camera = await this.prisma.camera.findUnique({
+      where: { id: cameraId },
+      select: { recordingMode: true, recordingEnabled: true },
+    });
+    if (!camera || camera.recordingMode !== 'motion' || !camera.recordingEnabled) return;
+
+    try {
+      await this.stop(cameraId);
+      await this.camerasService.registerEvent(
+        cameraId,
+        'MOTION_RECORDING_STOPPED',
+        'INFO',
+        `Gravação por movimento encerrada após ${postRollSeconds}s sem novo movimento.`,
+        { postRollSeconds },
+      );
+    } catch (error) {
+      this.logger.warn(`Falha ao parar gravação por movimento camera=${cameraId}: ${(error as Error).message}`);
+    }
+  }
+
+  async handleMotionDetected(cameraId: string, metadata?: Record<string, unknown>) {
+    const camera = await this.prisma.camera.findUnique({
+      where: { id: cameraId },
+      select: { id: true, name: true, recordingMode: true, recordingEnabled: true },
+    });
+    if (!camera) throw new NotFoundException('Camera não encontrada.');
+    if (camera.recordingMode !== 'motion') {
+      return { status: 'ignored', reason: 'motion_recording_not_enabled', cameraId };
+    }
+
+    const postRollSeconds = this.getMotionPostRollSeconds();
+    const segmentSeconds = this.getMotionSegmentSeconds();
+    const runtimeStatus = await this.getStatus(cameraId).catch(() => ({ isRecording: false }));
+    let startStatus = 'already_recording';
+
+    if (!runtimeStatus.isRecording) {
+      try {
+        const result = await this.start(cameraId, segmentSeconds);
+        startStatus = result.status;
+        await this.camerasService.registerEvent(
+          cameraId,
+          'MOTION_RECORDING_STARTED',
+          'INFO',
+          `Gravação por movimento iniciada. Ela será mantida até ${postRollSeconds}s após o último movimento.`,
+          { postRollSeconds, segmentSeconds, trigger: metadata ?? {} },
+        );
+      } catch (error) {
+        await this.camerasService.registerEvent(
+          cameraId,
+          'MOTION_RECORDING_FAILED',
+          'WARNING',
+          'Falha ao iniciar gravação por movimento.',
+          { error: error instanceof Error ? error.message : 'unknown_error', trigger: metadata ?? {} },
+        );
+        throw error;
+      }
+    }
+
+    this.scheduleMotionStop(cameraId, postRollSeconds);
+    return {
+      status: startStatus,
+      cameraId,
+      mode: 'motion',
+      postRollSeconds,
+      segmentSeconds,
+    };
+  }
+
+  async setMotionRecording(cameraId: string, enabled: boolean) {
+    await this.camerasService.getCameraOrThrow(cameraId).catch(() => {
+      throw new NotFoundException('Camera não encontrada.');
+    });
+
+    if (enabled) {
+      this.clearMotionStopTimer(cameraId);
+      await this.stop(cameraId).catch(() => undefined);
+      await this.prisma.camera.update({
+        where: { id: cameraId },
+        data: { recordingMode: 'motion', recordingEnabled: false },
+      });
+      return { status: 'motion_recording_armed', cameraId };
+    }
+
+    this.clearMotionStopTimer(cameraId);
+    await this.stop(cameraId).catch(() => undefined);
+    await this.prisma.camera.update({
+      where: { id: cameraId },
+      data: { recordingMode: 'manual', recordingEnabled: false },
+    });
+    return { status: 'motion_recording_disabled', cameraId };
   }
 
   private async getRedisPublisher() {
@@ -100,16 +267,34 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
     });
   }
 
-  private buildArgs(rtspUrl: string, outputPattern: string, segmentSeconds: number): string[] {
-    const transport = this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp';
+  private shouldTranscodeRecording(camera: Camera) {
+    return Boolean(
+      !this.copyCodec ||
+      camera.recordingWidth ||
+      camera.recordingHeight ||
+      camera.recordingFps ||
+      camera.recordingBitrateKbps ||
+      (camera.recordingVideoCodec && camera.recordingVideoCodec !== 'copy'),
+    );
+  }
+
+  private buildArgs(camera: Camera, rtspUrl: string, outputPattern: string, segmentSeconds: number): string[] {
+    const transport = camera.preferredRtspTransport ?? this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp';
     const stimeout = String(this.configService.get<number>('ffmpegStimeoutUs') ?? 8000000);
+    const shouldTranscode = this.shouldTranscodeRecording(camera);
+    const videoCodec =
+      camera.recordingVideoCodec === 'h265'
+        ? 'libx265'
+        : camera.recordingVideoCodec === 'mjpeg'
+          ? 'mjpeg'
+          : 'libx264';
     const args = [
       '-hide_banner',
       '-loglevel',
       'warning',
       '-rtsp_transport',
       transport,
-      '-stimeout',
+      '-timeout',
       stimeout,
       '-i',
       rtspUrl,
@@ -117,7 +302,15 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
       '0:v:0',
       '-map',
       '0:a:0?',
-      ...(this.copyCodec ? ['-c:v', 'copy'] : []),
+      ...(shouldTranscode ? ['-c:v', videoCodec] : ['-c:v', 'copy']),
+      ...(shouldTranscode && videoCodec !== 'mjpeg' ? ['-preset', 'ultrafast'] : []),
+      ...(shouldTranscode && camera.recordingWidth && camera.recordingHeight
+        ? ['-vf', `scale=${camera.recordingWidth}:${camera.recordingHeight}`]
+        : []),
+      ...(shouldTranscode && camera.recordingFps ? ['-r', String(camera.recordingFps)] : []),
+      ...(shouldTranscode && camera.recordingBitrateKbps
+        ? ['-b:v', `${camera.recordingBitrateKbps}k`, '-maxrate', `${camera.recordingBitrateKbps}k`]
+        : []),
       '-c:a',
       this.audioCodec,
       '-ar',
@@ -159,6 +352,7 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
       await this.prisma.recording.create({
         data: {
           cameraId,
+          source: RecordingSource.LOCAL,
           startedAt,
           endedAt,
           durationSeconds: segmentSeconds,
@@ -202,14 +396,17 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
     }
   }
 
-  async start(cameraId: string, segmentSeconds: number) {
+  async start(cameraId: string, segmentSeconds: number, options?: { recordingMode?: Camera['recordingMode'] }) {
+    await this.assertStorageWritable();
+    await this.assertMinimumStorageFree();
+
     if (this.controlMode === 'worker') {
       await this.camerasService.getCameraOrThrow(cameraId).catch(() => {
         throw new NotFoundException('Camera não encontrada.');
       });
       await this.prisma.camera.update({
         where: { id: cameraId },
-        data: { recordingEnabled: true },
+        data: { recordingEnabled: true, ...(options?.recordingMode ? { recordingMode: options.recordingMode } : {}) },
       });
       await this.publishWorkerCommand({
         action: 'start',
@@ -225,6 +422,14 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
       };
     }
 
+    const camera = await this.camerasService.getCameraOrThrow(cameraId).catch(() => {
+      throw new NotFoundException('Camera não encontrada.');
+    });
+    await this.prisma.camera.update({
+      where: { id: cameraId },
+      data: { recordingEnabled: true, ...(options?.recordingMode ? { recordingMode: options.recordingMode } : {}) },
+    });
+
     if (this.active.has(cameraId)) {
       const state = this.active.get(cameraId)!;
       return {
@@ -238,10 +443,6 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
       throw new ServiceUnavailableException('FFmpeg não está instalado no servidor.');
     }
 
-    const camera = await this.camerasService.getCameraOrThrow(cameraId).catch(() => {
-      throw new NotFoundException('Camera não encontrada.');
-    });
-
     const password = this.cryptoService.decrypt(camera.passwordEncrypted);
     const rtspUrl = this.buildRtsp(camera, password);
     const startDate = new Date();
@@ -251,7 +452,7 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
 
     mkdirSync(outputDir, { recursive: true });
 
-    const args = this.buildArgs(rtspUrl, outputPattern, segmentSeconds);
+    const args = this.buildArgs(camera, rtspUrl, outputPattern, segmentSeconds);
     this.logger.log(`Iniciando gravação camera=${cameraId} rtsp=${this.sanitizeRtspUrl(rtspUrl)}`);
 
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -301,14 +502,14 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
     };
   }
 
-  async stop(cameraId: string) {
+  async stop(cameraId: string, options?: { recordingMode?: Camera['recordingMode'] }) {
     if (this.controlMode === 'worker') {
       await this.camerasService.getCameraOrThrow(cameraId).catch(() => {
         throw new NotFoundException('Camera não encontrada.');
       });
       await this.prisma.camera.update({
         where: { id: cameraId },
-        data: { recordingEnabled: false },
+        data: { recordingEnabled: false, ...(options?.recordingMode ? { recordingMode: options.recordingMode } : {}) },
       });
       await this.publishWorkerCommand({
         action: 'stop',
@@ -321,6 +522,14 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
         mode: 'worker',
       };
     }
+
+    await this.camerasService.getCameraOrThrow(cameraId).catch(() => {
+      throw new NotFoundException('Camera não encontrada.');
+    });
+    await this.prisma.camera.update({
+      where: { id: cameraId },
+      data: { recordingEnabled: false, ...(options?.recordingMode ? { recordingMode: options.recordingMode } : {}) },
+    });
 
     const state = this.active.get(cameraId);
     if (!state) {
@@ -342,21 +551,56 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
   }
 
   async getStatus(cameraId: string) {
+    const nowMs = Date.now();
     const latestRecording = await this.prisma.recording.findFirst({
       where: { cameraId },
       orderBy: { startedAt: 'desc' },
       select: { startedAt: true, endedAt: true, filePath: true },
     });
-    const inferredRecentRecording = latestRecording
-      ? Date.now() - new Date(latestRecording.endedAt ?? latestRecording.startedAt).getTime() < 15 * 60 * 1000
-      : false;
+    const cam = await this.prisma.camera.findUnique({ where: { id: cameraId }, select: { recordingEnabled: true } });
+    const lastSegmentAtMs = latestRecording ? new Date(latestRecording.endedAt ?? latestRecording.startedAt).getTime() : null;
+    const lastSegmentAgeSeconds = lastSegmentAtMs == null ? null : Math.max(0, Math.floor((nowMs - lastSegmentAtMs) / 1000));
+    const inferredRecentRecording = lastSegmentAgeSeconds != null && lastSegmentAgeSeconds < 15 * 60;
+    const staleThresholdSeconds = this.getRecordingStaleThresholdSeconds();
+    const reconnectGraceSeconds = Math.max(staleThresholdSeconds, 180);
+    const reconnectGraceAt = new Date(nowMs - reconnectGraceSeconds * 1000);
+    const latestReconnectEvent = await this.prisma.cameraEvent.findFirst({
+      where: {
+        cameraId,
+        type: {
+          in: [
+            'HEALTH_RECORDING_RECONNECT_REQUESTED',
+            'HEALTH_RECORDING_RECONNECT_SUCCESS',
+            'HEALTH_RECORDING_RECONNECT_FAILED',
+          ],
+        },
+      },
+      orderBy: { occurredAt: 'desc' },
+      select: { type: true, occurredAt: true },
+    });
 
     if (this.controlMode === 'worker') {
-      const cam = await this.prisma.camera.findUnique({ where: { id: cameraId }, select: { recordingEnabled: true } });
+      const intended = Boolean(cam?.recordingEnabled);
+      const isRecording = intended && inferredRecentRecording;
+      const staleCandidate = intended && (lastSegmentAgeSeconds == null ? true : lastSegmentAgeSeconds > staleThresholdSeconds);
+      const autoRecovering = Boolean(
+        staleCandidate &&
+        latestReconnectEvent &&
+        latestReconnectEvent.occurredAt >= reconnectGraceAt &&
+        (latestReconnectEvent.type === 'HEALTH_RECORDING_RECONNECT_REQUESTED' ||
+          latestReconnectEvent.type === 'HEALTH_RECORDING_RECONNECT_SUCCESS'),
+      );
+      const stale = staleCandidate && !autoRecovering;
       return {
         cameraId,
-        isRecording: Boolean(cam?.recordingEnabled) || inferredRecentRecording,
+        isRecording,
+        intendedRecording: intended,
         startedAt: latestRecording?.startedAt?.toISOString() ?? null,
+        lastSegmentAt: lastSegmentAtMs == null ? null : new Date(lastSegmentAtMs).toISOString(),
+        lastSegmentAgeSeconds,
+        staleThresholdSeconds,
+        stale,
+        statusDetail: !intended ? 'disabled' : autoRecovering ? 'auto_reconnecting' : isRecording ? 'recording_ok' : 'worker_enabled_but_no_recent_segment',
         pid: null,
         currentOutputPattern: latestRecording?.filePath ?? null,
         mode: 'worker',
@@ -365,10 +609,27 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
 
     const state = this.active.get(cameraId);
     if (!state) {
+      const intended = Boolean(cam?.recordingEnabled);
+      const isRecording = intended && inferredRecentRecording;
+      const staleCandidate = intended && (lastSegmentAgeSeconds == null ? true : lastSegmentAgeSeconds > staleThresholdSeconds);
+      const autoRecovering = Boolean(
+        staleCandidate &&
+        latestReconnectEvent &&
+        latestReconnectEvent.occurredAt >= reconnectGraceAt &&
+        (latestReconnectEvent.type === 'HEALTH_RECORDING_RECONNECT_REQUESTED' ||
+          latestReconnectEvent.type === 'HEALTH_RECORDING_RECONNECT_SUCCESS'),
+      );
+      const stale = staleCandidate && !autoRecovering;
       return {
         cameraId,
-        isRecording: inferredRecentRecording,
+        isRecording,
+        intendedRecording: intended,
         startedAt: latestRecording?.startedAt?.toISOString() ?? null,
+        lastSegmentAt: lastSegmentAtMs == null ? null : new Date(lastSegmentAtMs).toISOString(),
+        lastSegmentAgeSeconds,
+        staleThresholdSeconds,
+        stale,
+        statusDetail: !intended ? 'disabled' : autoRecovering ? 'auto_reconnecting' : isRecording ? 'recording_ok' : 'enabled_but_idle',
         pid: null,
         currentOutputPattern: latestRecording?.filePath ?? null,
       };
@@ -377,9 +638,29 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
     return {
       cameraId,
       isRecording: true,
+      intendedRecording: true,
       startedAt: state.startedAt.toISOString(),
+      lastSegmentAt: lastSegmentAtMs == null ? null : new Date(lastSegmentAtMs).toISOString(),
+      lastSegmentAgeSeconds,
+      staleThresholdSeconds,
+      stale: false,
+      statusDetail: 'recording_ok_local_process',
       pid: state.pid,
       currentOutputPattern: state.outputPattern,
+    };
+  }
+
+  async getStatuses(cameraIds: string[]) {
+    const uniqueIds = [...new Set(cameraIds)].filter((id) => id.trim().length > 0).slice(0, 500);
+    const items = await Promise.all(uniqueIds.map((cameraId) => this.getStatus(cameraId)));
+    const staleCount = items.filter((item: any) => item.stale).length;
+    const recordingCount = items.filter((item: any) => item.isRecording).length;
+    return {
+      items,
+      total: items.length,
+      staleCount,
+      recordingCount,
+      generatedAt: new Date().toISOString(),
     };
   }
 
@@ -401,6 +682,10 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
   }
 
   async onApplicationShutdown() {
+    for (const timer of this.motionStopTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.motionStopTimers.clear();
     if (this.controlMode === 'local') {
       await this.stopAll();
     }

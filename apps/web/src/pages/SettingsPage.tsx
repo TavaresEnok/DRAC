@@ -1,46 +1,138 @@
+import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  Shield, Server, Bell, Users,
-  Lock, Save, RefreshCw, Trash2, Plus, Sun, Moon,
-  Key, AlertTriangle, ChevronRight, Check, Database, FileLock
+  Bell,
+  Check,
+  Database,
+  FileLock,
+  HardDrive,
+  Key,
+  Lock,
+  Moon,
+  Plus,
+  Save,
+  Server,
+  Shield,
+  Sun,
+  Trash2,
+  Users,
 } from 'lucide-react';
-import { useThemeStore } from '../store/themeStore';
+import type { LucideIcon } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
-import { useEffect, useState } from 'react';
+import { useThemeStore } from '../store/themeStore';
 import { useVmsDataStore } from '../store/vmsDataStore';
 
 const SECTIONS = [
-  { id: 'general', label: 'Geral', icon: Shield },
-  { id: 'users', label: 'Usuários & Acesso', icon: Users },
-  { id: 'profiles', label: 'Perfis e Permissões', icon: FileLock },
-  { id: 'alarms', label: 'Alertas & Notificações', icon: Bell },
-  { id: 'security', label: 'Segurança', icon: Lock },
-];
+  { id: 'general', label: 'Geral', description: 'Identidade, tema e operação', icon: Shield },
+  { id: 'users', label: 'Usuários', description: 'Contas e status de acesso', icon: Users },
+  { id: 'profiles', label: 'Permissões', description: 'Perfis e capacidades', icon: FileLock },
+  { id: 'storage', label: 'Monitoramento', description: 'Retenção e disco', icon: Database },
+  { id: 'alarms', label: 'Alertas', description: 'Notificações e alarmes', icon: Bell },
+  { id: 'security', label: 'Segurança', description: 'Sessão, senha e auditoria', icon: Lock },
+] as const;
 
-function SectionLabel({ label }: { label: string }) {
-  return <div className="text-[10px] font-semibold text-[hsl(var(--muted-foreground))] uppercase tracking-wider mb-3">{label}</div>;
+type SectionId = (typeof SECTIONS)[number]['id'];
+
+const ROLE_CAPS = {
+  admin: ['Ao Vivo', 'Mural', 'Reprodução', 'Eventos', 'Câmeras', 'PTZ', 'Evidências', 'Configurações'],
+  supervisor: ['Ao Vivo', 'Mural', 'Reprodução', 'Eventos', 'Alertas', 'Evidências'],
+  operator: ['Ao Vivo', 'Reprodução', 'Eventos'],
+} as const;
+
+function formatBytes(value?: number | null) {
+  if (!value || value <= 0) return '-';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(unitIndex < 2 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
-function Field({ label, description, children }: { label: string; description?: string; children: React.ReactNode }) {
+function SectionTitle({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
   return (
-    <div className="flex items-start justify-between gap-8 py-3 border-b border-border last:border-0">
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium">{label}</div>
-        {description && <div className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">{description}</div>}
-      </div>
-      <div className="shrink-0">{children}</div>
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-muted-foreground">{eyebrow}</p>
+      <h2 className="mt-1 text-xl font-semibold tracking-tight text-foreground">{title}</h2>
+      <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>
     </div>
   );
 }
 
-function Alternar({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <div className={`rounded-2xl border border-border/70 bg-card/85 shadow-sm shadow-black/5 ${className}`}>{children}</div>;
+}
+
+function MetricCard({ icon: Icon, label, value, detail }: { icon: LucideIcon; label: string; value: string; detail: string }) {
+  return (
+    <Card className="p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs text-muted-foreground">{label}</p>
+          <p className="mt-1 text-2xl font-semibold tracking-tight">{value}</p>
+        </div>
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-background/70 text-muted-foreground">
+          <Icon className="h-4 w-4" />
+        </div>
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">{detail}</p>
+    </Card>
+  );
+}
+
+function SettingRow({ label, description, children }: { label: string; description?: string; children: ReactNode }) {
+  return (
+    <div className="grid gap-3 border-b border-border/70 px-4 py-4 last:border-0 md:grid-cols-[1fr_auto] md:items-center">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-foreground">{label}</p>
+        {description ? <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{description}</p> : null}
+      </div>
+      <div className="min-w-0 md:min-w-[220px] md:justify-self-end">{children}</div>
+    </div>
+  );
+}
+
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
   return (
     <button
+      type="button"
       onClick={() => onChange(!checked)}
-      className={`relative w-10 h-6 rounded-full transition-colors ${checked ? 'bg-[hsl(var(--primary))]' : 'bg-[hsl(var(--border))]'}`}
+      className={`relative h-7 w-12 rounded-full border transition-colors ${checked ? 'border-emerald-500/40 bg-emerald-500/20' : 'border-border bg-muted'}`}
+      aria-pressed={checked}
     >
-      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-1'}`} />
+      <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-5' : 'translate-x-1'}`} />
     </button>
   );
+}
+
+function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={`h-10 w-full rounded-xl border border-border bg-background/70 px-3 text-sm outline-none transition focus:border-cyan-500/60 focus:ring-2 focus:ring-cyan-500/10 ${props.className ?? ''}`}
+    />
+  );
+}
+
+function SelectInput(props: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      {...props}
+      className={`h-10 w-full rounded-xl border border-border bg-background/70 px-3 text-sm outline-none transition focus:border-cyan-500/60 focus:ring-2 focus:ring-cyan-500/10 ${props.className ?? ''}`}
+    />
+  );
+}
+
+function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'danger' | 'success' | 'warning' }) {
+  const toneClass = {
+    neutral: 'border-border bg-background text-muted-foreground',
+    danger: 'border-red-500/25 bg-red-500/10 text-red-300',
+    success: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
+    warning: 'border-amber-500/25 bg-amber-500/10 text-amber-300',
+  }[tone];
+  return <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${toneClass}`}>{children}</span>;
 }
 
 export default function ConfiguraçõesPage() {
@@ -48,10 +140,9 @@ export default function ConfiguraçõesPage() {
   const users = useVmsDataStore((state) => state.users);
   const system = useVmsDataStore((state) => state.system);
   const cameras = useVmsDataStore((state) => state.cameras);
-  const [activeSection, setActiveSection] = useState('general');
 
-  // Geral settings state
-  const [facilityNome, setFacilityNome] = useState('Servidor NexusGuard');
+  const [activeSection, setActiveSection] = useState<SectionId>('general');
+  const [facilityName, setFacilityName] = useState('Servidor NexusGuard');
   const [siteId, setSiteId] = useState('LOCAL-SITE');
   const [timezone, setTimezone] = useState('UTC+0');
   const [motionRetain, setMotionRetain] = useState(true);
@@ -60,314 +151,257 @@ export default function ConfiguraçõesPage() {
   const [maxLoginAttempts, setMaxLoginAttempts] = useState([5]);
   const [retentionDays, setRetentionDays] = useState([90]);
   const [saved, setSaved] = useState(false);
-  const roleCaps = {
-    admin: ['Ao Vivo', 'Modo Mural', 'Reprodução', 'Eventos', 'Alertas', 'Câmeras', 'Mapa', 'PTZ', 'Investigação', 'Evidências', 'Configurações'],
-    user: ['Ao Vivo', 'Reprodução', 'Eventos'],
-  };
-  const retentionPriorityZonas = Array.from(new Set(cameras.map((camera) => camera.zone).filter(Boolean))).slice(0, 3);
-
-  const handleSalvar = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
 
   useEffect(() => {
-    if (system) {
-      setFacilityNome(system.server.hostname);
-      setSiteId(system.recordingsRoot);
-    }
+    if (!system) return;
+    setFacilityName(system.server.hostname);
+    setSiteId(system.recordingsRoot);
   }, [system]);
 
+  const metrics = useMemo(() => {
+    const online = cameras.filter((camera) => camera.isOnline).length;
+    const activeUsers = users.filter((user) => user.active).length;
+    const usage = system?.disk.usagePercent ?? 0;
+    return {
+      online: `${online}/${cameras.length || 0}`,
+      activeUsers: `${activeUsers}/${users.length || 0}`,
+      disk: usage ? `${Math.round(usage)}%` : '-',
+      recordings: String(system?.recordings.count ?? 0),
+    };
+  }, [cameras, system, users]);
+
+  const retentionZones = useMemo(
+    () => Array.from(new Set(cameras.map((camera) => camera.zone).filter(Boolean))).slice(0, 4),
+    [cameras],
+  );
+
+  const handleSave = () => {
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1800);
+  };
+
   return (
-    <div className="flex h-full min-h-0">
-      {/* Sidebar nav */}
-      <div className="w-52 border-r border-border bg-card shrink-0 py-2">
-        {SECTIONS.map(section => (
+    <div className="min-h-full bg-[radial-gradient(circle_at_top_left,hsl(var(--accent))_0,transparent_32rem)]">
+      <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 md:p-6">
+        <header className="flex flex-col gap-4 rounded-3xl border border-border/70 bg-card/80 p-5 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-muted-foreground">Sistema</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Configurações</h1>
+            <p className="mt-1 text-sm text-muted-foreground">Ajustes essenciais do VMS, organizados para operação rápida e sem ruído visual.</p>
+          </div>
           <button
-            key={section.id}
-            onClick={() => setActiveSection(section.id)}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors relative
-              ${activeSection === section.id ? 'bg-[hsl(var(--accent))] text-foreground' : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-foreground'}`}
+            onClick={handleSave}
+            className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition ${
+              saved ? 'bg-emerald-500 text-white shadow-sm shadow-emerald-500/20' : 'bg-foreground text-background hover:bg-foreground/90'
+            }`}
+            data-testid="button-save-settings"
           >
-            {activeSection === section.id && (
-              <span className="absolute left-0 top-1 bottom-1 w-0.5 bg-[hsl(var(--primary))] rounded-r" />
-            )}
-            <section.icon className="w-4 h-4 shrink-0" />
-            {section.label}
+            {saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+            {saved ? 'Salvo' : 'Salvar alterações'}
           </button>
-        ))}
-      </div>
+        </header>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl p-6 space-y-8">
+        <section className="grid gap-3 md:grid-cols-4">
+          <MetricCard icon={Server} label="Câmeras online" value={metrics.online} detail="Dispositivos respondendo agora" />
+          <MetricCard icon={Users} label="Usuários ativos" value={metrics.activeUsers} detail="Contas liberadas para acesso" />
+          <MetricCard icon={HardDrive} label="Uso do disco" value={metrics.disk} detail={`${formatBytes(system?.disk.freeBytes)} livres`} />
+          <MetricCard icon={Database} label="Gravações" value={metrics.recordings} detail={`${formatBytes(system?.recordings.totalBytes)} indexados`} />
+        </section>
 
-          {activeSection === 'general' && (
-            <>
-              <div>
-                <SectionLabel label="Nome da instalação" />
-                <div className="bg-card border border-card-border rounded-lg px-4 divide-y divide-border">
-                  <Field label="Nome da instalação Nome" description="Exibido em todo o sistema">
-                    <input value={facilityNome} onChange={e => setFacilityNome(e.target.value)}
-                      className="h-8 px-3 w-64 rounded border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
-                  </Field>
-                  <Field label="Identificador do site" description="ID único desta instalação">
-                    <input value={siteId} onChange={e => setSiteId(e.target.value)}
-                      className="h-8 px-3 w-64 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
-                  </Field>
-                  <Field label="Timezone">
-                    <select value={timezone} onChange={e => setTimezone(e.target.value)}
-                      className="h-8 px-3 w-40 rounded border border-border bg-card text-sm focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
-                    >
-                      {['UTC-8', 'UTC-5', 'UTC+0', 'UTC+1', 'UTC+2', 'UTC+5:30', 'UTC+8'].map(tz => (
-                        <option key={tz} value={tz}>{tz}</option>
-                      ))}
-                    </select>
-                  </Field>
-                </div>
-              </div>
+        <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
+          <aside className="h-fit rounded-3xl border border-border/70 bg-card/80 p-2 shadow-sm backdrop-blur">
+            {SECTIONS.map((section) => (
+              <button
+                key={section.id}
+                onClick={() => setActiveSection(section.id)}
+                className={`group flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition ${
+                  activeSection === section.id ? 'bg-foreground text-background shadow-sm' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                }`}
+              >
+                <span className={`flex h-10 w-10 items-center justify-center rounded-xl border ${activeSection === section.id ? 'border-white/20 bg-white/10' : 'border-border bg-background/60 group-hover:bg-background'}`}>
+                  <section.icon className="h-4 w-4" />
+                </span>
+                <span>
+                  <span className="block text-sm font-semibold">{section.label}</span>
+                  <span className={`block text-xs ${activeSection === section.id ? 'text-background/70' : 'text-muted-foreground'}`}>{section.description}</span>
+                </span>
+              </button>
+            ))}
+          </aside>
 
-              <div>
-                <SectionLabel label="Appearance" />
-                <div className="bg-card border border-card-border rounded-lg px-4 divide-y divide-border">
-                  <Field label="Tema da interface" description="O modo escuro é recomendado para centrais de monitoramento">
-                    <div className="flex items-center gap-1 p-0.5 rounded bg-[hsl(var(--muted))] border border-border">
+          <main className="space-y-6">
+            {activeSection === 'general' && (
+              <>
+                <SectionTitle eyebrow="Geral" title="Identidade e experiência" description="Defina como a instalação aparece para os operadores e mantenha a interface confortável para monitoramento prolongado." />
+                <Card className="overflow-hidden">
+                  <SettingRow label="Nome da instalação" description="Aparece no cabeçalho e relatórios do sistema.">
+                    <TextInput value={facilityName} onChange={(event) => setFacilityName(event.target.value)} />
+                  </SettingRow>
+                  <SettingRow label="Identificador do site" description="Use um nome estável para logs, integrações e auditoria.">
+                    <TextInput value={siteId} onChange={(event) => setSiteId(event.target.value)} className="font-mono" />
+                  </SettingRow>
+                  <SettingRow label="Fuso horário" description="Base de data/hora para eventos, playback e auditoria.">
+                    <SelectInput value={timezone} onChange={(event) => setTimezone(event.target.value)}>
+                      {['UTC-8', 'UTC-5', 'UTC+0', 'UTC+1', 'UTC+2', 'UTC+5:30', 'UTC+8'].map((tz) => <option key={tz}>{tz}</option>)}
+                    </SelectInput>
+                  </SettingRow>
+                  <SettingRow label="Tema da interface" description="Modo escuro é recomendado para sala de monitoramento.">
+                    <div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-background/60 p-1">
                       {[
-                        { id: 'dark', icon: Moon, label: 'Escuro' },
-                        { id: 'light', icon: Sun, label: 'Claro' },
-                      ].map(t => (
+                        { id: 'dark', label: 'Escuro', icon: Moon },
+                        { id: 'light', label: 'Claro', icon: Sun },
+                      ].map((item) => (
                         <button
-                          key={t.id}
-                          onClick={() => setTheme(t.id as 'dark' | 'light')}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-colors ${theme === t.id ? 'bg-card text-foreground shadow-sm' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`}
+                          key={item.id}
+                          onClick={() => setTheme(item.id as 'dark' | 'light')}
+                          className={`flex h-9 items-center justify-center gap-2 rounded-lg text-xs font-semibold transition ${theme === item.id ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
                         >
-                          <t.icon className="w-3.5 h-3.5" /> {t.label}
+                          <item.icon className="h-3.5 w-3.5" />
+                          {item.label}
                         </button>
                       ))}
                     </div>
-                  </Field>
+                  </SettingRow>
+                </Card>
+              </>
+            )}
+
+            {activeSection === 'users' && (
+              <>
+                <div className="flex items-end justify-between gap-4">
+                  <SectionTitle eyebrow="Acesso" title="Usuários" description="Uma visão objetiva de quem pode acessar o sistema e qual perfil está em uso." />
+                  <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-border bg-card px-3 text-xs font-semibold hover:bg-accent">
+                    <Plus className="h-4 w-4" /> Adicionar
+                  </button>
                 </div>
-              </div>
-
-              <div>
-                <SectionLabel label="Gravação" />
-                <div className="bg-card border border-card-border rounded-lg px-4 divide-y divide-border">
-                  <Field label="Manter eventos de movimento" description="Keep additional motion clips beyond schedule">
-                    <Alternar checked={motionRetain} onChange={setMotionRetain} />
-                  </Field>
-                  <Field label="Alertas sonoros" description="Reproduzir som em alertas P1/P2">
-                    <Alternar checked={alarmAudio} onChange={setAlarmAudio} />
-                  </Field>
-                </div>
-              </div>
-            </>
-          )}
-
-          {activeSection === 'users' && (
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <SectionLabel label="Contas de usuários" />
-                <button className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold hover:opacity-90 transition-opacity">
-                  <Plus className="w-3.5 h-3.5" /> Add User
-                </button>
-              </div>
-              <div className="bg-card border border-card-border rounded-lg overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-border">
-                      {['Nome', 'Role', 'Badge', 'Email', 'Shift', 'Status', ''].map(h => (
-                        <th key={h} className="px-4 py-2.5 text-left font-medium text-[hsl(var(--muted-foreground))]">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {users.map(user => (
-                      <tr key={user.id} className="hover:bg-[hsl(var(--accent))] transition-colors">
-                        <td className="px-4 py-2.5 font-medium">{user.name}</td>
-                        <td className="px-4 py-2.5">
-                          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border capitalize ${
-                            user.role === 'admin' ? 'bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))] border-[hsl(var(--destructive)_/_0.3)]' :
-                            user.role === 'supervisor' ? 'bg-[hsl(var(--chart-2)_/_0.1)] text-[hsl(var(--chart-2))] border-[hsl(var(--chart-2)_/_0.3)]' :
-                            'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border-border'
-                          }`}>{user.role}</span>
-                        </td>
-                        <td className="px-4 py-2.5 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{user.badge}</td>
-                        <td className="px-4 py-2.5 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{user.email}</td>
-                        <td className="px-4 py-2.5 capitalize text-[hsl(var(--muted-foreground))]">{user.shift}</td>
-                        <td className="px-4 py-2.5">
-                          <span className="flex items-center gap-1">
-                            <span className={`w-1.5 h-1.5 rounded-full ${user.active ? 'status-online' : 'status-offline'}`} />
-                            <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{user.active ? 'Active' : 'Inativo'}</span>
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <div className="flex items-center gap-1">
-                            <button className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-foreground hover:bg-[hsl(var(--accent))] transition-colors"><Key className="w-3.5 h-3.5" /></button>
-                            <button className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {activeSection === 'profiles' && (
-            <div className="space-y-6">
-              <div>
-                <SectionLabel label="Perfis padrão" />
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {[
-                    { role: 'admin', note: 'Controle total do sistema, armazenamento, usuários e exportações.' },
-                    { role: 'user', note: 'Acesso operacional com escopo limitado de configuração.' },
-                  ].map(item => (
-                    <div key={item.role} className="bg-card border border-card-border rounded-lg p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="text-sm font-semibold capitalize">{item.role}</div>
-                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border-border">{item.role}</span>
-                      </div>
-                      <div className="text-[11px] text-[hsl(var(--muted-foreground))] mt-1">{item.note}</div>
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {roleCaps[item.role as keyof typeof roleCaps].map(p => (
-                          <span key={p} className="text-[9px] px-2 py-1 rounded-full border border-border bg-background">{p}</span>
+                <Card className="overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[720px] text-sm">
+                      <thead className="bg-muted/40 text-xs text-muted-foreground">
+                        <tr>
+                          {['Nome', 'Perfil', 'Crachá', 'E-mail', 'Turno', 'Status', 'Ações'].map((header) => <th key={header} className="px-4 py-3 text-left font-semibold">{header}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/70">
+                        {users.map((user) => (
+                          <tr key={user.id} className="hover:bg-accent/50">
+                            <td className="px-4 py-3 font-medium">{user.name}</td>
+                            <td className="px-4 py-3"><Pill tone={user.role === 'admin' ? 'danger' : user.role === 'supervisor' ? 'warning' : 'neutral'}>{user.role}</Pill></td>
+                            <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{user.badge}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{user.email}</td>
+                            <td className="px-4 py-3 capitalize text-muted-foreground">{user.shift}</td>
+                            <td className="px-4 py-3"><Pill tone={user.active ? 'success' : 'neutral'}>{user.active ? 'Ativo' : 'Inativo'}</Pill></td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-1">
+                                <button className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"><Key className="h-4 w-4" /></button>
+                                <button className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-red-500/10 hover:text-red-400"><Trash2 className="h-4 w-4" /></button>
+                              </div>
+                            </td>
+                          </tr>
                         ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <SectionLabel label="Matriz de permissões" />
-                <div className="bg-card border border-card-border rounded-lg px-4 divide-y divide-border">
-                  {[
-                    ['Ao Vivo', true, true],
-                    ['Modo Mural', true, false],
-                    ['Reprodução', true, true],
-                    ['Configurações', true, false],
-                    ['Gestão de usuários', true, false],
-                    ['Retenção de armazenamento', true, false],
-                  ].map(([label, admin, user]) => (
-                    <Field key={String(label)} label={String(label)}>
-                      <div className="flex items-center gap-4 text-[10px]">
-                        <span className="text-[hsl(var(--primary))]">{admin ? 'Admin' : '—'}</span>
-                        <span className="text-[hsl(var(--muted-foreground))]">{user ? 'User' : '—'}</span>
-                      </div>
-                    </Field>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeSection === 'storage' && (
-            <>
-              <div>
-                <SectionLabel label="Retenção de armazenamento" />
-                <div className="bg-card border border-card-border rounded-lg px-4 divide-y divide-border">
-                  <Field label="Retenção padrão" description="Dias para manter gravações por câmera">
-                    <div className="flex items-center gap-3 w-48">
-                      <Slider value={retentionDays} onValueChange={setRetentionDays} min={7} max={365} />
-                      <span className="font-mono text-xs w-14">{retentionDays[0]} dias</span>
-                    </div>
-                  </Field>
-                  <Field label="Prioridade de retenção" description="Priorizar câmeras críticas para retenção maior">
-                    <div className="flex items-center gap-2 text-[10px]">
-                      {retentionPriorityZonas.length ? retentionPriorityZonas.map((zone) => (
-                        <span key={zone} className="px-2 py-1 rounded-full border border-border bg-background">{zone}</span>
-                      )) : (
-                        <span className="px-2 py-1 rounded-full border border-border bg-background">Sem zona configurada</span>
-                      )}
-                    </div>
-                  </Field>
-                  <Field label="Auto-purge on Full" description="Automatically delete oldest recordings when storage is full">
-                    <Alternar checked={true} onChange={() => {}} />
-                  </Field>
-                </div>
-              </div>
-              <div>
-                <SectionLabel label="Saúde do armazenamento" />
-                <div className="bg-card border border-card-border rounded-lg px-4 divide-y divide-border">
-                  <Field label="Alert Threshold" description="Warn when storage drops below this percentage">
-                    <div className="flex items-center gap-3 w-48">
-                      <Slider value={[15]} min={5} max={30} />
-                      <span className="font-mono text-xs w-14">15%</span>
-                    </div>
-                  </Field>
-                  <Field label="Archive Armazenamento" description="Move old footage to offline archive volume">
-                    <Alternar checked={true} onChange={() => {}} />
-                  </Field>
-                </div>
-              </div>
-            </>
-          )}
-
-          {activeSection === 'alarms' && (
-            <div>
-              <SectionLabel label="Alarm Configuration" />
-              <div className="bg-card border border-card-border rounded-lg px-4 divide-y divide-border">
-                <Field label="Audio Alerts" description="Play audio cue on active alarms"><Alternar checked={alarmAudio} onChange={setAlarmAudio} /></Field>
-                <Field label="Auto-acknowledge Timeout" description="Auto-acknowledge low priority alarms after N minutes">
-                  <div className="flex items-center gap-3 w-40">
-                    <Slider defaultValue={[60]} min={5} max={480} />
-                    <span className="font-mono text-xs w-14">60 min</span>
+                      </tbody>
+                    </table>
                   </div>
-                </Field>
-                <Field label="P1 Escalation" description="Escalate P1 alarms if not acknowledged after 5 minutes"><Alternar checked={true} onChange={() => {}} /></Field>
-                <Field label="Notificações por E-mail" description="Enviar e-mail em alertas P1/P2"><Alternar checked={false} onChange={() => {}} /></Field>
-                <Field label="Notificações por SMS" description="Enviar SMS ao plantonista em alertas P1"><Alternar checked={false} onChange={() => {}} /></Field>
-              </div>
-            </div>
-          )}
+                </Card>
+              </>
+            )}
 
-          {activeSection === 'security' && (
-            <div className="space-y-6">
-              <div>
-                <SectionLabel label="Authentication" />
-                <div className="bg-card border border-card-border rounded-lg px-4 divide-y divide-border">
-                  <Field label="Session Timeout" description="Auto-logout after N minutes of inactivity">
-                    <div className="flex items-center gap-3 w-48">
+            {activeSection === 'profiles' && (
+              <>
+                <SectionTitle eyebrow="Permissões" title="Perfis operacionais" description="Capacidades agrupadas por perfil para deixar claro o alcance de cada tipo de usuário." />
+                <div className="grid gap-4 xl:grid-cols-3">
+                  {Object.entries(ROLE_CAPS).map(([role, caps]) => (
+                    <Card key={role} className="p-5">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-semibold capitalize">{role}</h3>
+                        <Pill tone={role === 'admin' ? 'danger' : role === 'supervisor' ? 'warning' : 'neutral'}>{role}</Pill>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {caps.map((cap) => <Pill key={cap}>{cap}</Pill>)}
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {activeSection === 'storage' && (
+              <>
+                <SectionTitle eyebrow="Monitoramento" title="Retenção e saúde do disco" description="Controles essenciais para manter gravações sob controle sem esconder o status real do servidor." />
+                <Card className="overflow-hidden">
+                  <SettingRow label="Retenção padrão" description="Quantidade de dias para manter gravações por câmera.">
+                    <div className="flex items-center gap-3">
+                      <Slider value={retentionDays} onValueChange={setRetentionDays} min={7} max={365} />
+                      <span className="w-20 text-right font-mono text-xs">{retentionDays[0]} dias</span>
+                    </div>
+                  </SettingRow>
+                  <SettingRow label="Prioridade de retenção" description="Zonas críticas encontradas no cadastro atual.">
+                    <div className="flex flex-wrap justify-start gap-2 md:justify-end">
+                      {retentionZones.length ? retentionZones.map((zone) => <Pill key={zone}>{zone}</Pill>) : <Pill>Sem zona</Pill>}
+                    </div>
+                  </SettingRow>
+                  <SettingRow label="Limpeza automática" description="Remove gravações antigas quando o volume se aproxima do limite.">
+                    <Toggle checked={true} onChange={() => {}} />
+                  </SettingRow>
+                  <SettingRow label="Volume de gravações" description={system?.recordingsRoot ?? 'Diretório ainda não informado.'}>
+                    <div className="text-right text-xs text-muted-foreground">
+                      <p>{formatBytes(system?.disk.usedBytes)} usados</p>
+                      <p>{formatBytes(system?.disk.freeBytes)} livres</p>
+                    </div>
+                  </SettingRow>
+                </Card>
+              </>
+            )}
+
+            {activeSection === 'alarms' && (
+              <>
+                <SectionTitle eyebrow="Alertas" title="Notificações operacionais" description="Mantenha alarmes audíveis e escalonamento previsível para eventos críticos." />
+                <Card className="overflow-hidden">
+                  <SettingRow label="Alertas sonoros" description="Tocar áudio em alarmes ativos de prioridade alta.">
+                    <Toggle checked={alarmAudio} onChange={setAlarmAudio} />
+                  </SettingRow>
+                  <SettingRow label="Manter eventos de movimento" description="Preservar clipes de movimento além da rotina contínua.">
+                    <Toggle checked={motionRetain} onChange={setMotionRetain} />
+                  </SettingRow>
+                  <SettingRow label="Auto reconhecimento" description="Reconhecer alarmes de baixa prioridade após o tempo definido.">
+                    <div className="flex items-center gap-3">
+                      <Slider defaultValue={[60]} min={5} max={480} />
+                      <span className="w-16 text-right font-mono text-xs">60 min</span>
+                    </div>
+                  </SettingRow>
+                  <SettingRow label="Escalonamento P1" description="Escalonar alarmes críticos não reconhecidos em até 5 minutos.">
+                    <Toggle checked={true} onChange={() => {}} />
+                  </SettingRow>
+                </Card>
+              </>
+            )}
+
+            {activeSection === 'security' && (
+              <>
+                <SectionTitle eyebrow="Segurança" title="Sessão e auditoria" description="Regras simples para reduzir risco operacional sem travar o uso diário." />
+                <Card className="overflow-hidden">
+                  <SettingRow label="Tempo de sessão" description="Encerrar sessão após inatividade.">
+                    <div className="flex items-center gap-3">
                       <Slider value={sessionTimeout} onValueChange={setSessionTimeout} min={5} max={480} />
-                      <span className="font-mono text-xs w-20">{sessionTimeout[0]} min</span>
+                      <span className="w-16 text-right font-mono text-xs">{sessionTimeout[0]} min</span>
                     </div>
-                  </Field>
-                  <Field label="Max Login Attempts" description="Lock account after N failed attempts">
-                    <div className="flex items-center gap-3 w-48">
+                  </SettingRow>
+                  <SettingRow label="Máx. tentativas de login" description="Bloquear login após tentativas inválidas consecutivas.">
+                    <div className="flex items-center gap-3">
                       <Slider value={maxLoginAttempts} onValueChange={setMaxLoginAttempts} min={3} max={10} />
-                      <span className="font-mono text-xs w-8">{maxLoginAttempts[0]}</span>
+                      <span className="w-10 text-right font-mono text-xs">{maxLoginAttempts[0]}</span>
                     </div>
-                  </Field>
-                  <Field label="Require Strong Password" description="Enforce minimum 12-char complex passwords"><Alternar checked={true} onChange={() => {}} /></Field>
-                  <Field label="Force Password Rotation" description="Require password change every 90 dias"><Alternar checked={true} onChange={() => {}} /></Field>
-                </div>
-              </div>
-              <div>
-                <SectionLabel label="Audit" />
-                <div className="bg-card border border-card-border rounded-lg px-4 divide-y divide-border">
-                  <Field label="Enable Audit Log" description="Log all user actions with timestamps"><Alternar checked={true} onChange={() => {}} /></Field>
-                  <Field label="Modo de auditoria imutável" description="Gravar auditoria em armazenamento somente escrita"><Alternar checked={true} onChange={() => {}} /></Field>
-                  <Field label="Retenção de auditoria" description="Days to retain audit logs">
-                    <div className="flex items-center gap-3 w-48">
-                      <Slider defaultValue={[365]} min={90} max={730} />
-                      <span className="font-mono text-xs w-20">365 dias</span>
-                    </div>
-                  </Field>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Salvar button */}
-          <div className="flex items-center justify-end pt-2">
-            <button
-              onClick={handleSalvar}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded text-sm font-semibold transition-all ${saved ? 'bg-[hsl(var(--chart-3))] text-white' : 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] hover:opacity-90'}`}
-              data-testid="button-save-settings"
-            >
-              {saved ? <><Check className="w-4 h-4" /> Salvo</> : <><Save className="w-4 h-4" /> Salvar alterações</>}
-            </button>
-          </div>
+                  </SettingRow>
+                  <SettingRow label="Exigir senha forte" description="Senha com no mínimo 12 caracteres e complexidade.">
+                    <Toggle checked={true} onChange={() => {}} />
+                  </SettingRow>
+                  <SettingRow label="Auditoria imutável" description="Registrar ações administrativas em trilha de auditoria protegida.">
+                    <Toggle checked={true} onChange={() => {}} />
+                  </SettingRow>
+                </Card>
+              </>
+            )}
+          </main>
         </div>
       </div>
     </div>
