@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { type Request } from 'express';
 import { CamerasService } from '../cameras/cameras.service';
@@ -16,7 +16,7 @@ type DeliveryUrls = {
 };
 
 @Injectable()
-export class MediamtxProxyService {
+export class MediamtxProxyService implements OnApplicationBootstrap {
   private readonly logger = new Logger(MediamtxProxyService.name);
 
   constructor(
@@ -24,6 +24,16 @@ export class MediamtxProxyService {
     private readonly camerasService: CamerasService,
     private readonly cryptoService: CryptoService,
   ) {}
+
+  onApplicationBootstrap() {
+    if (!this.isEnabled() || this.configService.get<boolean>('mediaMtxWarmPathsOnBoot') === false) {
+      return;
+    }
+
+    setTimeout(() => {
+      void this.warmCameraPaths();
+    }, 3000);
+  }
 
   isEnabled() {
     return this.configService.get<boolean>('mediaMtxEnabled') !== false;
@@ -35,6 +45,31 @@ export class MediamtxProxyService {
 
   private pathNameFromCameraId(cameraId: string) {
     return `cam_${cameraId.replace(/[^a-zA-Z0-9]/g, '')}`;
+  }
+
+  private durationToMilliseconds(value: string | undefined | null) {
+    if (!value) return null;
+    const matches = [...value.trim().matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h)/g)];
+    if (!matches.length) return null;
+
+    return matches.reduce((total, match) => {
+      const amount = Number(match[1]);
+      const unit = match[2];
+      if (!Number.isFinite(amount)) return total;
+      if (unit === 'ms') return total + amount;
+      if (unit === 's') return total + amount * 1000;
+      if (unit === 'm') return total + amount * 60 * 1000;
+      if (unit === 'h') return total + amount * 60 * 60 * 1000;
+      return total;
+    }, 0);
+  }
+
+  private sameDuration(current: string | undefined, desired: string | undefined) {
+    if (current === desired) return true;
+    const currentMs = this.durationToMilliseconds(current);
+    const desiredMs = this.durationToMilliseconds(desired);
+    if (currentMs === null || desiredMs === null) return false;
+    return currentMs === desiredMs;
   }
 
   private async apiRequest(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown) {
@@ -79,6 +114,28 @@ export class MediamtxProxyService {
     };
   }
 
+  private async warmCameraPaths() {
+    try {
+      const cameras = await this.camerasService.findAllInternal();
+      if (!cameras.length) return;
+
+      this.logger.log(`Aquecendo paths MediaMTX para ${cameras.length} câmera(s)...`);
+      const results = await Promise.allSettled(
+        cameras.map((camera) => this.ensurePathForCamera(camera.id)),
+      );
+      const warmed = results.filter((result) => result.status === 'fulfilled').length;
+      const failed = results.length - warmed;
+      if (failed > 0) {
+        this.logger.warn(`Aquecimento MediaMTX parcial: ${warmed}/${results.length} path(s) prontos.`);
+        return;
+      }
+      this.logger.log(`Aquecimento MediaMTX concluído: ${warmed}/${results.length} path(s) prontos.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'erro desconhecido';
+      this.logger.warn(`Falha ao aquecer paths MediaMTX: ${message}`);
+    }
+  }
+
   async ensurePathForCamera(cameraId: string) {
     if (!this.isEnabled()) {
       return { pathName: null as string | null, sourceUrl: null as string | null };
@@ -98,11 +155,14 @@ export class MediamtxProxyService {
 
     const pathName = this.pathNameFromCameraId(cameraId);
     const encodedPath = encodeURIComponent(pathName);
+    const sourceOnDemand = this.configService.get<boolean>('mediaMtxSourceOnDemand') ?? false;
+    const sourceOnDemandStartTimeout = this.configService.get<string>('mediaMtxSourceOnDemandStartTimeout') ?? '6s';
+    const sourceOnDemandCloseAfter = this.configService.get<string>('mediaMtxSourceOnDemandCloseAfter') ?? '5m';
     const desiredPath = {
       source: sourceUrl,
-      sourceOnDemand: true,
-      sourceOnDemandStartTimeout: '10s',
-      sourceOnDemandCloseAfter: '20s',
+      sourceOnDemand,
+      sourceOnDemandStartTimeout,
+      sourceOnDemandCloseAfter,
       rtspTransport: camera.preferredRtspTransport ?? this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp',
     };
 
@@ -111,8 +171,8 @@ export class MediamtxProxyService {
       const isSamePath =
         current.source === desiredPath.source &&
         current.sourceOnDemand === desiredPath.sourceOnDemand &&
-        current.sourceOnDemandStartTimeout === desiredPath.sourceOnDemandStartTimeout &&
-        current.sourceOnDemandCloseAfter === desiredPath.sourceOnDemandCloseAfter &&
+        this.sameDuration(current.sourceOnDemandStartTimeout, desiredPath.sourceOnDemandStartTimeout) &&
+        this.sameDuration(current.sourceOnDemandCloseAfter, desiredPath.sourceOnDemandCloseAfter) &&
         current.rtspTransport === desiredPath.rtspTransport;
 
       if (isSamePath) {
@@ -133,6 +193,12 @@ export class MediamtxProxyService {
 
     this.logger.log(`Path MediaMTX pronto ${pathName} -> ${this.sanitizeRtspUrl(sourceUrl)}`);
     return { pathName, sourceUrl };
+  }
+
+  buildInternalRtspUrl(pathName: string | null) {
+    if (!pathName) return null;
+    const base = (this.configService.get<string>('mediaMtxRtspInternalUrl') ?? 'rtsp://mediamtx:8554').replace(/\/+$/, '');
+    return `${base}/${pathName}`;
   }
 
   buildPublicUrls(req: Request, pathName: string | null, sourceUrl: string | null): DeliveryUrls {

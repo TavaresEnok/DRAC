@@ -16,6 +16,69 @@ type LiveStreamPlayerProps = {
 };
 
 const API_URL = getApiBaseUrl();
+const FLV_FIRST_FRAME_TIMEOUT_MS = 2500;
+const HLS_FIRST_FRAME_TIMEOUT_MS = 3500;
+const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 3500;
+const LIVE_PROTOCOL_STORAGE_PREFIX = 'drac-live-protocol';
+type ActiveLiveProtocol = 'WEBRTC' | 'FLV' | 'HLS';
+type LiveProtocol = 'flv' | 'hls' | 'webrtc' | 'mjpeg';
+
+function normalizeCodec(codec?: string | null) {
+  return String(codec ?? '').trim().toLowerCase();
+}
+
+function prefersModernBridge(codec?: string | null) {
+  const normalized = normalizeCodec(codec);
+  return normalized.includes('h265') || normalized.includes('hevc') || normalized.includes('hvc1') || normalized.includes('265');
+}
+
+function getStoredProtocol(cameraId: string): LiveProtocol | null {
+  try {
+    const stored = window.localStorage.getItem(`${LIVE_PROTOCOL_STORAGE_PREFIX}:${cameraId}`);
+    return stored === 'webrtc' || stored === 'hls' || stored === 'flv' ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeProtocol(cameraId: string, protocol: ActiveLiveProtocol) {
+  try {
+    window.localStorage.setItem(`${LIVE_PROTOCOL_STORAGE_PREFIX}:${cameraId}`, protocol.toLowerCase());
+  } catch {
+  }
+}
+
+function buildProtocolOrder(cameraId: string, preferred: LiveProtocol | null | undefined, codec?: string | null) {
+  const stored = getStoredProtocol(cameraId);
+  const order: LiveProtocol[] = [];
+  const push = (protocol?: LiveProtocol | null) => {
+    if (!protocol || protocol === 'mjpeg') return;
+    if (!order.includes(protocol)) order.push(protocol);
+  };
+
+  if (stored) push(stored);
+
+  if (prefersModernBridge(codec)) {
+    push('webrtc');
+    push('hls');
+    push('flv');
+    return order;
+  }
+
+  push(preferred ?? 'flv');
+  if (preferred === 'webrtc') {
+    push('hls');
+    push('flv');
+  } else if (preferred === 'hls') {
+    push('webrtc');
+    push('flv');
+  } else {
+    push('flv');
+    push('webrtc');
+    push('hls');
+  }
+  return order;
+}
 
 export function LiveStreamPlayer({
   cameraId,
@@ -40,7 +103,9 @@ export function LiveStreamPlayer({
   const [error, setError] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(muted);
   const [retryMessage, setRetryMessage] = useState<string | null>(null);
-  const [activeProtocol, setActiveProtocol] = useState<'WEBRTC' | 'FLV' | 'HLS' | null>(null);
+  const [activeProtocol, setActiveProtocol] = useState<ActiveLiveProtocol | null>(null);
+  const [posterUrl, setPosterUrl] = useState<string | null>(null);
+  const [hasLiveFrame, setHasLiveFrame] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
 
   const tokenHeaders = useMemo(
@@ -62,12 +127,14 @@ export function LiveStreamPlayer({
       retryTimerRef.current = null;
     };
 
-    const markHealthy = (protocol: 'WEBRTC' | 'FLV' | 'HLS') => {
+    const markHealthy = (protocol: ActiveLiveProtocol) => {
       retryAttemptRef.current = 0;
       setRetryMessage(null);
       setError(null);
       setActiveProtocol(protocol);
       setIsLoading(false);
+      setHasLiveFrame(true);
+      storeProtocol(cameraId, protocol);
     };
 
     const scheduleReconnect = (message: string) => {
@@ -80,6 +147,7 @@ export function LiveStreamPlayer({
       setActiveProtocol(null);
       setRetryMessage(`${message} Reconectando automaticamente...`);
       setIsLoading(true);
+      setHasLiveFrame(false);
       retryTimerRef.current = window.setTimeout(() => {
         retryTimerRef.current = null;
         setReloadNonce((value) => value + 1);
@@ -90,6 +158,8 @@ export function LiveStreamPlayer({
       setIsLoading(true);
       setError(null);
       setActiveProtocol(null);
+      setHasLiveFrame(false);
+      setPosterUrl(null);
       hasFrameRef.current = false;
 
       try {
@@ -98,6 +168,7 @@ export function LiveStreamPlayer({
           detectedVideoCodec?: string | null;
           protocols?: {
             flvUrl?: string | null;
+            posterUrl?: string | null;
             hlsUrl?: string | null;
             webrtcUrl?: string | null;
             whepUrl?: string | null;
@@ -114,11 +185,18 @@ export function LiveStreamPlayer({
           data?.protocols?.flvUrl ||
           `${API_URL}/camera-stream/${cameraId}/flv`;
         const streamToken = data?.streamToken ?? '';
+        const rawPosterUrl = data?.protocols?.posterUrl ?? `${API_URL}/camera-stream/${cameraId}/poster`;
         const hlsUrl = data?.protocols?.hlsUrl ?? null;
         const whepUrl =
           data?.protocols?.whepUrl
           ?? (data?.protocols?.webrtcUrl ? `${data.protocols.webrtcUrl.replace(/\/+$/, '')}/whep` : null);
         const preferredLiveProtocol = data?.preferredLiveProtocol ?? 'flv';
+        const protocolOrder = buildProtocolOrder(cameraId, preferredLiveProtocol, data?.detectedVideoCodec);
+
+        if (rawPosterUrl && streamToken) {
+          const separator = rawPosterUrl.includes('?') ? '&' : '?';
+          setPosterUrl(`${rawPosterUrl}${separator}token=${encodeURIComponent(streamToken)}&v=${Date.now()}`);
+        }
 
         if (!flvUrl || !streamToken) {
           if (preferredLiveProtocol === 'webrtc' && whepUrl) {
@@ -220,65 +298,81 @@ export function LiveStreamPlayer({
           pc.addTransceiver('video', { direction: 'recvonly' });
           pc.addTransceiver('audio', { direction: 'recvonly' });
 
-          pc.ontrack = (event) => {
-            if (cancelled) return;
-            const stream = event.streams[0] ?? (() => {
-              const fallback = webrtcStreamRef.current ?? new MediaStream();
-              fallback.addTrack(event.track);
-              return fallback;
+          await new Promise<void>((resolve, reject) => {
+            const startupTimeout = window.setTimeout(() => {
+              reject(new Error('WebRTC não entregou frames dentro do tempo limite.'));
+            }, WEBRTC_FIRST_FRAME_TIMEOUT_MS);
+
+            pc.ontrack = (event) => {
+              if (cancelled) return;
+              window.clearTimeout(startupTimeout);
+              const stream = event.streams[0] ?? (() => {
+                const fallback = webrtcStreamRef.current ?? new MediaStream();
+                fallback.addTrack(event.track);
+                return fallback;
+              })();
+              webrtcStreamRef.current = stream;
+              if (element.srcObject !== stream) {
+                element.srcObject = stream;
+              }
+              if (autoPlay) void element.play().catch(() => {});
+              markHealthy('WEBRTC');
+              resolve();
+            };
+
+            pc.onconnectionstatechange = () => {
+              if (cancelled) return;
+              if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                window.clearTimeout(startupTimeout);
+                void cleanupWebrtc().finally(() => {
+                  scheduleReconnect('Stream indisponível via WebRTC.');
+                });
+              }
+            };
+
+            void (async () => {
+              try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                await waitIceGatheringComplete(pc);
+
+                const localSdp = pc.localDescription?.sdp;
+                if (!localSdp) {
+                  throw new Error('Falha ao gerar SDP local do WebRTC.');
+                }
+
+                const response = await fetch(whepUrl, {
+                  method: 'POST',
+                  mode: 'cors',
+                  headers: {
+                    'Content-Type': 'application/sdp',
+                  },
+                  body: localSdp,
+                });
+
+                if (!response.ok) {
+                  throw new Error(`Falha ao conectar WebRTC (${response.status}).`);
+                }
+
+                const location = response.headers.get('location');
+                if (location) {
+                  webrtcSessionUrlRef.current = new URL(location, whepUrl).toString();
+                }
+
+                const remoteSdp = await response.text();
+                await pc.setRemoteDescription({
+                  type: 'answer',
+                  sdp: remoteSdp,
+                });
+              } catch (error) {
+                window.clearTimeout(startupTimeout);
+                reject(error);
+              }
             })();
-            webrtcStreamRef.current = stream;
-            if (element.srcObject !== stream) {
-              element.srcObject = stream;
-            }
-            if (autoPlay) void element.play().catch(() => {});
-            markHealthy('WEBRTC');
-          };
-
-          pc.onconnectionstatechange = () => {
-            if (cancelled) return;
-            if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-              void cleanupWebrtc().finally(() => {
-                scheduleReconnect('Stream indisponível via WebRTC.');
-              });
-            }
-          };
-
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          await waitIceGatheringComplete(pc);
-
-          const localSdp = pc.localDescription?.sdp;
-          if (!localSdp) {
-            throw new Error('Falha ao gerar SDP local do WebRTC.');
-          }
-
-          const response = await fetch(whepUrl, {
-            method: 'POST',
-            mode: 'cors',
-            headers: {
-              'Content-Type': 'application/sdp',
-            },
-            body: localSdp,
-          });
-
-          if (!response.ok) {
-            throw new Error(`Falha ao conectar WebRTC (${response.status}).`);
-          }
-
-          const location = response.headers.get('location');
-          if (location) {
-            webrtcSessionUrlRef.current = new URL(location, whepUrl).toString();
-          }
-
-          const remoteSdp = await response.text();
-          await pc.setRemoteDescription({
-            type: 'answer',
-            sdp: remoteSdp,
           });
         };
 
-        const startHlsFallback = async () => {
+        const startHls = async () => {
           cleanupFlvPlayer();
           if (!hlsUrl) {
             throw new Error('Stream indisponível: FLV incompatível e HLS não disponível.');
@@ -293,20 +387,31 @@ export function LiveStreamPlayer({
               backBufferLength: 30,
             });
             hlsRef.current = hls;
-            hls.attachMedia(element);
-            hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-              hls.loadSource(hlsUrl);
-            });
-            hls.on(Hls.Events.MANIFEST_PARSED, () => {
-              if (autoPlay) void element.play().catch(() => {});
-              markHealthy('HLS');
-            });
-            hls.on(Hls.Events.ERROR, (_event, dataError) => {
-              if (cancelled) return;
-              if (dataError?.fatal) {
-                cleanupHls();
-                scheduleReconnect('Stream indisponível via HLS.');
-              }
+            await new Promise<void>((resolve, reject) => {
+              const startupTimeout = window.setTimeout(() => {
+                reject(new Error('HLS não entregou frames dentro do tempo limite.'));
+              }, HLS_FIRST_FRAME_TIMEOUT_MS);
+
+              hls.attachMedia(element);
+              hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+                hls.loadSource(hlsUrl);
+              });
+              hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (autoPlay) void element.play().catch(() => {});
+              });
+              hls.on(Hls.Events.ERROR, (_event, dataError) => {
+                if (cancelled) return;
+                if (dataError?.fatal) {
+                  window.clearTimeout(startupTimeout);
+                  reject(new Error('Stream indisponível via HLS.'));
+                }
+              });
+              element.onloadeddata = () => {
+                if (cancelled) return;
+                window.clearTimeout(startupTimeout);
+                markHealthy('HLS');
+                resolve();
+              };
             });
             return;
           }
@@ -314,97 +419,106 @@ export function LiveStreamPlayer({
           if (element.canPlayType('application/vnd.apple.mpegurl')) {
             element.src = hlsUrl;
             if (autoPlay) void element.play().catch(() => {});
-            element.onloadeddata = () => {
-              if (cancelled) return;
-              markHealthy('HLS');
-            };
+            await new Promise<void>((resolve, reject) => {
+              const startupTimeout = window.setTimeout(() => {
+                reject(new Error('HLS nativo não entregou frames dentro do tempo limite.'));
+              }, HLS_FIRST_FRAME_TIMEOUT_MS);
+
+              element.onloadeddata = () => {
+                if (cancelled) return;
+                window.clearTimeout(startupTimeout);
+                markHealthy('HLS');
+                resolve();
+              };
+            });
             return;
           }
 
           throw new Error('Navegador sem suporte para FLV e HLS.');
         };
 
-        if (preferredLiveProtocol === 'webrtc' && whepUrl) {
-          try {
-            await startWebrtc(whepUrl);
+        const startFlv = async () => {
+          if (!mpegts.getFeatureList().mseLivePlayback) {
+            await startHls();
             return;
+          }
+
+          const player = mpegts.createPlayer(
+            {
+              type: 'flv',
+              isLive: true,
+              url: flvUrl,
+              hasAudio: true,
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${streamToken}`,
+              },
+              enableWorker: false,
+              liveBufferLatencyChasing: true,
+              liveBufferLatencyMaxLatency: 1.5,
+              liveBufferLatencyMinRemain: 0.2,
+              autoCleanupSourceBuffer: true,
+              fixAudioTimestampGap: false,
+            },
+          );
+
+          playerRef.current = player;
+          player.attachMediaElement(element);
+          player.load();
+          if (autoPlay) {
+            void player.play();
+          }
+
+          await new Promise<void>((resolve, reject) => {
+            noFrameTimeout = window.setTimeout(() => {
+              if (cancelled || hasFrameRef.current) return;
+              reject(new Error('FLV não entregou frames dentro do tempo limite.'));
+            }, FLV_FIRST_FRAME_TIMEOUT_MS);
+
+            player.on(mpegts.Events.ERROR, (_type, _detail, info) => {
+              if (cancelled) return;
+              const raw = typeof info === 'string' ? info : 'Falha ao carregar stream ao vivo.';
+              const normalized = raw.includes('Invalid video packet type 4')
+                ? 'Codec incompatível com FLV neste navegador.'
+                : raw;
+              reject(new Error(normalized));
+            });
+
+            element.onloadeddata = () => {
+              if (cancelled) return;
+              hasFrameRef.current = true;
+              if (noFrameTimeout != null) window.clearTimeout(noFrameTimeout);
+              markHealthy('FLV');
+              resolve();
+            };
+          });
+        };
+
+        for (const protocol of protocolOrder) {
+          try {
+            if (protocol === 'webrtc' && whepUrl) {
+              await startWebrtc(whepUrl);
+              return;
+            }
+            if (protocol === 'hls' && hlsUrl) {
+              await startHls();
+              return;
+            }
+            if (protocol === 'flv' && flvUrl && streamToken) {
+              await startFlv();
+              return;
+            }
           } catch {
+            if (noFrameTimeout != null) window.clearTimeout(noFrameTimeout);
+            noFrameTimeout = null;
+            cleanupFlvPlayer();
+            cleanupHls();
             await cleanupWebrtc();
           }
         }
 
-        if (preferredLiveProtocol === 'hls' && hlsUrl) {
-          try {
-            await startHlsFallback();
-            return;
-          } catch {
-            cleanupHls();
-          }
-        }
-
-        if (!mpegts.getFeatureList().mseLivePlayback) {
-          await startHlsFallback();
-          return;
-        }
-
-        const player = mpegts.createPlayer(
-          {
-            type: 'flv',
-            isLive: true,
-            url: flvUrl,
-            hasAudio: true,
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${streamToken}`,
-            },
-            enableWorker: false,
-            liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 1.5,
-            liveBufferLatencyMinRemain: 0.2,
-            autoCleanupSourceBuffer: true,
-            fixAudioTimestampGap: false,
-          },
-        );
-
-        playerRef.current = player;
-        player.attachMediaElement(element);
-        player.load();
-        if (autoPlay) {
-          void player.play();
-        }
-        noFrameTimeout = window.setTimeout(async () => {
-          if (cancelled) return;
-          if (hasFrameRef.current) return;
-          try {
-            cleanupFlvPlayer();
-            await startHlsFallback();
-          } catch {
-            scheduleReconnect('Stream sem frames no FLV e fallback HLS indisponível.');
-          }
-        }, 8000);
-
-        player.on(mpegts.Events.ERROR, async (_type, _detail, info) => {
-          if (cancelled) return;
-          try {
-            if (noFrameTimeout != null) window.clearTimeout(noFrameTimeout);
-            cleanupFlvPlayer();
-            await startHlsFallback();
-          } catch {
-            const raw = typeof info === 'string' ? info : 'Falha ao carregar stream ao vivo.';
-            const normalized = raw.includes('Invalid video packet type 4')
-              ? 'Codec incompatível com FLV neste navegador. Habilite HLS/WebRTC para essa câmera.'
-              : raw;
-            scheduleReconnect(normalized);
-          }
-        });
-
-        element.onloadeddata = () => {
-          if (cancelled) return;
-          hasFrameRef.current = true;
-          if (noFrameTimeout != null) window.clearTimeout(noFrameTimeout);
-          markHealthy('FLV');
-        };
+        throw new Error('Nenhum protocolo de live conseguiu iniciar para esta câmera.');
       } catch (streamError) {
         if (cancelled) return;
         const message = streamError instanceof Error ? streamError.message : 'Falha ao iniciar stream.';
@@ -474,16 +588,27 @@ export function LiveStreamPlayer({
 
   return (
     <div className={`relative overflow-hidden bg-black ${className ?? ''}`}>
+      {posterUrl && !hasLiveFrame && (
+        <img
+          src={posterUrl}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover opacity-80"
+          draggable={false}
+        />
+      )}
+
       <video
         ref={videoRef}
-        className="h-full w-full object-cover pointer-events-none"
+        className={`relative z-10 h-full w-full object-cover pointer-events-none transition-opacity duration-300 ${
+          posterUrl && !hasLiveFrame ? 'opacity-0' : 'opacity-100'
+        }`}
         muted={isMuted}
         playsInline
         autoPlay={autoPlay}
       />
 
       {showOverlay && isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-[1px]">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
           <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/50 px-3 py-2 text-xs text-white/80">
             <LoaderCircle className="h-4 w-4 animate-spin" />
             {retryMessage ?? `Carregando stream de ${cameraName}`}
@@ -492,7 +617,7 @@ export function LiveStreamPlayer({
       )}
 
       {showOverlay && error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60">
           <div className="max-w-[85%] rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-center text-xs text-red-200">
             <div className="mb-2 flex items-center justify-center gap-2">
               <AlertTriangle className="h-4 w-4" />
@@ -542,7 +667,7 @@ export function LiveStreamPlayer({
       )}
 
       {!cameraId && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60">
           <div className="flex items-center gap-2 text-xs text-white/60">
             <VideoOff className="h-4 w-4" />
             Nenhuma câmera selecionada

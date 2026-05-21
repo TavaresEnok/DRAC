@@ -2,11 +2,15 @@ import { Injectable, Logger, NotFoundException, ServiceUnavailableException } fr
 import { ConfigService } from '@nestjs/config';
 import { type Camera } from '@prisma/client';
 import { type Request, type Response } from 'express';
-import { spawn, spawnSync, type ChildProcessByStdio } from 'child_process';
+import { execFile, spawn, spawnSync, type ChildProcessByStdio } from 'child_process';
 import { type Readable } from 'stream';
+import { promisify } from 'util';
 import { CamerasService } from '../cameras/cameras.service';
 import { buildRtspUrl } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
+import { MediamtxProxyService } from './mediamtx-proxy.service';
+
+const execFileAsync = promisify(execFile);
 
 type FfmpegStreamConfig = {
   rtspTransport: string;
@@ -42,6 +46,11 @@ type StreamAttempt = {
   label: string;
 };
 
+type PosterCacheEntry = {
+  buffer: Buffer;
+  generatedAt: number;
+};
+
 @Injectable()
 export class FfmpegMjpegService {
   private readonly logger = new Logger(FfmpegMjpegService.name);
@@ -49,11 +58,15 @@ export class FfmpegMjpegService {
   private readonly metrics = new Map<string, StreamMetrics>();
   private readonly incidentCooldownMs: number;
   private readonly incidentLastByCamera = new Map<string, { code: string; at: number }>();
+  private readonly posterCache = new Map<string, PosterCacheEntry>();
+  private readonly posterInFlight = new Map<string, Promise<PosterCacheEntry>>();
+  private readonly posterCacheTtlMs: number;
 
   constructor(
     private readonly configService: ConfigService,
     private readonly camerasService: CamerasService,
     private readonly cryptoService: CryptoService,
+    private readonly mediamtxProxyService: MediamtxProxyService,
   ) {
     this.config = {
       rtspTransport: this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp',
@@ -65,6 +78,7 @@ export class FfmpegMjpegService {
       mjpegQ: Number(this.configService.get<number>('mjpegQ') ?? 5),
     };
     this.incidentCooldownMs = (this.configService.get<number>('streamIncidentCooldownSeconds') ?? 120) * 1000;
+    this.posterCacheTtlMs = Number(this.configService.get<number>('livePosterCacheTtlMs') ?? 15000);
   }
 
   checkFfmpegAvailable() {
@@ -297,6 +311,106 @@ export class FfmpegMjpegService {
       }
     }
     return Array.from(new Set(expanded));
+  }
+
+  private buildPosterArgs(rtspUrl: string, transport: RtspTransport): string[] {
+    return [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-rtsp_transport',
+      transport,
+      '-timeout',
+      String(this.config.stimeoutUs),
+      '-probesize',
+      String(this.config.probesize),
+      '-analyzeduration',
+      String(this.config.analyzedurationUs),
+      '-i',
+      rtspUrl,
+      '-frames:v',
+      '1',
+      '-q:v',
+      '5',
+      '-f',
+      'image2pipe',
+      '-vcodec',
+      'mjpeg',
+      'pipe:1',
+    ];
+  }
+
+  async getLivePosterFrame(cameraId: string): Promise<PosterCacheEntry> {
+    const now = Date.now();
+    const cached = this.posterCache.get(cameraId);
+    if (cached && now - cached.generatedAt < this.posterCacheTtlMs) {
+      return cached;
+    }
+
+    const inFlight = this.posterInFlight.get(cameraId);
+    if (inFlight) return inFlight;
+
+    const promise = this.generateLivePosterFrame(cameraId).finally(() => {
+      this.posterInFlight.delete(cameraId);
+    });
+    this.posterInFlight.set(cameraId, promise);
+    return promise;
+  }
+
+  private async generateLivePosterFrame(cameraId: string): Promise<PosterCacheEntry> {
+    const camera = await this.camerasService.getCameraOrThrow(cameraId);
+    if (!this.checkFfmpegAvailable()) {
+      throw new ServiceUnavailableException('FFmpeg não está instalado no servidor.');
+    }
+
+    const password = this.cryptoService.decrypt(camera.passwordEncrypted);
+    const primaryUrl = this.buildCameraRtspUrl(camera, password);
+    const fallbackUrl = camera.subtype !== 0 ? this.buildCameraRtspUrl(camera, password, 0) : null;
+    const directUrls = this.expandUrlsWithPortFallbacks(fallbackUrl ? [primaryUrl, fallbackUrl] : [primaryUrl], camera.rtspPort);
+    const mediamtxUrl = await this.getMediamtxPosterSource(cameraId);
+    const urls = Array.from(new Set([...(mediamtxUrl ? [mediamtxUrl] : []), ...directUrls]));
+    const transports = this.getTransportCandidates(camera);
+    let lastError: unknown = null;
+
+    for (const transport of transports) {
+      for (const url of urls) {
+        try {
+          const { stdout } = await execFileAsync('ffmpeg', this.buildPosterArgs(url, transport), {
+            encoding: 'buffer',
+            maxBuffer: 4 * 1024 * 1024,
+            timeout: Math.max(2500, Math.ceil(this.config.stimeoutUs / 1000) + 1000),
+          });
+          if (Buffer.isBuffer(stdout) && stdout.length > 0) {
+            const entry = { buffer: stdout, generatedAt: Date.now() };
+            this.posterCache.set(cameraId, entry);
+            return entry;
+          }
+        } catch (error) {
+          lastError = error;
+          this.logger.debug(
+            `Falha ao gerar poster live camera=${cameraId} transport=${transport} url=${this.sanitizeRtspUrl(url)}: ${(error as Error).message}`,
+          );
+        }
+      }
+    }
+
+    const stale = this.posterCache.get(cameraId);
+    if (stale) return stale;
+
+    throw new ServiceUnavailableException(
+      lastError instanceof Error ? `Falha ao gerar imagem inicial: ${lastError.message}` : 'Falha ao gerar imagem inicial.',
+    );
+  }
+
+  private async getMediamtxPosterSource(cameraId: string) {
+    if (!this.mediamtxProxyService.isEnabled()) return null;
+    try {
+      const ensured = await this.mediamtxProxyService.ensurePathForCamera(cameraId);
+      return this.mediamtxProxyService.buildInternalRtspUrl(ensured.pathName);
+    } catch (error) {
+      this.logger.debug(`Poster live seguirá por RTSP direto; MediaMTX indisponível camera=${cameraId}: ${(error as Error).message}`);
+      return null;
+    }
   }
 
   // Deprecated overload kept internal for compatibility with existing call sites.

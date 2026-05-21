@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Linking,
   Pressable,
   RefreshControl,
@@ -67,6 +68,7 @@ type StreamUrls = {
     hlsUrl?: string | null;
     webrtcUrl?: string | null;
     flvUrl?: string | null;
+    posterUrl?: string | null;
   };
 };
 
@@ -85,7 +87,15 @@ type Session = {
 };
 
 function cleanApiUrl(value: string) {
-  return value.trim().replace(/\/+$/, '');
+  const next = value.trim().replace(/\/+$/, '');
+  if (!next) return DEFAULT_API_URL;
+  return next.replace(/\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?/i, '//168.194.13.70:3000');
+}
+
+function normalizeServerUrl(value: string | null | undefined, apiUrl: string) {
+  if (!value) return null;
+  const api = new URL(apiUrl);
+  return value.replace(/\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?/i, `//${api.host}`);
 }
 
 function formatTime(value?: string | null) {
@@ -135,7 +145,7 @@ async function request<T>(apiUrl: string, path: string, token?: string, init?: R
   return data as T;
 }
 
-function LiveVideo({ uri }: { uri: string | null }) {
+function LiveVideo({ uri, posterUri }: { uri: string | null; posterUri?: string | null }) {
   const player = useVideoPlayer(uri ? { uri } : null, (instance) => {
     instance.loop = true;
     if (uri) instance.play();
@@ -144,6 +154,7 @@ function LiveVideo({ uri }: { uri: string | null }) {
   if (!uri) {
     return (
       <View style={[styles.video, styles.videoEmpty]}>
+        {posterUri ? <Image source={{ uri: posterUri }} style={styles.videoPoster} /> : null}
         <Text style={styles.videoEmptyTitle}>Stream indisponivel</Text>
         <Text style={styles.videoEmptyText}>Atualize ou abra a camera novamente.</Text>
       </View>
@@ -204,6 +215,7 @@ export default function App() {
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
   const [gridSize, setGridSize] = useState<GridSize>(2);
   const [streamUrls, setStreamUrls] = useState<Record<string, string | null>>({});
+  const [streamPosters, setStreamPosters] = useState<Record<string, string | null>>({});
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [relays, setRelays] = useState<Record<string, RelayDiscovery>>({});
   const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) ?? cameras[0] ?? null;
@@ -226,8 +238,12 @@ export default function App() {
       .then((raw) => {
         if (!raw) return;
         const stored = JSON.parse(raw) as Session;
-        setSession(stored);
-        setApiUrl(stored.apiUrl);
+        const normalized = { ...stored, apiUrl: cleanApiUrl(stored.apiUrl) };
+        if (normalized.apiUrl !== stored.apiUrl) {
+          void AsyncStorage.setItem(SESSION_KEY, JSON.stringify(normalized));
+        }
+        setSession(normalized);
+        setApiUrl(normalized.apiUrl);
       })
       .catch(() => undefined);
   }, []);
@@ -278,6 +294,7 @@ export default function App() {
       const data = await request<Camera[]>(session.apiUrl, '/cameras', session.token);
       setCameras(data);
       setSelectedCameraId((current) => current ?? data[0]?.id ?? null);
+      void Promise.all(data.slice(0, 8).map((camera) => loadStream(camera.id)));
     } catch (error) {
       Alert.alert('Falha ao carregar', error instanceof Error ? error.message : 'Nao foi possivel carregar cameras.');
     } finally {
@@ -289,9 +306,16 @@ export default function App() {
     if (!session) return;
     try {
       const data = await request<StreamUrls>(session.apiUrl, `/camera-stream/${cameraId}/urls`, session.token);
-      setStreamUrls((current) => ({ ...current, [cameraId]: data.protocols?.hlsUrl ?? null }));
+      const hlsUrl = normalizeServerUrl(data.protocols?.hlsUrl, session.apiUrl);
+      const posterBaseUrl = normalizeServerUrl(data.protocols?.posterUrl, session.apiUrl);
+      const posterUrl = posterBaseUrl && data.streamToken
+        ? `${posterBaseUrl}${posterBaseUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(data.streamToken)}&v=${Date.now()}`
+        : null;
+      setStreamUrls((current) => ({ ...current, [cameraId]: hlsUrl }));
+      setStreamPosters((current) => ({ ...current, [cameraId]: posterUrl }));
     } catch {
       setStreamUrls((current) => ({ ...current, [cameraId]: null }));
+      setStreamPosters((current) => ({ ...current, [cameraId]: null }));
     }
   };
 
@@ -365,7 +389,8 @@ export default function App() {
     if (!session) return;
     try {
       const data = await request<{ playToken: string }>(session.apiUrl, `/recordings/${recording.id}/play-token`, session.token, { method: 'POST' });
-      const url = `${session.apiUrl}/recordings/${recording.id}/play?token=${encodeURIComponent(data.playToken)}&compatible=1`;
+      const url = normalizeServerUrl(`${session.apiUrl}/recordings/${recording.id}/play?token=${encodeURIComponent(data.playToken)}&compatible=1`, session.apiUrl);
+      if (!url) throw new Error('URL de playback indisponivel.');
       await Linking.openURL(url);
     } catch (error) {
       Alert.alert('Playback', error instanceof Error ? error.message : 'Nao foi possivel abrir a gravacao.');
@@ -376,7 +401,9 @@ export default function App() {
     if (!session) return;
     try {
       const target = `${FileSystem.documentDirectory}${recording.id}.mp4`;
-      const result = await FileSystem.downloadAsync(`${session.apiUrl}/recordings/${recording.id}/download`, target, {
+      const url = normalizeServerUrl(`${session.apiUrl}/recordings/${recording.id}/download`, session.apiUrl);
+      if (!url) throw new Error('URL de download indisponivel.');
+      const result = await FileSystem.downloadAsync(url, target, {
         headers: { Authorization: `Bearer ${session.token}` },
       });
       if (await Sharing.isAvailableAsync()) {
@@ -392,7 +419,7 @@ export default function App() {
   if (!session) {
     return (
       <LinearGradient colors={['#f6f3ed', '#ece7dc', '#d7e4d5']} style={styles.loginScreen}>
-        <StatusBar style="dark" />
+        <StatusBar style="light" />
         <SafeAreaView style={styles.loginSafe}>
           <View style={styles.loginHero}>
             <View style={styles.logoMark}>
@@ -421,7 +448,7 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.screen}>
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
       <View style={styles.topBar}>
         <View>
           <Text style={styles.appName}>Drac</Text>
@@ -463,7 +490,20 @@ export default function App() {
                     style={styles.cameraCard}
                   >
                     <View style={styles.cameraPreview}>
-                      <Text style={styles.cameraPreviewText}>LIVE</Text>
+                      {streamPosters[camera.id] ? (
+                        <Image source={{ uri: streamPosters[camera.id] ?? undefined }} style={styles.cameraPreviewImage} />
+                      ) : (
+                        <View style={styles.cameraPreviewFallback}>
+                          <Text style={styles.cameraPreviewText}>DRAC</Text>
+                        </View>
+                      )}
+                      <View style={styles.cameraPreviewShade} />
+                      <View style={[styles.liveBadge, isOnline(camera) ? styles.liveBadgeOnline : styles.liveBadgeOffline]}>
+                        <View style={[styles.liveDot, isOnline(camera) ? styles.liveDotOnline : styles.liveDotOffline]} />
+                        <Text style={[styles.liveBadgeText, isOnline(camera) ? styles.liveBadgeTextOnline : styles.liveBadgeTextOffline]}>
+                          {isOnline(camera) ? 'AO VIVO' : 'OFF'}
+                        </Text>
+                      </View>
                     </View>
                     <View style={styles.cameraCardBody}>
                       <View style={styles.cameraCardTop}>
@@ -509,7 +549,7 @@ export default function App() {
                   style={[styles.gridTile, selectedCamera?.id === camera.id && styles.gridTileActive]}
                 >
                   <View style={styles.videoFrame}>
-                    <LiveVideo uri={streamUrls[camera.id] ?? null} />
+                    <LiveVideo uri={streamUrls[camera.id] ?? null} posterUri={streamPosters[camera.id] ?? null} />
                     <View style={styles.videoOverlayTop}>
                       <Text style={styles.videoOverlayTitle}>{camera.name}</Text>
                       <Text style={styles.videoProtocol}>HLS</Text>
@@ -634,128 +674,149 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#f4f1eb' },
+  screen: { flex: 1, backgroundColor: '#071013' },
   loginScreen: { flex: 1 },
   loginSafe: { flex: 1, justifyContent: 'space-between', padding: 20, paddingTop: 64, paddingBottom: 28 },
   loginHero: { gap: 10 },
-  logoMark: { width: 72, height: 72, borderRadius: 24, backgroundColor: '#1f2b24', alignItems: 'center', justifyContent: 'center', shadowColor: '#182018', shadowOpacity: 0.24, shadowRadius: 20, elevation: 7 },
-  logoLens: { width: 34, height: 34, borderRadius: 17, borderWidth: 8, borderColor: '#9cc6a2', backgroundColor: '#101510' },
-  loginBrand: { color: '#182018', fontSize: 16, fontWeight: '900', letterSpacing: 3, textTransform: 'uppercase', marginTop: 8 },
-  loginTitle: { color: '#182018', fontSize: 36, lineHeight: 40, fontWeight: '900', maxWidth: 320 },
-  loginSubtitle: { color: '#5f6259', fontSize: 15, lineHeight: 22, maxWidth: 340 },
-  loginCard: { backgroundColor: 'rgba(255,255,255,0.78)', borderWidth: 1, borderColor: 'rgba(24,32,24,0.08)', borderRadius: 28, padding: 18, gap: 8, shadowColor: '#303426', shadowOpacity: 0.16, shadowRadius: 22, elevation: 9 },
-  formLabel: { color: '#68665c', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1.2, marginLeft: 2, marginTop: 4 },
-  input: { height: 50, borderWidth: 1, borderColor: '#d6d0c4', backgroundColor: '#fbfaf6', borderRadius: 16, paddingHorizontal: 14, color: '#1d211c', fontSize: 14 },
-  primaryButton: { height: 52, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f2b24', marginTop: 8 },
-  primaryButtonText: { color: '#f7f3ea', fontWeight: '900', fontSize: 14 },
-  topBar: { paddingHorizontal: 18, paddingTop: 12, paddingBottom: 14, borderBottomWidth: 1, borderColor: '#e4ded2', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f4f1eb' },
-  appName: { color: '#1b211c', fontSize: 24, fontWeight: '900', letterSpacing: 0.2 },
-  headerMeta: { color: '#77756c', fontSize: 12, marginTop: 2 },
-  refreshButton: { borderWidth: 1, borderColor: '#d7d0c2', backgroundColor: '#fffdf8', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 },
-  refreshText: { color: '#20261f', fontSize: 12, fontWeight: '900' },
-  content: { padding: 16, paddingBottom: 96 },
-  page: { gap: 14 },
-  heroCard: { borderRadius: 28, padding: 20, minHeight: 150, justifyContent: 'space-between', overflow: 'hidden' },
-  heroEyebrow: { color: '#aab9a4', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1.5 },
-  heroTitle: { color: '#fbfaf6', fontSize: 28, fontWeight: '900', marginTop: 8 },
-  heroSubtitle: { color: '#c9d1c5', fontSize: 13, marginTop: 6, lineHeight: 19, maxWidth: 280 },
-  heroDot: { position: 'absolute', right: -30, bottom: -38, width: 150, height: 150, borderRadius: 75, backgroundColor: 'rgba(156,198,162,0.18)' },
+  logoMark: { width: 76, height: 76, borderRadius: 28, backgroundColor: '#10221f', alignItems: 'center', justifyContent: 'center', shadowColor: '#28d08a', shadowOpacity: 0.28, shadowRadius: 24, elevation: 10, borderWidth: 1, borderColor: '#22443c' },
+  logoLens: { width: 34, height: 34, borderRadius: 17, borderWidth: 8, borderColor: '#42d392', backgroundColor: '#071013' },
+  loginBrand: { color: '#d8fff0', fontSize: 16, fontWeight: '900', letterSpacing: 3, textTransform: 'uppercase', marginTop: 8 },
+  loginTitle: { color: '#f5fff9', fontSize: 36, lineHeight: 40, fontWeight: '900', maxWidth: 330 },
+  loginSubtitle: { color: '#8aa39a', fontSize: 15, lineHeight: 22, maxWidth: 350 },
+  loginCard: { backgroundColor: 'rgba(13,26,25,0.92)', borderWidth: 1, borderColor: 'rgba(100,255,190,0.12)', borderRadius: 30, padding: 18, gap: 8, shadowColor: '#000', shadowOpacity: 0.36, shadowRadius: 28, elevation: 12 },
+  formLabel: { color: '#7c938b', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1.2, marginLeft: 2, marginTop: 4 },
+  input: { height: 52, borderWidth: 1, borderColor: '#1f3835', backgroundColor: '#091817', borderRadius: 18, paddingHorizontal: 14, color: '#f4fff8', fontSize: 14 },
+  primaryButton: { height: 54, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: '#28d08a', marginTop: 10, shadowColor: '#28d08a', shadowOpacity: 0.26, shadowRadius: 18, elevation: 7 },
+  primaryButtonText: { color: '#06120f', fontWeight: '900', fontSize: 14 },
+
+  topBar: { paddingHorizontal: 18, paddingTop: 12, paddingBottom: 14, borderBottomWidth: 1, borderColor: '#10211f', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#071013' },
+  appName: { color: '#effff7', fontSize: 25, fontWeight: '900', letterSpacing: 0.2 },
+  headerMeta: { color: '#789087', fontSize: 12, marginTop: 2 },
+  refreshButton: { borderWidth: 1, borderColor: '#1d3632', backgroundColor: '#0c1b19', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 },
+  refreshText: { color: '#d6fff0', fontSize: 12, fontWeight: '900' },
+  content: { padding: 16, paddingBottom: 108, backgroundColor: '#071013' },
+  page: { gap: 16 },
+
+  heroCard: { borderRadius: 32, padding: 22, minHeight: 158, justifyContent: 'space-between', overflow: 'hidden', borderWidth: 1, borderColor: '#245047' },
+  heroEyebrow: { color: '#8ef0bf', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1.5 },
+  heroTitle: { color: '#f4fff8', fontSize: 29, fontWeight: '900', marginTop: 8 },
+  heroSubtitle: { color: '#a4bbb2', fontSize: 13, marginTop: 6, lineHeight: 19, maxWidth: 290 },
+  heroDot: { position: 'absolute', right: -36, bottom: -42, width: 160, height: 160, borderRadius: 80, backgroundColor: 'rgba(40,208,138,0.18)' },
   metricsRow: { flexDirection: 'row', gap: 10 },
-  metric: { flex: 1, borderWidth: 1, borderColor: '#e0d9ce', backgroundColor: '#fffdf8', borderRadius: 22, padding: 14 },
-  metricValue: { color: '#1d211c', fontSize: 24, fontWeight: '900' },
-  metricLabel: { color: '#7c786f', fontSize: 11, fontWeight: '800', marginTop: 2 },
-  groupBlock: { gap: 10, marginTop: 4 },
+  metric: { flex: 1, borderWidth: 1, borderColor: '#14302d', backgroundColor: '#0d1b1a', borderRadius: 24, padding: 15, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, elevation: 2 },
+  metricValue: { color: '#f4fff8', fontSize: 24, fontWeight: '900' },
+  metricLabel: { color: '#7f958d', fontSize: 11, fontWeight: '800', marginTop: 2 },
+
+  groupBlock: { gap: 12, marginTop: 4 },
   groupHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  groupTitle: { color: '#282d27', fontSize: 14, fontWeight: '900' },
-  groupCount: { color: '#8b857b', fontSize: 12, fontWeight: '800' },
-  cameraCard: { borderWidth: 1, borderColor: '#e0d9ce', backgroundColor: '#fffdf8', borderRadius: 24, padding: 10, flexDirection: 'row', gap: 12, shadowColor: '#8f8878', shadowOpacity: 0.08, shadowRadius: 12, elevation: 2 },
-  cameraPreview: { width: 96, minHeight: 86, borderRadius: 18, backgroundColor: '#182018', alignItems: 'center', justifyContent: 'center' },
-  cameraPreviewText: { color: '#9cc6a2', fontSize: 11, fontWeight: '900', letterSpacing: 1.6 },
+  groupTitle: { color: '#e6fff4', fontSize: 14, fontWeight: '900' },
+  groupCount: { color: '#738b83', fontSize: 12, fontWeight: '800' },
+  cameraCard: { borderWidth: 1, borderColor: '#132927', backgroundColor: '#0d1b1a', borderRadius: 28, padding: 10, flexDirection: 'row', gap: 13, shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 18, elevation: 4 },
+  cameraPreview: { width: 112, minHeight: 96, borderRadius: 22, backgroundColor: '#030807', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  cameraPreviewImage: { position: 'absolute', width: '100%', height: '100%', resizeMode: 'cover' },
+  cameraPreviewFallback: { position: 'absolute', width: '100%', height: '100%', backgroundColor: '#10211f', alignItems: 'center', justifyContent: 'center' },
+  cameraPreviewShade: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.18)' },
+  cameraPreviewText: { color: '#42d392', fontSize: 11, fontWeight: '900', letterSpacing: 1.8 },
+  liveBadge: { position: 'absolute', left: 8, top: 8, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', gap: 5, alignItems: 'center', borderWidth: 1 },
+  liveBadgeOnline: { backgroundColor: 'rgba(40,208,138,0.18)', borderColor: 'rgba(40,208,138,0.36)' },
+  liveBadgeOffline: { backgroundColor: 'rgba(255,91,91,0.16)', borderColor: 'rgba(255,91,91,0.32)' },
+  liveDot: { width: 6, height: 6, borderRadius: 3 },
+  liveDotOnline: { backgroundColor: '#28d08a' },
+  liveDotOffline: { backgroundColor: '#ff6b6b' },
+  liveBadgeText: { fontSize: 9, fontWeight: '900', letterSpacing: 0.8 },
+  liveBadgeTextOnline: { color: '#c7ffdf' },
+  liveBadgeTextOffline: { color: '#ffd4d4' },
   cameraCardBody: { flex: 1, gap: 4, justifyContent: 'center' },
   cameraCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
-  cameraName: { color: '#20251f', fontWeight: '900', fontSize: 15, flexShrink: 1 },
-  cameraMeta: { color: '#77756c', fontSize: 12, marginTop: 2 },
+  cameraName: { color: '#f4fff8', fontWeight: '900', fontSize: 16, flexShrink: 1 },
+  cameraMeta: { color: '#7f958d', fontSize: 12, marginTop: 2 },
   statusPill: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1 },
-  statusOnline: { backgroundColor: '#edf8ed', borderColor: '#bcd9bd' },
-  statusOffline: { backgroundColor: '#f8eeee', borderColor: '#e0c3c3' },
+  statusOnline: { backgroundColor: 'rgba(40,208,138,0.14)', borderColor: 'rgba(40,208,138,0.32)' },
+  statusOffline: { backgroundColor: 'rgba(255,91,91,0.12)', borderColor: 'rgba(255,91,91,0.28)' },
   statusText: { fontSize: 9, fontWeight: '900' },
-  statusTextOnline: { color: '#326a3a' },
-  statusTextOffline: { color: '#8a3b3b' },
+  statusTextOnline: { color: '#84f6b7' },
+  statusTextOffline: { color: '#ff9d9d' },
   permissionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-  permissionBadge: { color: '#4f594d', backgroundColor: '#f0eadf', borderRadius: 999, overflow: 'hidden', paddingHorizontal: 8, paddingVertical: 3, fontSize: 10, fontWeight: '900' },
+  permissionBadge: { color: '#b7d1c7', backgroundColor: '#122724', borderRadius: 999, overflow: 'hidden', paddingHorizontal: 8, paddingVertical: 3, fontSize: 10, fontWeight: '900' },
+
   sectionHeader: { gap: 10 },
-  sectionTitle: { color: '#20251f', fontSize: 24, fontWeight: '900' },
-  sectionSubtitle: { color: '#77756c', fontSize: 13, marginTop: 2 },
+  sectionTitle: { color: '#f4fff8', fontSize: 25, fontWeight: '900' },
+  sectionSubtitle: { color: '#7f958d', fontSize: 13, marginTop: 2 },
   segmented: { flexDirection: 'row', gap: 8 },
-  chip: { borderWidth: 1, borderColor: '#d7d0c2', backgroundColor: '#fffdf8', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 },
-  chipActive: { backgroundColor: '#1f2b24', borderColor: '#1f2b24' },
-  chipText: { color: '#55584f', fontWeight: '900', fontSize: 12 },
-  chipTextActive: { color: '#f7f3ea' },
+  chip: { borderWidth: 1, borderColor: '#1d3632', backgroundColor: '#0d1b1a', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 },
+  chipActive: { backgroundColor: '#28d08a', borderColor: '#28d08a' },
+  chipText: { color: '#9ab1a8', fontWeight: '900', fontSize: 12 },
+  chipTextActive: { color: '#06120f' },
+
   grid: { gap: 12 },
-  gridTile: { borderWidth: 1, borderColor: '#e0d9ce', backgroundColor: '#fffdf8', borderRadius: 24, overflow: 'hidden' },
-  gridTileActive: { borderColor: '#1f2b24', borderWidth: 2 },
-  videoFrame: { position: 'relative', backgroundColor: '#090b0a' },
-  video: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#070807' },
+  gridTile: { borderWidth: 1, borderColor: '#132927', backgroundColor: '#0d1b1a', borderRadius: 26, overflow: 'hidden' },
+  gridTileActive: { borderColor: '#28d08a', borderWidth: 2 },
+  videoFrame: { position: 'relative', backgroundColor: '#030807', overflow: 'hidden' },
+  videoPoster: { position: 'absolute', width: '100%', aspectRatio: 16 / 9, resizeMode: 'cover', opacity: 0.72 },
+  video: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#030807' },
   videoEmpty: { alignItems: 'center', justifyContent: 'center', padding: 18 },
-  videoEmptyTitle: { color: '#f4efe6', fontSize: 14, fontWeight: '900' },
-  videoEmptyText: { color: '#969286', fontSize: 12, marginTop: 4, textAlign: 'center' },
-  videoOverlayTop: { position: 'absolute', top: 10, left: 10, right: 10, flexDirection: 'row', justifyContent: 'space-between', pointerEvents: 'none' },
-  videoOverlayTitle: { color: '#fffdf8', fontSize: 12, fontWeight: '900', backgroundColor: 'rgba(0,0,0,0.45)', borderRadius: 999, overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 5 },
-  videoProtocol: { color: '#182018', fontSize: 10, fontWeight: '900', backgroundColor: '#9cc6a2', borderRadius: 999, overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 5 },
+  videoEmptyTitle: { color: '#effff7', fontSize: 14, fontWeight: '900' },
+  videoEmptyText: { color: '#789087', fontSize: 12, marginTop: 4, textAlign: 'center' },
+  videoOverlayTop: { position: 'absolute', top: 10, left: 10, right: 10, flexDirection: 'row', justifyContent: 'space-between' },
+  videoOverlayTitle: { color: '#f4fff8', fontSize: 12, fontWeight: '900', backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 999, overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 5 },
+  videoProtocol: { color: '#06120f', fontSize: 10, fontWeight: '900', backgroundColor: '#28d08a', borderRadius: 999, overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 5 },
   tileFooter: { padding: 12 },
-  tileTitle: { color: '#20251f', fontWeight: '900', fontSize: 13 },
-  tileMeta: { color: '#77756c', fontSize: 11, marginTop: 2 },
-  controlCard: { borderWidth: 1, borderColor: '#e0d9ce', backgroundColor: '#fffdf8', borderRadius: 28, padding: 14, gap: 14 },
+  tileTitle: { color: '#eafff5', fontWeight: '900', fontSize: 13 },
+  tileMeta: { color: '#7f958d', fontSize: 11, marginTop: 2 },
+
+  controlCard: { borderWidth: 1, borderColor: '#15302d', backgroundColor: '#0d1b1a', borderRadius: 30, padding: 15, gap: 15, shadowColor: '#000', shadowOpacity: 0.24, shadowRadius: 18, elevation: 3 },
   controlHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' },
-  panelTitle: { color: '#20251f', fontWeight: '900', fontSize: 17 },
+  panelTitle: { color: '#f4fff8', fontWeight: '900', fontSize: 18 },
   actionGrid: { flexDirection: 'row', gap: 8 },
-  actionPill: { flex: 1, borderWidth: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center', paddingVertical: 12 },
-  actionPill_neutral: { borderColor: '#d8d0c3', backgroundColor: '#f7f2e9' },
-  actionPill_danger: { borderColor: '#e3b9b0', backgroundColor: '#fff0ed' },
-  actionPill_success: { borderColor: '#b8d8b9', backgroundColor: '#edf8ed' },
+  actionPill: { flex: 1, borderWidth: 1, borderRadius: 17, alignItems: 'center', justifyContent: 'center', paddingVertical: 13 },
+  actionPill_neutral: { borderColor: '#23413c', backgroundColor: '#112320' },
+  actionPill_danger: { borderColor: 'rgba(255,91,91,0.34)', backgroundColor: 'rgba(255,91,91,0.12)' },
+  actionPill_success: { borderColor: 'rgba(40,208,138,0.34)', backgroundColor: 'rgba(40,208,138,0.12)' },
   actionPillText: { fontWeight: '900', fontSize: 12 },
-  actionPillText_neutral: { color: '#343932' },
-  actionPillText_danger: { color: '#a3392c' },
-  actionPillText_success: { color: '#2e6c39' },
+  actionPillText_neutral: { color: '#d9fff0' },
+  actionPillText_danger: { color: '#ff9d9d' },
+  actionPillText_success: { color: '#84f6b7' },
   disabled: { opacity: 0.36 },
-  ptzCard: { backgroundColor: '#f3eee5', borderRadius: 24, padding: 14, gap: 14 },
+  ptzCard: { backgroundColor: '#091817', borderRadius: 26, padding: 15, gap: 14, borderWidth: 1, borderColor: '#132927' },
   ptzHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  ptzTitle: { color: '#20251f', fontWeight: '900', fontSize: 14 },
-  ptzSubtitle: { color: '#7b766c', fontSize: 12, fontWeight: '800' },
+  ptzTitle: { color: '#f4fff8', fontWeight: '900', fontSize: 14 },
+  ptzSubtitle: { color: '#7f958d', fontSize: 12, fontWeight: '800' },
   ptzPad: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  ptzButton: { width: '30%', minHeight: 54, borderWidth: 1, borderColor: '#d2cabd', borderRadius: 18, backgroundColor: '#fffdf8', alignItems: 'center', justifyContent: 'center' },
-  ptzCenter: { width: '30%', minHeight: 54, borderRadius: 18, backgroundColor: '#1f2b24', alignItems: 'center', justifyContent: 'center' },
-  ptzText: { color: '#252a24', fontWeight: '900', fontSize: 11 },
-  ptzCenterText: { color: '#9cc6a2', fontWeight: '900', fontSize: 12 },
-  ptzSpacer: { width: '30%', minHeight: 54 },
+  ptzButton: { width: '30%', minHeight: 56, borderWidth: 1, borderColor: '#1d3632', borderRadius: 19, backgroundColor: '#0e201d', alignItems: 'center', justifyContent: 'center' },
+  ptzCenter: { width: '30%', minHeight: 56, borderRadius: 19, backgroundColor: '#28d08a', alignItems: 'center', justifyContent: 'center' },
+  ptzText: { color: '#d9fff0', fontWeight: '900', fontSize: 11 },
+  ptzCenterText: { color: '#06120f', fontWeight: '900', fontSize: 12 },
+  ptzSpacer: { width: '30%', minHeight: 56 },
   zoomRow: { flexDirection: 'row', gap: 8 },
+
   cameraChips: { flexDirection: 'row', gap: 8, paddingRight: 16 },
   timeline: { gap: 10 },
-  recordingCard: { borderWidth: 1, borderColor: '#e0d9ce', backgroundColor: '#fffdf8', borderRadius: 22, padding: 12, flexDirection: 'row', gap: 12 },
-  timelineRail: { width: 4, borderRadius: 999, backgroundColor: '#9cc6a2' },
+  recordingCard: { borderWidth: 1, borderColor: '#132927', backgroundColor: '#0d1b1a', borderRadius: 24, padding: 13, flexDirection: 'row', gap: 12 },
+  timelineRail: { width: 4, borderRadius: 999, backgroundColor: '#28d08a' },
   recordingBody: { flex: 1, gap: 8 },
-  recordingTitle: { color: '#20251f', fontWeight: '900', fontSize: 15 },
+  recordingTitle: { color: '#f4fff8', fontWeight: '900', fontSize: 15 },
   rowButtons: { flexDirection: 'row', gap: 8 },
-  smallButton: { borderRadius: 14, backgroundColor: '#1f2b24', paddingHorizontal: 14, paddingVertical: 10 },
-  smallButtonText: { color: '#f7f3ea', fontWeight: '900', fontSize: 12 },
-  smallButtonDark: { borderRadius: 14, backgroundColor: '#ede7dc', paddingHorizontal: 14, paddingVertical: 10 },
-  smallButtonDarkText: { color: '#252a24', fontWeight: '900', fontSize: 12 },
-  emptyCard: { borderWidth: 1, borderColor: '#e0d9ce', backgroundColor: '#fffdf8', borderRadius: 24, padding: 22, alignItems: 'center' },
-  emptyTitle: { color: '#20251f', fontSize: 16, fontWeight: '900' },
-  emptyText: { color: '#77756c', textAlign: 'center', marginTop: 6, lineHeight: 18 },
-  profileCard: { backgroundColor: '#fffdf8', borderWidth: 1, borderColor: '#e0d9ce', borderRadius: 28, padding: 20, alignItems: 'center', gap: 10 },
-  avatar: { width: 70, height: 70, borderRadius: 35, backgroundColor: '#1f2b24', alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: '#9cc6a2', fontSize: 28, fontWeight: '900' },
-  profileName: { color: '#20251f', fontSize: 22, fontWeight: '900', marginTop: 4 },
-  profileMeta: { color: '#77756c', fontSize: 13 },
-  profileInfo: { width: '100%', borderWidth: 1, borderColor: '#e6dfd3', borderRadius: 18, padding: 12, marginTop: 4 },
-  infoLabel: { color: '#8b857b', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
-  infoValue: { color: '#20251f', fontSize: 13, fontWeight: '800', marginTop: 4 },
-  logoutButton: { width: '100%', height: 50, borderRadius: 18, backgroundColor: '#292f29', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
-  logoutText: { color: '#f7f3ea', fontSize: 14, fontWeight: '900' },
-  tabs: { position: 'absolute', left: 12, right: 12, bottom: 12, backgroundColor: '#fffdf8', borderWidth: 1, borderColor: '#e0d9ce', borderRadius: 24, padding: 6, flexDirection: 'row', gap: 6, shadowColor: '#423b2f', shadowOpacity: 0.14, shadowRadius: 16, elevation: 8 },
-  tab: { flex: 1, alignItems: 'center', borderRadius: 18, paddingVertical: 11 },
-  tabActive: { backgroundColor: '#1f2b24' },
-  tabText: { color: '#7b766c', fontSize: 11, fontWeight: '900' },
-  tabTextActive: { color: '#f7f3ea' },
+  smallButton: { borderRadius: 15, backgroundColor: '#28d08a', paddingHorizontal: 14, paddingVertical: 10 },
+  smallButtonText: { color: '#06120f', fontWeight: '900', fontSize: 12 },
+  smallButtonDark: { borderRadius: 15, backgroundColor: '#112320', borderWidth: 1, borderColor: '#1d3632', paddingHorizontal: 14, paddingVertical: 10 },
+  smallButtonDarkText: { color: '#d9fff0', fontWeight: '900', fontSize: 12 },
+  emptyCard: { borderWidth: 1, borderColor: '#132927', backgroundColor: '#0d1b1a', borderRadius: 26, padding: 24, alignItems: 'center' },
+  emptyTitle: { color: '#f4fff8', fontSize: 16, fontWeight: '900' },
+  emptyText: { color: '#7f958d', textAlign: 'center', marginTop: 6, lineHeight: 18 },
+
+  profileCard: { backgroundColor: '#0d1b1a', borderWidth: 1, borderColor: '#132927', borderRadius: 30, padding: 22, alignItems: 'center', gap: 11 },
+  avatar: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#28d08a', alignItems: 'center', justifyContent: 'center', shadowColor: '#28d08a', shadowOpacity: 0.25, shadowRadius: 14, elevation: 5 },
+  avatarText: { color: '#06120f', fontSize: 28, fontWeight: '900' },
+  profileName: { color: '#f4fff8', fontSize: 22, fontWeight: '900', marginTop: 4 },
+  profileMeta: { color: '#7f958d', fontSize: 13 },
+  profileInfo: { width: '100%', borderWidth: 1, borderColor: '#18322f', borderRadius: 19, padding: 13, marginTop: 4, backgroundColor: '#091817' },
+  infoLabel: { color: '#789087', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  infoValue: { color: '#d9fff0', fontSize: 13, fontWeight: '800', marginTop: 4 },
+  logoutButton: { width: '100%', height: 52, borderRadius: 19, backgroundColor: 'rgba(255,91,91,0.14)', borderWidth: 1, borderColor: 'rgba(255,91,91,0.28)', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
+  logoutText: { color: '#ff9d9d', fontSize: 14, fontWeight: '900' },
+  tabs: { position: 'absolute', left: 12, right: 12, bottom: 12, backgroundColor: 'rgba(9,24,23,0.96)', borderWidth: 1, borderColor: '#16322e', borderRadius: 26, padding: 6, flexDirection: 'row', gap: 6, shadowColor: '#000', shadowOpacity: 0.34, shadowRadius: 20, elevation: 10 },
+  tab: { flex: 1, alignItems: 'center', borderRadius: 20, paddingVertical: 12 },
+  tabActive: { backgroundColor: '#28d08a' },
+  tabText: { color: '#789087', fontSize: 11, fontWeight: '900' },
+  tabTextActive: { color: '#06120f' },
 });

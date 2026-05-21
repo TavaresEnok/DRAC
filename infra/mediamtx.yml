@@ -26,6 +26,8 @@ rtspTransports: [tcp, udp]
 hls: yes
 hlsAddress: :8888
 hlsAllowOrigins: ['*']
+hlsAlwaysRemux: true
+hlsVariant: fmp4
 
 webrtc: yes
 webrtcAddress: :8889

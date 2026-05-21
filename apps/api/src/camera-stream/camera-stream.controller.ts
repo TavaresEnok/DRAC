@@ -93,6 +93,7 @@ export class CameraStreamController {
       .split(',')[0]
       .trim();
     const flvUrl = `${reqProto}://${apiHost}/camera-stream/${cameraId}/flv`;
+    const posterUrl = `${reqProto}://${apiHost}/camera-stream/${cameraId}/poster`;
 
     const configuredPreferred = (camera.preferredLiveProtocol ?? 'flv').toLowerCase();
 
@@ -106,9 +107,40 @@ export class CameraStreamController {
       detectedVideoCodec: camera.streamVideoCodec ?? camera.detectedVideoCodec ?? null,
       protocols: {
         flvUrl,
+        posterUrl,
         ...safeMediaBridge,
       },
     };
+  }
+
+  @Public()
+  @Get(':cameraId/poster')
+  async getPoster(
+    @Param('cameraId') cameraId: string,
+    @Query('token') token: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const bearerToken = this.extractBearerToken(req);
+    const tokenValue = token?.trim() || bearerToken;
+    if (!tokenValue) {
+      throw new UnauthorizedException('Token de stream ausente.');
+    }
+
+    const payload = await this.authService.verifyStreamToken(tokenValue);
+    if (payload.cameraId !== cameraId) {
+      throw new UnauthorizedException('Token inválido para esta câmera.');
+    }
+    const tokenUser = await this.authService.me(payload.sub);
+    await this.accessControlService.assertCanViewCamera(tokenUser, cameraId);
+
+    const poster = await this.ffmpegMjpegService.getLivePosterFrame(cameraId);
+    res.status(200);
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Content-Length', String(poster.buffer.length));
+    res.setHeader('Cache-Control', 'private, max-age=10, stale-while-revalidate=20');
+    res.setHeader('X-Poster-Generated-At', new Date(poster.generatedAt).toISOString());
+    res.end(poster.buffer);
   }
 
   @Public()

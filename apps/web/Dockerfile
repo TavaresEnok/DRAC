@@ -16,7 +16,7 @@ ENV VITE_API_URL=$VITE_API_URL
 
 # Install dependencies
 RUN apk add --no-cache git
-RUN pnpm install
+RUN pnpm install --prod=false
 
 # Copy source
 COPY apps/web ./apps/web

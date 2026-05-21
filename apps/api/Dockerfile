@@ -11,7 +11,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY apps/api/package.json ./apps/api/
 
 # Install dependencies
-RUN pnpm install
+RUN pnpm install --prod=false
 
 # Copy source
 COPY apps/api ./apps/api
