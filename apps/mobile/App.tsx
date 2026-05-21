@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Linking,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -60,6 +59,11 @@ type Recording = {
   sizeBytes?: string | number | null;
   fileUsable?: boolean;
   fileExists?: boolean;
+};
+
+type ActivePlayback = {
+  recording: Recording;
+  url: string;
 };
 
 type StreamUrls = {
@@ -164,6 +168,15 @@ function LiveVideo({ uri, posterUri }: { uri: string | null; posterUri?: string 
   return <VideoView player={player} style={styles.video} nativeControls contentFit="contain" />;
 }
 
+function PlaybackVideo({ uri }: { uri: string }) {
+  const player = useVideoPlayer({ uri }, (instance) => {
+    instance.loop = false;
+    instance.play();
+  });
+
+  return <VideoView player={player} style={styles.playbackVideo} nativeControls contentFit="contain" />;
+}
+
 function Chip({ label, active, onPress }: { label: string; active?: boolean; onPress?: () => void }) {
   return (
     <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
@@ -244,6 +257,7 @@ export default function App() {
   const [streamUrls, setStreamUrls] = useState<Record<string, string | null>>({});
   const [streamPosters, setStreamPosters] = useState<Record<string, string | null>>({});
   const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [activePlayback, setActivePlayback] = useState<ActivePlayback | null>(null);
   const [relays, setRelays] = useState<Record<string, RelayDiscovery>>({});
   const [ptzActive, setPtzActive] = useState<Direction | null>(null);
   const [ptzFeedback, setPtzFeedback] = useState<string | null>(null);
@@ -368,8 +382,10 @@ export default function App() {
         session.token,
       );
       setRecordings(Array.isArray(data.items) ? data.items : []);
+      setActivePlayback(null);
     } catch {
       setRecordings([]);
+      setActivePlayback(null);
     }
   };
 
@@ -426,7 +442,7 @@ export default function App() {
       const data = await request<{ playToken: string }>(session.apiUrl, `/recordings/${recording.id}/play-token`, session.token, { method: 'POST' });
       const url = normalizeServerUrl(`${session.apiUrl}/recordings/${recording.id}/play?token=${encodeURIComponent(data.playToken)}&compatible=1`, session.apiUrl);
       if (!url) throw new Error('URL de playback indisponivel.');
-      await Linking.openURL(url);
+      setActivePlayback({ recording, url });
     } catch (error) {
       Alert.alert('Playback', error instanceof Error ? error.message : 'Nao foi possivel abrir a gravacao.');
     }
@@ -673,12 +689,38 @@ export default function App() {
             <View style={styles.sectionHeader}>
               <View>
                 <Text style={styles.sectionTitle}>Playback</Text>
-                <Text style={styles.sectionSubtitle}>Gravacoes do dia com abrir e baixar direto.</Text>
+                <Text style={styles.sectionSubtitle}>Gravacoes do dia com reproducao dentro do app.</Text>
               </View>
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cameraChips}>
               {cameras.map((camera) => <Chip key={camera.id} label={camera.name} active={selectedCamera?.id === camera.id} onPress={() => setSelectedCameraId(camera.id)} />)}
             </ScrollView>
+
+            {activePlayback ? (
+              <View style={styles.playbackPlayerCard}>
+                <View style={styles.playbackHeader}>
+                  <View>
+                    <Text style={styles.playbackTitle}>Reproduzindo no app</Text>
+                    <Text style={styles.cameraMeta}>
+                      {formatTime(activePlayback.recording.startedAt)} - {formatTime(activePlayback.recording.endedAt)}
+                    </Text>
+                  </View>
+                  <Pressable onPress={() => setActivePlayback(null)} style={styles.closePlaybackButton}>
+                    <Text style={styles.closePlaybackText}>Fechar</Text>
+                  </Pressable>
+                </View>
+                <PlaybackVideo uri={activePlayback.url} />
+                <View style={styles.rowButtons}>
+                  <Pressable onPress={() => downloadRecording(activePlayback.recording)} style={styles.smallButton}>
+                    <Text style={styles.smallButtonText}>Baixar esta gravacao</Text>
+                  </Pressable>
+                  <Pressable onPress={() => setActivePlayback(null)} style={styles.smallButtonDark}>
+                    <Text style={styles.smallButtonDarkText}>Voltar para lista</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
             <View style={styles.timeline}>
               {recordings.map((recording) => (
                 <View key={recording.id} style={styles.recordingCard}>
@@ -883,6 +925,12 @@ const styles = StyleSheet.create({
   groupBlockCompact: { gap: 9, borderTopWidth: 1, borderColor: '#E2E8E3', paddingTop: 14 },
 
   cameraChips: { flexDirection: 'row', gap: 8, paddingRight: 16 },
+  playbackPlayerCard: { borderWidth: 1, borderColor: '#DDE7E2', backgroundColor: '#FFFFFF', borderRadius: 28, padding: 12, gap: 12, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 18, elevation: 4 },
+  playbackHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  playbackTitle: { color: '#15211E', fontSize: 16, fontWeight: '900' },
+  playbackVideo: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#111816', borderRadius: 20, overflow: 'hidden' },
+  closePlaybackButton: { borderWidth: 1, borderColor: '#D5DFDA', backgroundColor: '#F8FAF7', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
+  closePlaybackText: { color: '#15211E', fontSize: 11, fontWeight: '900' },
   timeline: { gap: 10 },
   recordingCard: { borderWidth: 1, borderColor: '#DDE7E2', backgroundColor: '#FFFFFF', borderRadius: 24, padding: 13, flexDirection: 'row', gap: 12 },
   timelineRail: { width: 4, borderRadius: 999, backgroundColor: '#0E7C66' },
