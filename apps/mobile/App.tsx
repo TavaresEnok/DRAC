@@ -289,7 +289,7 @@ export default function App() {
   const [relays, setRelays] = useState<Record<string, RelayDiscovery>>({});
   const [ptzActive, setPtzActive] = useState<Direction | null>(null);
   const [ptzFeedback, setPtzFeedback] = useState<string | null>(null);
-  const [showPtz, setShowPtz] = useState(false);
+  const [showPtz, setShowPtz] = useState(true);
   const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) ?? cameras[0] ?? null;
 
   const visibleGridCameras = useMemo(() => cameras.slice(0, gridSize), [cameras, gridSize]);
@@ -537,9 +537,6 @@ export default function App() {
                 <Text style={styles.dashboardTitle}>Minha Casa</Text>
                 <Text style={styles.dashboardSubtitle}>{cameras.length} Dispositivos</Text>
               </View>
-              <Pressable onPress={loadAll} style={styles.addButton}>
-                {refreshing ? <ActivityIndicator color="#020617" /> : <SvgIcon name="plus" color="#020617" />}
-              </Pressable>
             </View>
 
             <View style={styles.metricsRow}>
@@ -557,7 +554,7 @@ export default function App() {
                 {items.map((camera) => (
                   <Pressable
                     key={camera.id}
-                    onPress={() => { setSelectedCameraId(camera.id); setTab('live'); }}
+                    onPress={() => { setSelectedCameraId(camera.id); setShowPtz(true); setTab('live'); }}
                     style={styles.cameraCard}
                   >
                     <View style={styles.cameraPreview}>
@@ -579,17 +576,9 @@ export default function App() {
                     <View style={styles.cameraCardBody}>
                       <View style={styles.cameraCardTop}>
                         <Text style={styles.cameraName}>{camera.name}</Text>
-                        <View style={[styles.statusPill, isOnline(camera) ? styles.statusOnline : styles.statusOffline]}>
-                          <Text style={[styles.statusText, isOnline(camera) ? styles.statusTextOnline : styles.statusTextOffline]}>{camera.status}</Text>
-                        </View>
+                        <Pressable style={styles.cardPlayButton}><SvgIcon name="play" size={18} color="#34d399" /></Pressable>
                       </View>
-                      <Text style={styles.cameraMeta}>{camera.ip}</Text>
-                      <Text style={styles.cameraMeta}>{formatResolution(camera)}</Text>
-                      <View style={styles.permissionRow}>
-                        <Text style={styles.permissionBadge}>VIEW</Text>
-                        {camera.canControl ? <Text style={styles.permissionBadge}>PTZ</Text> : null}
-                        {camera.canRecord ? <Text style={styles.permissionBadge}>REC</Text> : null}
-                      </View>
+                      <Text style={styles.cameraMeta}>{camera.group?.name ?? 'Sem grupo'}</Text>
                     </View>
                   </Pressable>
                 ))}
@@ -603,7 +592,7 @@ export default function App() {
             {selectedCamera ? (
               <View style={styles.cameraStage}>
                 <View style={styles.cameraDetailHeader}>
-                  <Pressable onPress={() => { setTab('dashboard'); setShowPtz(false); }} style={styles.headerIconButton}>
+                  <Pressable onPress={() => { setTab('dashboard'); setShowPtz(true); }} style={styles.headerIconButton}>
                     <SvgIcon name="chevronLeft" size={28} color="#cbd5e1" />
                   </Pressable>
                   <View>
@@ -655,21 +644,7 @@ export default function App() {
                       </View>
                     </View>
                   </View>
-                ) : (
-                  <View style={styles.alertsCard}>
-                    <Text style={styles.alertsTitle}>Alertas de Hoje</Text>
-                    <View style={styles.alertRow}>
-                      <View style={styles.alertIcon}><SvgIcon name="user" size={20} color="#34d399" /></View>
-                      <View style={styles.alertBody}><Text style={styles.alertText}>Pessoa Detectada</Text><Text style={styles.alertTime}>Evento recente</Text></View>
-                      <SvgIcon name="play" size={20} color="#64748b" />
-                    </View>
-                    <View style={styles.alertRow}>
-                      <View style={styles.alertIcon}><SvgIcon name="bell" size={20} color="#34d399" /></View>
-                      <View style={styles.alertBody}><Text style={styles.alertText}>Movimento</Text><Text style={styles.alertTime}>Monitoramento ativo</Text></View>
-                      <SvgIcon name="play" size={20} color="#64748b" />
-                    </View>
-                  </View>
-                )}
+                ) : null}
               </View>
             ) : (
               <View style={styles.emptyCard}>
@@ -682,60 +657,56 @@ export default function App() {
 
         {tab === 'grid' && (
           <View style={styles.page}>
-            <View style={styles.sectionHeaderInline}>
-              <View>
-                <Text style={styles.sectionTitle}>Grid</Text>
-                <Text style={styles.sectionSubtitle}>Visualizacao rapida de grupos de cameras.</Text>
-              </View>
-              <View style={styles.segmentedMini}>
-                {GRID_OPTIONS.map((size) => (
-                  <Chip key={size} label={`${size}`} active={gridSize === size} onPress={() => setGridSize(size)} />
-                ))}
-              </View>
+            <View style={styles.mosaicHeader}>
+              <Text style={styles.mosaicTitle}>Mosaico</Text>
+              <Pressable style={styles.editLayoutButton}>
+                <Text style={styles.editLayoutText}>Editar Layout</Text>
+              </Pressable>
             </View>
 
-            <View style={[styles.gridBoard, gridSize === 1 && styles.gridBoardOne, gridSize === 4 && styles.gridBoardFour]}>
-              {visibleGridCameras.map((camera) => (
+            <View style={styles.mosaicGrid}>
+              {cameras.map((camera) => (
                 <Pressable
                   key={camera.id}
-                  onPress={() => { setSelectedCameraId(camera.id); setTab('live'); }}
-                  style={[styles.gridTilePro, gridSize === 4 && styles.gridTileProHalf, selectedCamera?.id === camera.id && styles.gridTileActive]}
+                  onPress={() => { setSelectedCameraId(camera.id); setShowPtz(true); setTab('live'); }}
+                  style={styles.mosaicTile}
                 >
-                  <View style={styles.videoFrame}>
-                    <LiveVideo uri={streamUrls[camera.id] ?? null} posterUri={streamPosters[camera.id] ?? null} />
-                    <View style={styles.videoOverlayTop}>
-                      <Text style={styles.videoOverlayTitle}>{camera.name}</Text>
-                      <Text style={styles.videoProtocol}>LIVE</Text>
-                    </View>
-                  </View>
+                  {streamPosters[camera.id] ? <Image source={{ uri: streamPosters[camera.id] ?? undefined }} style={styles.mosaicImage} /> : null}
+                  <View style={styles.mosaicShade} />
+                  <View style={styles.mosaicVideoIcon}><SvgIcon name="video" size={16} color="#34d399" /></View>
+                  <View style={styles.mosaicFooter}><Text style={styles.mosaicCameraName}>{camera.name}</Text></View>
                 </Pressable>
               ))}
             </View>
-
-            {groupedCameras.map(([groupName, items]) => (
-              <View key={groupName} style={styles.groupBlockCompact}>
-                <Text style={styles.groupTitle}>{groupName}</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cameraChips}>
-                  {items.map((camera) => (
-                    <Chip key={camera.id} label={camera.name} active={selectedCamera?.id === camera.id} onPress={() => setSelectedCameraId(camera.id)} />
-                  ))}
-                </ScrollView>
-              </View>
-            ))}
           </View>
         )}
 
         {tab === 'playback' && (
           <View style={styles.page}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={styles.sectionTitle}>Playback</Text>
-                <Text style={styles.sectionSubtitle}>Gravacoes do dia com reproducao dentro do app.</Text>
-              </View>
+            <View>
+              <Text style={styles.recordingsTitle}>Gravacoes</Text>
+              <Text style={styles.recordingsSubtitle}>Selecione uma camera para ver os arquivos salvos e historico.</Text>
             </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cameraChips}>
-              {cameras.map((camera) => <Chip key={camera.id} label={camera.name} active={selectedCamera?.id === camera.id} onPress={() => setSelectedCameraId(camera.id)} />)}
-            </ScrollView>
+
+            <View style={styles.recordingCameraList}>
+              {cameras.map((camera) => (
+                <Pressable key={camera.id} onPress={() => setSelectedCameraId(camera.id)} style={[styles.recordingCameraCard, selectedCamera?.id === camera.id && styles.recordingCameraCardActive]}>
+                  <View style={styles.recordingCameraThumb}>
+                    {streamPosters[camera.id] ? <Image source={{ uri: streamPosters[camera.id] ?? undefined }} style={styles.recordingCameraImage} /> : <SvgIcon name="camera" size={24} color="#475569" />}
+                    {camera.canRecord ? <View style={styles.recordDot} /> : null}
+                  </View>
+                  <View style={styles.recordingCameraBody}>
+                    <Text style={styles.recordingCameraTitle}>{camera.name}</Text>
+                    <Text style={styles.recordingCameraMeta}>{camera.group?.name ?? 'Sem grupo'}</Text>
+                    <View style={styles.recordingCameraHistory}>
+                      <SvgIcon name="calendar" size={12} color="#34d399" />
+                      <Text style={styles.recordingCameraHistoryText}>Ver Historico</Text>
+                    </View>
+                  </View>
+                  <View style={styles.recordingCameraArrow}><Text style={styles.recordingCameraArrowText}>›</Text></View>
+                </Pressable>
+              ))}
+            </View>
 
             {activePlayback ? (
               <View style={styles.playbackPlayerCard}>
@@ -762,17 +733,33 @@ export default function App() {
               </View>
             ) : null}
 
-            <View style={styles.timeline}>
+            {selectedCamera ? (
+              <View style={styles.dateCard}>
+                <SvgIcon name="calendar" size={18} color="#34d399" />
+                <Text style={styles.dateCardText}>Hoje</Text>
+              </View>
+            ) : null}
+
+            <View style={styles.recordingTimeline}>
               {recordings.map((recording) => (
-                <View key={recording.id} style={styles.recordingCard}>
-                  <View style={styles.timelineRail} />
-                  <View style={styles.recordingBody}>
-                    <Text style={styles.recordingTitle}>{formatTime(recording.startedAt)} - {formatTime(recording.endedAt)}</Text>
-                    <Text style={styles.cameraMeta}>{formatDuration(recording.durationSeconds)} - {formatBytes(recording.sizeBytes)}</Text>
-                    <View style={styles.rowButtons}>
-                      <Pressable onPress={() => openPlayback(recording)} style={styles.smallButton}><Text style={styles.smallButtonText}>Abrir</Text></Pressable>
-                      <Pressable onPress={() => downloadRecording(recording)} style={styles.smallButtonDark}><Text style={styles.smallButtonDarkText}>Baixar</Text></Pressable>
+                <View key={recording.id} style={styles.recordingTimelineItem}>
+                  <View style={styles.recordingTimelineDot} />
+                  <View style={styles.recordingTimelineContent}>
+                    <View style={styles.recordingTimelineTop}>
+                      <View>
+                        <Text style={styles.recordingTimelineTime}>{formatTime(recording.startedAt)} - {formatTime(recording.endedAt)}</Text>
+                        <Text style={styles.recordingTimelineEvent}>{formatDuration(recording.durationSeconds)} · {formatBytes(recording.sizeBytes)}</Text>
+                      </View>
+                      <Pressable onPress={() => downloadRecording(recording)} style={styles.downloadCircle}>
+                        <SvgIcon name="download" size={18} color="#cbd5e1" />
+                      </Pressable>
                     </View>
+                    <Pressable onPress={() => openPlayback(recording)} style={styles.recordingPreview}>
+                      {selectedCamera && streamPosters[selectedCamera.id] ? <Image source={{ uri: streamPosters[selectedCamera.id] ?? undefined }} style={styles.recordingPreviewImage} /> : null}
+                      <View style={styles.recordingPreviewShade} />
+                      <View style={styles.recordingPlayCircle}><SvgIcon name="play" size={24} color="#ffffff" /></View>
+                      <Text style={styles.recordingDurationBadge}>{formatDuration(recording.durationSeconds)}</Text>
+                    </Pressable>
                   </View>
                 </View>
               ))}
@@ -788,20 +775,22 @@ export default function App() {
 
         {tab === 'profile' && (
           <View style={styles.page}>
-            <View style={styles.profileCard}>
-              <View style={styles.avatar}><Text style={styles.avatarText}>{session.user.name.slice(0, 1).toUpperCase()}</Text></View>
-              <Text style={styles.profileName}>{session.user.name}</Text>
-              <Text style={styles.profileMeta}>{session.user.email}</Text>
-              <View style={styles.profileInfo}>
-                <Text style={styles.infoLabel}>Perfil</Text>
-                <Text style={styles.infoValue}>{session.user.role}</Text>
+            <Text style={styles.profileScreenTitle}>Ajustes</Text>
+            <View style={styles.profileSimpleCard}>
+              <View style={styles.profileSimpleAvatar}>
+                <SvgIcon name="user" size={28} color="#94a3b8" />
               </View>
-              <View style={styles.profileInfo}>
-                <Text style={styles.infoLabel}>API</Text>
-                <Text style={styles.infoValue}>{session.apiUrl}</Text>
+              <View>
+                <Text style={styles.profileSimpleName}>{session.user.name}</Text>
+                <Text style={styles.profileSimplePlan}>{session.user.role}</Text>
               </View>
-              <Pressable onPress={logout} style={styles.logoutButton}><Text style={styles.logoutText}>Sair do app</Text></Pressable>
             </View>
+            <View style={styles.settingsList}>
+              {['Gerenciar Dispositivos', 'Armazenamento em Nuvem', 'Notificacoes', 'Ajuda e Suporte'].map((item) => (
+                <View key={item} style={styles.settingsRow}><Text style={styles.settingsRowText}>{item}</Text></View>
+              ))}
+            </View>
+            <Pressable onPress={logout} style={styles.logoutButton}><Text style={styles.logoutText}>Sair do app</Text></Pressable>
           </View>
         )}
       </ScrollView>
@@ -860,8 +849,8 @@ const styles = StyleSheet.create({
   groupHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 3 },
   groupTitle: { color: '#f8fafc', fontSize: 14, fontWeight: '900' },
   groupCount: { color: '#64748b', fontSize: 12, fontWeight: '800' },
-  cameraCard: { height: 286, borderRadius: 30, overflow: 'hidden', backgroundColor: '#0f172a', borderWidth: 1, borderColor: 'rgba(30,41,59,0.86)', shadowColor: '#000', shadowOpacity: 0.48, shadowRadius: 22, elevation: 7 },
-  cameraPreview: { position: 'absolute', left: 0, right: 0, top: 0, height: 192, backgroundColor: '#1e293b', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  cameraCard: { height: 248, borderRadius: 30, overflow: 'hidden', backgroundColor: '#0f172a', borderWidth: 1, borderColor: 'rgba(30,41,59,0.86)', shadowColor: '#000', shadowOpacity: 0.48, shadowRadius: 22, elevation: 7 },
+  cameraPreview: { position: 'absolute', left: 0, right: 0, top: 0, height: 178, backgroundColor: '#1e293b', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   cameraPreviewImage: { position: 'absolute', width: '100%', height: '100%', resizeMode: 'cover', opacity: 0.9 },
   cameraPreviewFallback: { position: 'absolute', width: '100%', height: '100%', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
   cameraPreviewShade: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(2,6,23,0.12)' },
@@ -875,10 +864,11 @@ const styles = StyleSheet.create({
   liveBadgeText: { fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
   liveBadgeTextOnline: { color: '#a7f3d0' },
   liveBadgeTextOffline: { color: '#fecdd3' },
-  cameraCardBody: { position: 'absolute', left: 0, right: 0, bottom: 0, minHeight: 94, zIndex: 5, gap: 5, backgroundColor: '#0f172a', borderTopWidth: 1, borderColor: 'rgba(30,41,59,0.72)', paddingHorizontal: 20, paddingVertical: 16 },
+  cameraCardBody: { position: 'absolute', left: 0, right: 0, bottom: 0, minHeight: 70, zIndex: 5, gap: 3, backgroundColor: '#0f172a', borderTopWidth: 1, borderColor: 'rgba(30,41,59,0.72)', paddingHorizontal: 20, paddingVertical: 12 },
   cameraCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   cameraName: { color: '#ffffff', fontWeight: '900', fontSize: 18, flexShrink: 1, letterSpacing: 0.2 },
   cameraMeta: { color: '#94a3b8', fontSize: 12, marginTop: 2, fontWeight: '600' },
+  cardPlayButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#1e293b', alignItems: 'center', justifyContent: 'center' },
   statusPill: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, borderWidth: 1 },
   statusOnline: { backgroundColor: 'rgba(16,185,129,0.14)', borderColor: 'rgba(52,211,153,0.35)' },
   statusOffline: { backgroundColor: 'rgba(244,63,94,0.14)', borderColor: 'rgba(244,63,94,0.35)' },
@@ -985,8 +975,34 @@ const styles = StyleSheet.create({
   gridTilePro: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: '#0f172a', borderRadius: 26, overflow: 'hidden', width: '100%', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 16, elevation: 4 },
   gridTileProHalf: { width: '48.2%' },
   groupBlockCompact: { gap: 9, borderTopWidth: 1, borderColor: 'rgba(255,255,255,0.07)', paddingTop: 14 },
+  mosaicHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 2, marginBottom: 4 },
+  mosaicTitle: { color: '#ffffff', fontSize: 25, fontWeight: '900' },
+  editLayoutButton: { borderWidth: 1, borderColor: 'rgba(52,211,153,0.24)', backgroundColor: 'rgba(16,185,129,0.10)', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  editLayoutText: { color: '#34d399', fontSize: 13, fontWeight: '800' },
+  mosaicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  mosaicTile: { width: '48.1%', aspectRatio: 1, backgroundColor: '#0f172a', borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(30,41,59,0.86)', shadowColor: '#000', shadowOpacity: 0.34, shadowRadius: 14, elevation: 4 },
+  mosaicImage: { position: 'absolute', width: '100%', height: '100%', resizeMode: 'cover', opacity: 0.84 },
+  mosaicShade: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(2,6,23,0.18)' },
+  mosaicVideoIcon: { position: 'absolute', right: 8, top: 8, width: 30, height: 30, borderRadius: 8, backgroundColor: 'rgba(2,6,23,0.72)', borderWidth: 1, borderColor: '#334155', alignItems: 'center', justifyContent: 'center' },
+  mosaicFooter: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 12, paddingTop: 28, paddingBottom: 10, backgroundColor: 'rgba(2,6,23,0.62)' },
+  mosaicCameraName: { color: '#ffffff', fontSize: 12, fontWeight: '800' },
 
   cameraChips: { flexDirection: 'row', gap: 8, paddingRight: 16 },
+  recordingsTitle: { color: '#ffffff', fontSize: 30, fontWeight: '900', marginBottom: 4 },
+  recordingsSubtitle: { color: '#94a3b8', fontSize: 14, lineHeight: 20, marginBottom: 6 },
+  recordingCameraList: { gap: 12 },
+  recordingCameraCard: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#0f172a', borderRadius: 28, borderWidth: 1, borderColor: 'rgba(30,41,59,0.86)', padding: 12, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 16, elevation: 4 },
+  recordingCameraCardActive: { borderColor: 'rgba(52,211,153,0.55)' },
+  recordingCameraThumb: { width: 96, height: 80, borderRadius: 18, backgroundColor: '#1e293b', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  recordingCameraImage: { position: 'absolute', width: '100%', height: '100%', resizeMode: 'cover', opacity: 0.9 },
+  recordDot: { position: 'absolute', left: 7, top: 7, width: 9, height: 9, borderRadius: 5, backgroundColor: '#f43f5e', shadowColor: '#f43f5e', shadowOpacity: 0.6, shadowRadius: 8, elevation: 4 },
+  recordingCameraBody: { flex: 1 },
+  recordingCameraTitle: { color: '#ffffff', fontSize: 16, fontWeight: '800' },
+  recordingCameraMeta: { color: '#94a3b8', fontSize: 12, marginTop: 2 },
+  recordingCameraHistory: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 9 },
+  recordingCameraHistoryText: { color: '#cbd5e1', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8 },
+  recordingCameraArrow: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#1e293b', alignItems: 'center', justifyContent: 'center' },
+  recordingCameraArrowText: { color: '#94a3b8', fontSize: 28, lineHeight: 30, fontWeight: '300' },
   playbackPlayerCard: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: '#0f172a', borderRadius: 32, padding: 13, gap: 13, shadowColor: '#000', shadowOpacity: 0.42, shadowRadius: 22, elevation: 7 },
   playbackHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
   playbackTitle: { color: '#f8fafc', fontSize: 16, fontWeight: '900' },
@@ -994,6 +1010,21 @@ const styles = StyleSheet.create({
   closePlaybackButton: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: '#111827', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
   closePlaybackText: { color: '#e2e8f0', fontSize: 11, fontWeight: '900' },
   timeline: { gap: 11 },
+  dateCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#0f172a', borderWidth: 1, borderColor: '#1e293b', borderRadius: 18, padding: 14 },
+  dateCardText: { color: '#ffffff', fontSize: 14, fontWeight: '800' },
+  recordingTimeline: { marginLeft: 12, paddingLeft: 22, borderLeftWidth: 2, borderColor: '#1e293b', gap: 28 },
+  recordingTimelineItem: { position: 'relative' },
+  recordingTimelineDot: { position: 'absolute', left: -30, top: 4, width: 14, height: 14, borderRadius: 7, backgroundColor: '#020617', borderWidth: 2, borderColor: '#10b981' },
+  recordingTimelineContent: { gap: 12 },
+  recordingTimelineTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
+  recordingTimelineTime: { color: '#34d399', fontSize: 14, fontWeight: '900' },
+  recordingTimelineEvent: { color: '#cbd5e1', fontSize: 13, marginTop: 4 },
+  downloadCircle: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#1e293b', alignItems: 'center', justifyContent: 'center' },
+  recordingPreview: { height: 132, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: '#334155', backgroundColor: '#1e293b', alignItems: 'center', justifyContent: 'center' },
+  recordingPreviewImage: { position: 'absolute', width: '100%', height: '100%', resizeMode: 'cover', opacity: 0.62 },
+  recordingPreviewShade: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(2,6,23,0.18)' },
+  recordingPlayCircle: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(15,23,42,0.82)', alignItems: 'center', justifyContent: 'center' },
+  recordingDurationBadge: { position: 'absolute', right: 9, bottom: 9, color: '#ffffff', backgroundColor: 'rgba(0,0,0,0.62)', borderRadius: 6, overflow: 'hidden', paddingHorizontal: 8, paddingVertical: 4, fontSize: 10, fontWeight: '800' },
   recordingCard: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: '#0f172a', borderRadius: 26, padding: 14, flexDirection: 'row', gap: 12, shadowColor: '#000', shadowOpacity: 0.24, shadowRadius: 14, elevation: 3 },
   timelineRail: { width: 5, borderRadius: 999, backgroundColor: '#f59e0b' },
   recordingBody: { flex: 1, gap: 8 },
@@ -1007,6 +1038,14 @@ const styles = StyleSheet.create({
   emptyTitle: { color: '#f8fafc', fontSize: 16, fontWeight: '900' },
   emptyText: { color: '#94a3b8', textAlign: 'center', marginTop: 6, lineHeight: 18 },
 
+  profileScreenTitle: { color: '#ffffff', fontSize: 25, fontWeight: '900', marginBottom: 6 },
+  profileSimpleCard: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#0f172a', borderRadius: 28, borderWidth: 1, borderColor: '#1e293b', padding: 18, marginBottom: 8 },
+  profileSimpleAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#1e293b', alignItems: 'center', justifyContent: 'center' },
+  profileSimpleName: { color: '#ffffff', fontSize: 16, fontWeight: '800' },
+  profileSimplePlan: { color: '#34d399', fontSize: 12, fontWeight: '700', marginTop: 3 },
+  settingsList: { gap: 12 },
+  settingsRow: { backgroundColor: '#0f172a', borderRadius: 18, borderWidth: 1, borderColor: '#1e293b', padding: 16 },
+  settingsRowText: { color: '#cbd5e1', fontSize: 14, fontWeight: '700' },
   profileCard: { backgroundColor: '#0f172a', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', borderRadius: 34, padding: 24, alignItems: 'center', gap: 12, shadowColor: '#000', shadowOpacity: 0.38, shadowRadius: 24, elevation: 7 },
   avatar: { width: 82, height: 82, borderRadius: 41, backgroundColor: '#10b981', alignItems: 'center', justifyContent: 'center', shadowColor: '#34d399', shadowOpacity: 0.3, shadowRadius: 18, elevation: 6 },
   avatarText: { color: '#02130f', fontSize: 30, fontWeight: '900' },
