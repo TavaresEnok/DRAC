@@ -5,15 +5,18 @@ import * as Sharing from 'expo-sharing';
 import { StatusBar } from 'expo-status-bar';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useEffect, useMemo, useState } from 'react';
+import Svg, { Circle, Line, Path, Polygon, Polyline, Rect } from 'react-native-svg';
 import {
   ActivityIndicator,
   Alert,
   Image,
+  Platform,
   Pressable,
   RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  StatusBar as NativeStatusBar,
   Text,
   TextInput,
   View,
@@ -22,10 +25,13 @@ import {
 const DEFAULT_API_URL = 'http://168.194.13.70:3000';
 const SESSION_KEY = 'drac.mobile.session.v1';
 const GRID_OPTIONS = [1, 2, 4] as const;
+const TOP_SAFE = Platform.OS === 'android' ? NativeStatusBar.currentHeight ?? 24 : 0;
+const BOTTOM_SAFE = Platform.OS === 'android' ? 30 : 0;
 
 type GridSize = (typeof GRID_OPTIONS)[number];
 type Direction = 'Up' | 'Down' | 'Left' | 'Right' | 'ZoomIn' | 'ZoomOut';
 type Tab = 'dashboard' | 'live' | 'grid' | 'playback' | 'profile';
+type IconName = 'home' | 'grid' | 'user' | 'settings' | 'camera' | 'mic' | 'video' | 'chevronLeft' | 'plus' | 'bell' | 'move' | 'play' | 'download' | 'calendar';
 
 type User = {
   id: string;
@@ -130,6 +136,28 @@ function formatResolution(camera?: Camera | null) {
 
 function isOnline(camera: Camera) {
   return camera.status?.toUpperCase() === 'ONLINE';
+}
+
+function SvgIcon({ name, size = 24, color = 'currentColor' }: { name: IconName; size?: number; color?: string }) {
+  const common = { stroke: color, strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      {name === 'home' ? <Path {...common} d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /> : null}
+      {name === 'grid' ? <><Rect {...common} x="3" y="3" width="7" height="7" /><Rect {...common} x="14" y="3" width="7" height="7" /><Rect {...common} x="14" y="14" width="7" height="7" /><Rect {...common} x="3" y="14" width="7" height="7" /></> : null}
+      {name === 'user' ? <><Path {...common} d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><Circle {...common} cx="12" cy="7" r="4" /></> : null}
+      {name === 'settings' ? <><Circle {...common} cx="12" cy="12" r="3" /><Path {...common} d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></> : null}
+      {name === 'camera' ? <><Path {...common} d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><Circle {...common} cx="12" cy="13" r="4" /></> : null}
+      {name === 'mic' ? <><Path {...common} d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><Path {...common} d="M19 10v2a7 7 0 0 1-14 0v-2" /><Line {...common} x1="12" y1="19" x2="12" y2="23" /><Line {...common} x1="8" y1="23" x2="16" y2="23" /></> : null}
+      {name === 'video' ? <><Polygon {...common} points="23 7 16 12 23 17 23 7" /><Rect {...common} x="1" y="5" width="15" height="14" rx="2" ry="2" /></> : null}
+      {name === 'chevronLeft' ? <Polyline {...common} points="15 18 9 12 15 6" /> : null}
+      {name === 'plus' ? <><Line {...common} x1="12" y1="5" x2="12" y2="19" /><Line {...common} x1="5" y1="12" x2="19" y2="12" /></> : null}
+      {name === 'bell' ? <><Path {...common} d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><Path {...common} d="M13.73 21a2 2 0 0 1-3.46 0" /></> : null}
+      {name === 'move' ? <><Polyline {...common} points="5 9 2 12 5 15" /><Polyline {...common} points="9 5 12 2 15 5" /><Polyline {...common} points="19 9 22 12 19 15" /><Polyline {...common} points="9 19 12 22 15 19" /><Line {...common} x1="2" y1="12" x2="22" y2="12" /><Line {...common} x1="12" y1="2" x2="12" y2="22" /></> : null}
+      {name === 'play' ? <Polygon points="5 3 19 12 5 21 5 3" fill={color} stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" /> : null}
+      {name === 'download' ? <><Path {...common} d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><Polyline {...common} points="7 10 12 15 17 10" /><Line {...common} x1="12" y1="15" x2="12" y2="3" /></> : null}
+      {name === 'calendar' ? <><Rect {...common} x="3" y="4" width="18" height="18" rx="2" ry="2" /><Line {...common} x1="16" y1="2" x2="16" y2="6" /><Line {...common} x1="8" y1="2" x2="8" y2="6" /><Line {...common} x1="3" y1="10" x2="21" y2="10" /></> : null}
+    </Svg>
+  );
 }
 
 async function request<T>(apiUrl: string, path: string, token?: string, init?: RequestInit): Promise<T> {
@@ -261,6 +289,7 @@ export default function App() {
   const [relays, setRelays] = useState<Record<string, RelayDiscovery>>({});
   const [ptzActive, setPtzActive] = useState<Direction | null>(null);
   const [ptzFeedback, setPtzFeedback] = useState<string | null>(null);
+  const [showPtz, setShowPtz] = useState(false);
   const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) ?? cameras[0] ?? null;
 
   const visibleGridCameras = useMemo(() => cameras.slice(0, gridSize), [cameras, gridSize]);
@@ -500,32 +529,23 @@ export default function App() {
   return (
     <SafeAreaView style={styles.screen}>
       <StatusBar style="light" />
-      <View style={styles.topBar}>
-        <View>
-          <Text style={styles.appName}>Drac</Text>
-          <Text style={styles.headerMeta}>{session.user.name} - {session.user.role}</Text>
-        </View>
-        <Pressable onPress={loadAll} style={styles.refreshButton}>
-          <Text style={styles.refreshText}>{refreshing ? 'Atualizando' : 'Atualizar'}</Text>
-        </Pressable>
-      </View>
-
       <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadAll} />} contentContainerStyle={styles.content}>
         {tab === 'dashboard' && (
           <View style={styles.page}>
-            <LinearGradient colors={['#0f172a', '#111827', '#063c32']} style={styles.heroCard}>
+            <View style={styles.dashboardHeader}>
               <View>
-                <Text style={styles.heroEyebrow}>Sistema armado</Text>
-                <Text style={styles.heroTitle}>Minha Casa</Text>
-                <Text style={styles.heroSubtitle}>{onlineCount}/{cameras.length} cameras online. Toque em um card para abrir ao vivo com PTZ, alarme e gravacao.</Text>
+                <Text style={styles.dashboardTitle}>Minha Casa</Text>
+                <Text style={styles.dashboardSubtitle}>{cameras.length} Dispositivos</Text>
               </View>
-              <View style={styles.heroDot} />
-            </LinearGradient>
+              <Pressable onPress={loadAll} style={styles.addButton}>
+                {refreshing ? <ActivityIndicator color="#020617" /> : <SvgIcon name="plus" color="#020617" />}
+              </Pressable>
+            </View>
 
             <View style={styles.metricsRow}>
-              <Metric label="Grupos" value={groupedCameras.length} />
-              <Metric label="PTZ" value={controllableCount} />
-              <Metric label="Gravacao" value={recordableCount} />
+              <Metric label="Cameras" value={cameras.length} />
+              <Metric label="Com PTZ" value={controllableCount} />
+              <Metric label="Gravando" value={recordableCount} />
             </View>
 
             {groupedCameras.map(([groupName, items]) => (
@@ -582,14 +602,17 @@ export default function App() {
           <View style={styles.page}>
             {selectedCamera ? (
               <View style={styles.cameraStage}>
-                <View style={styles.cameraHeroHeader}>
+                <View style={styles.cameraDetailHeader}>
+                  <Pressable onPress={() => { setTab('dashboard'); setShowPtz(false); }} style={styles.headerIconButton}>
+                    <SvgIcon name="chevronLeft" size={28} color="#cbd5e1" />
+                  </Pressable>
                   <View>
-                    <Text style={styles.sectionTitle}>{selectedCamera.name}</Text>
-                    <Text style={styles.sectionSubtitle}>{selectedCamera.group?.name ?? 'Sem grupo'} - {formatResolution(selectedCamera)}</Text>
+                    <Text style={styles.cameraDetailTitle}>{selectedCamera.name}</Text>
+                    <Text style={styles.cameraDetailSubtitle}>{isOnline(selectedCamera) ? 'Conectado' : 'Offline'}</Text>
                   </View>
-                  <View style={[styles.statusPill, isOnline(selectedCamera) ? styles.statusOnline : styles.statusOffline]}>
-                    <Text style={[styles.statusText, isOnline(selectedCamera) ? styles.statusTextOnline : styles.statusTextOffline]}>{selectedCamera.status}</Text>
-                  </View>
+                  <Pressable style={styles.headerIconButton}>
+                    <SvgIcon name="settings" size={23} color="#cbd5e1" />
+                  </Pressable>
                 </View>
 
                 <View style={styles.singleVideoCard}>
@@ -600,35 +623,53 @@ export default function App() {
                   </View>
                 </View>
 
-                <View style={styles.actionDock}>
-                  <ActionPill label="Gravar" tone="danger" disabled={!selectedCamera.canRecord} onPress={() => toggleRecording(selectedCamera, true)} />
-                  <ActionPill label="Parar" tone="success" disabled={!selectedCamera.canRecord} onPress={() => toggleRecording(selectedCamera, false)} />
-                  <ActionPill label="Alarme" disabled={!relays[selectedCamera.id]?.triggerable} onPress={triggerRelay} />
+                <View style={styles.quickActionsGrid}>
+                  <Pressable style={styles.quickActionButton}>
+                    <View style={styles.quickActionIcon}><SvgIcon name="mic" color="#cbd5e1" /></View>
+                    <Text style={styles.quickActionLabel}>Falar</Text>
+                  </Pressable>
+                  <Pressable style={styles.quickActionButton}>
+                    <View style={styles.quickActionIcon}><SvgIcon name="camera" color="#cbd5e1" /></View>
+                    <Text style={styles.quickActionLabel}>Foto</Text>
+                  </Pressable>
+                  <Pressable disabled={!selectedCamera.canRecord} onPress={() => toggleRecording(selectedCamera, true)} style={[styles.quickActionButton, !selectedCamera.canRecord && styles.disabled]}>
+                    <View style={styles.quickActionIcon}><SvgIcon name="video" color="#cbd5e1" /></View>
+                    <Text style={styles.quickActionLabel}>Gravar</Text>
+                  </Pressable>
+                  <Pressable disabled={!selectedCamera.canControl} onPress={() => setShowPtz((value) => !value)} style={[styles.quickActionButton, !selectedCamera.canControl && styles.disabled]}>
+                    <View style={[styles.quickActionIcon, showPtz && styles.quickActionIconActive]}><SvgIcon name="move" color={showPtz ? '#020617' : '#cbd5e1'} /></View>
+                    <Text style={styles.quickActionLabel}>PTZ</Text>
+                  </Pressable>
                 </View>
 
-                <View style={styles.ptzCardPremium}>
-                  <View style={styles.ptzHeader}>
-                    <View>
-                      <Text style={styles.ptzTitle}>PTZ</Text>
-                      <Text style={styles.ptzSubtitle}>{selectedCamera.canControl ? 'Pressione para mover. Solto, comando enviado.' : 'Sem permissao para controlar'}</Text>
-                    </View>
+                {showPtz ? (
+                  <View style={styles.ptzCardPremium}>
                     {ptzFeedback ? <Text style={styles.ptzFeedback}>Enviado: {ptzFeedback}</Text> : null}
-                  </View>
-
-                  <View style={styles.ptzConsole}>
-                    <View style={styles.ptzDpad}>
-                      <PtzButton label="▲" direction="Up" disabled={!selectedCamera.canControl} active={ptzActive === 'Up'} onPress={sendPtz} style={styles.ptzUp} />
-                      <PtzButton label="◀" direction="Left" disabled={!selectedCamera.canControl} active={ptzActive === 'Left'} onPress={sendPtz} style={styles.ptzLeft} />
-                      <View style={styles.ptzNub}><Text style={styles.ptzNubText}>DRAC</Text></View>
-                      <PtzButton label="▶" direction="Right" disabled={!selectedCamera.canControl} active={ptzActive === 'Right'} onPress={sendPtz} style={styles.ptzRight} />
-                      <PtzButton label="▼" direction="Down" disabled={!selectedCamera.canControl} active={ptzActive === 'Down'} onPress={sendPtz} style={styles.ptzDown} />
-                    </View>
-                    <View style={styles.zoomColumn}>
-                      <PtzButton label="+" direction="ZoomIn" disabled={!selectedCamera.canControl} active={ptzActive === 'ZoomIn'} onPress={sendPtz} style={styles.zoomButton} />
-                      <PtzButton label="-" direction="ZoomOut" disabled={!selectedCamera.canControl} active={ptzActive === 'ZoomOut'} onPress={sendPtz} style={styles.zoomButton} />
+                    <View style={styles.ptzConsole}>
+                      <View style={styles.ptzDpad}>
+                        <PtzButton label="⌃" direction="Up" disabled={!selectedCamera.canControl} active={ptzActive === 'Up'} onPress={sendPtz} style={styles.ptzUp} />
+                        <PtzButton label="⌄" direction="Down" disabled={!selectedCamera.canControl} active={ptzActive === 'Down'} onPress={sendPtz} style={styles.ptzDown} />
+                        <PtzButton label="‹" direction="Left" disabled={!selectedCamera.canControl} active={ptzActive === 'Left'} onPress={sendPtz} style={styles.ptzLeft} />
+                        <PtzButton label="›" direction="Right" disabled={!selectedCamera.canControl} active={ptzActive === 'Right'} onPress={sendPtz} style={styles.ptzRight} />
+                        <View style={styles.ptzNub}><View style={styles.ptzNubInner} /></View>
+                      </View>
                     </View>
                   </View>
-                </View>
+                ) : (
+                  <View style={styles.alertsCard}>
+                    <Text style={styles.alertsTitle}>Alertas de Hoje</Text>
+                    <View style={styles.alertRow}>
+                      <View style={styles.alertIcon}><SvgIcon name="user" size={20} color="#34d399" /></View>
+                      <View style={styles.alertBody}><Text style={styles.alertText}>Pessoa Detectada</Text><Text style={styles.alertTime}>Evento recente</Text></View>
+                      <SvgIcon name="play" size={20} color="#64748b" />
+                    </View>
+                    <View style={styles.alertRow}>
+                      <View style={styles.alertIcon}><SvgIcon name="bell" size={20} color="#34d399" /></View>
+                      <View style={styles.alertBody}><Text style={styles.alertText}>Movimento</Text><Text style={styles.alertTime}>Monitoramento ativo</Text></View>
+                      <SvgIcon name="play" size={20} color="#64748b" />
+                    </View>
+                  </View>
+                )}
               </View>
             ) : (
               <View style={styles.emptyCard}>
@@ -765,14 +806,14 @@ export default function App() {
         )}
       </ScrollView>
 
-      <View style={styles.tabs}>
-        {(['dashboard', 'live', 'grid', 'playback', 'profile'] as Tab[]).map((item) => (
+      {tab !== 'live' ? <View style={styles.tabs}>
+        {(['dashboard', 'playback', 'grid', 'profile'] as Tab[]).map((item) => (
           <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}>
-            <Text style={[styles.tabIcon, tab === item && styles.tabIconActive]}>{item === 'dashboard' ? '⌂' : item === 'live' ? '◉' : item === 'grid' ? '▦' : item === 'playback' ? '▶' : '●'}</Text>
-            <Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item === 'dashboard' ? 'Casa' : item === 'live' ? 'Ao vivo' : item === 'grid' ? 'Grid' : item === 'playback' ? 'Historico' : 'Perfil'}</Text>
+            <SvgIcon name={item === 'dashboard' ? 'home' : item === 'grid' ? 'grid' : item === 'playback' ? 'play' : 'user'} size={22} color={tab === item ? '#34d399' : '#64748b'} />
+            <Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item === 'dashboard' ? 'Casa' : item === 'playback' ? 'Gravacao' : item === 'grid' ? 'Mosaico' : 'Perfil'}</Text>
           </Pressable>
         ))}
-      </View>
+      </View> : null}
     </SafeAreaView>
   );
 }
@@ -793,13 +834,17 @@ const styles = StyleSheet.create({
   primaryButton: { height: 56, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#10b981', marginTop: 10, shadowColor: '#34d399', shadowOpacity: 0.28, shadowRadius: 20, elevation: 8 },
   primaryButtonText: { color: '#02130f', fontWeight: '900', fontSize: 14 },
 
-  topBar: { paddingHorizontal: 18, paddingTop: 12, paddingBottom: 14, borderBottomWidth: 1, borderColor: 'rgba(255,255,255,0.06)', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#020617' },
+  topBar: { paddingHorizontal: 18, paddingTop: TOP_SAFE + 16, paddingBottom: 14, borderBottomWidth: 1, borderColor: 'rgba(255,255,255,0.06)', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#020617' },
   appName: { color: '#f8fafc', fontSize: 25, fontWeight: '900', letterSpacing: 0.4 },
   headerMeta: { color: '#94a3b8', fontSize: 12, marginTop: 2 },
   refreshButton: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', backgroundColor: 'rgba(15,23,42,0.86)', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 },
   refreshText: { color: '#34d399', fontSize: 12, fontWeight: '900' },
-  content: { padding: 16, paddingBottom: 154, backgroundColor: '#020617' },
+  content: { padding: 16, paddingTop: TOP_SAFE + 18, paddingBottom: BOTTOM_SAFE + 104, backgroundColor: '#020617' },
   page: { gap: 18 },
+  dashboardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  dashboardTitle: { color: '#ffffff', fontSize: 30, fontWeight: '900', letterSpacing: -0.6 },
+  dashboardSubtitle: { color: '#94a3b8', fontSize: 14, marginTop: 4, fontWeight: '600' },
+  addButton: { width: 48, height: 48, borderRadius: 18, backgroundColor: '#10b981', alignItems: 'center', justifyContent: 'center', shadowColor: '#10b981', shadowOpacity: 0.3, shadowRadius: 20, elevation: 8 },
 
   heroCard: { borderRadius: 34, padding: 24, minHeight: 164, justifyContent: 'space-between', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', shadowColor: '#000', shadowOpacity: 0.45, shadowRadius: 24, elevation: 7 },
   heroEyebrow: { color: '#34d399', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1.8 },
@@ -815,11 +860,11 @@ const styles = StyleSheet.create({
   groupHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 3 },
   groupTitle: { color: '#f8fafc', fontSize: 14, fontWeight: '900' },
   groupCount: { color: '#64748b', fontSize: 12, fontWeight: '800' },
-  cameraCard: { height: 220, borderRadius: 34, overflow: 'hidden', backgroundColor: '#0f172a', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', shadowColor: '#000', shadowOpacity: 0.55, shadowRadius: 24, elevation: 8 },
-  cameraPreview: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: '#0f172a', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  cameraCard: { height: 286, borderRadius: 30, overflow: 'hidden', backgroundColor: '#0f172a', borderWidth: 1, borderColor: 'rgba(30,41,59,0.86)', shadowColor: '#000', shadowOpacity: 0.48, shadowRadius: 22, elevation: 7 },
+  cameraPreview: { position: 'absolute', left: 0, right: 0, top: 0, height: 192, backgroundColor: '#1e293b', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   cameraPreviewImage: { position: 'absolute', width: '100%', height: '100%', resizeMode: 'cover', opacity: 0.9 },
   cameraPreviewFallback: { position: 'absolute', width: '100%', height: '100%', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
-  cameraPreviewShade: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(2,6,23,0.36)' },
+  cameraPreviewShade: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(2,6,23,0.12)' },
   cameraPreviewText: { color: '#34d399', fontSize: 12, fontWeight: '900', letterSpacing: 2.2 },
   liveBadge: { position: 'absolute', left: 18, top: 18, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7, flexDirection: 'row', gap: 7, alignItems: 'center', borderWidth: 1 },
   liveBadgeOnline: { backgroundColor: 'rgba(15,23,42,0.55)', borderColor: 'rgba(255,255,255,0.12)' },
@@ -830,7 +875,7 @@ const styles = StyleSheet.create({
   liveBadgeText: { fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
   liveBadgeTextOnline: { color: '#a7f3d0' },
   liveBadgeTextOffline: { color: '#fecdd3' },
-  cameraCardBody: { position: 'absolute', left: 18, right: 18, bottom: 16, zIndex: 5, gap: 6 },
+  cameraCardBody: { position: 'absolute', left: 0, right: 0, bottom: 0, minHeight: 94, zIndex: 5, gap: 5, backgroundColor: '#0f172a', borderTopWidth: 1, borderColor: 'rgba(30,41,59,0.72)', paddingHorizontal: 20, paddingVertical: 16 },
   cameraCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   cameraName: { color: '#ffffff', fontWeight: '900', fontSize: 18, flexShrink: 1, letterSpacing: 0.2 },
   cameraMeta: { color: '#94a3b8', fontSize: 12, marginTop: 2, fontWeight: '600' },
@@ -894,27 +939,44 @@ const styles = StyleSheet.create({
   zoomRow: { flexDirection: 'row', gap: 8 },
 
   cameraStage: { gap: 16 },
+  cameraDetailHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 4, paddingBottom: 2 },
+  headerIconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  cameraDetailTitle: { color: '#ffffff', fontSize: 18, fontWeight: '800', textAlign: 'center' },
+  cameraDetailSubtitle: { color: '#34d399', fontSize: 10, fontWeight: '800', textAlign: 'center', textTransform: 'uppercase', letterSpacing: 1.1, marginTop: 3 },
   cameraHeroHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
   singleVideoCard: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: '#000000', borderRadius: 32, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.55, shadowRadius: 28, elevation: 10 },
   singleVideoTopOverlay: { position: 'absolute', left: 12, right: 12, top: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   liveNowText: { color: '#d1fae5', fontSize: 11, fontWeight: '900', letterSpacing: 1.3, backgroundColor: 'rgba(0,0,0,0.64)', borderRadius: 999, overflow: 'hidden', paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
   actionDock: { flexDirection: 'row', gap: 9, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: '#0f172a', borderRadius: 28, padding: 10, shadowColor: '#000', shadowOpacity: 0.32, shadowRadius: 18, elevation: 4 },
-  ptzCardPremium: { backgroundColor: '#0f172a', borderRadius: 34, padding: 18, gap: 18, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', shadowColor: '#000', shadowOpacity: 0.38, shadowRadius: 24, elevation: 7 },
+  quickActionsGrid: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginVertical: 6 },
+  quickActionButton: { flex: 1, alignItems: 'center', gap: 8 },
+  quickActionIcon: { width: 56, height: 56, borderRadius: 18, backgroundColor: '#0f172a', borderWidth: 1, borderColor: '#1e293b', alignItems: 'center', justifyContent: 'center' },
+  quickActionIconActive: { backgroundColor: '#10b981', borderColor: '#10b981', shadowColor: '#10b981', shadowOpacity: 0.32, shadowRadius: 15, elevation: 7 },
+  quickActionLabel: { color: '#94a3b8', fontSize: 12, fontWeight: '700' },
+  ptzCardPremium: { backgroundColor: 'transparent', borderRadius: 0, padding: 0, gap: 18, borderWidth: 0 },
   ptzFeedback: { color: '#02130f', backgroundColor: '#34d399', overflow: 'hidden', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, fontSize: 10, fontWeight: '900' },
-  ptzConsole: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 18 },
-  ptzDpad: { width: 220, height: 220, borderRadius: 110, backgroundColor: '#020617', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', position: 'relative', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.55, shadowRadius: 22, elevation: 9 },
-  ptzRoundButton: { position: 'absolute', width: 68, height: 68, borderRadius: 34, backgroundColor: '#111827', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 14, elevation: 5 },
-  ptzRoundButtonActive: { backgroundColor: '#10b981', borderColor: '#34d399', transform: [{ scale: 0.9 }], shadowColor: '#34d399', shadowOpacity: 0.45, shadowRadius: 22 },
-  ptzRoundText: { color: '#94a3b8', fontSize: 25, fontWeight: '900' },
+  ptzConsole: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 18, backgroundColor: '#0f172a', borderRadius: 32, borderWidth: 1, borderColor: 'rgba(30,41,59,0.9)', paddingVertical: 24, paddingHorizontal: 10, shadowColor: '#000', shadowOpacity: 0.45, shadowRadius: 22, elevation: 8 },
+  ptzDpad: { width: 224, height: 224, borderRadius: 112, backgroundColor: '#0f172a', borderWidth: 1, borderColor: '#1e293b', position: 'relative', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.52, shadowRadius: 24, elevation: 10 },
+  ptzRoundButton: { position: 'absolute', width: 48, height: 48, borderRadius: 24, backgroundColor: 'transparent', borderWidth: 0, alignItems: 'center', justifyContent: 'center' },
+  ptzRoundButtonActive: { backgroundColor: 'rgba(16,185,129,0.16)', transform: [{ scale: 0.9 }] },
+  ptzRoundText: { color: '#64748b', fontSize: 32, fontWeight: '900' },
   ptzRoundTextActive: { color: '#02130f' },
-  ptzUp: { top: 11, left: 76 },
-  ptzLeft: { left: 11, top: 76 },
-  ptzRight: { right: 11, top: 76 },
-  ptzDown: { bottom: 11, left: 76 },
-  ptzNub: { width: 78, height: 78, borderRadius: 39, backgroundColor: '#0f172a', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center' },
-  ptzNubText: { color: '#475569', fontSize: 10, fontWeight: '900', letterSpacing: 1.2 },
+  ptzUp: { top: 12, left: 88 },
+  ptzLeft: { left: 12, top: 88 },
+  ptzRight: { right: 12, top: 88 },
+  ptzDown: { bottom: 12, left: 88 },
+  ptzNub: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#1e293b', borderWidth: 4, borderColor: '#334155', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.42, shadowRadius: 16, elevation: 5 },
+  ptzNubInner: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(51,65,85,0.52)' },
+  ptzNubText: { color: '#475569', fontSize: 0, fontWeight: '900', letterSpacing: 0 },
   zoomColumn: { gap: 12 },
-  zoomButton: { position: 'relative', width: 64, height: 84, borderRadius: 26 },
+  zoomButton: { position: 'relative', width: 54, height: 54, borderRadius: 27, backgroundColor: '#0f172a', borderWidth: 1, borderColor: '#1e293b' },
+  alertsCard: { width: '100%', gap: 12, marginTop: 4 },
+  alertsTitle: { color: '#64748b', fontSize: 12, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 2 },
+  alertRow: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#0f172a', borderWidth: 1, borderColor: '#1e293b', borderRadius: 18, padding: 14 },
+  alertIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(16,185,129,0.10)', alignItems: 'center', justifyContent: 'center' },
+  alertBody: { flex: 1 },
+  alertText: { color: '#ffffff', fontSize: 14, fontWeight: '700' },
+  alertTime: { color: '#64748b', fontSize: 12, marginTop: 2 },
   sectionHeaderInline: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
   segmentedMini: { flexDirection: 'row', gap: 6, flexShrink: 0 },
   gridBoard: { gap: 12 },
@@ -955,9 +1017,9 @@ const styles = StyleSheet.create({
   infoValue: { color: '#e2e8f0', fontSize: 13, fontWeight: '800', marginTop: 4 },
   logoutButton: { width: '100%', height: 54, borderRadius: 20, backgroundColor: 'rgba(244,63,94,0.14)', borderWidth: 1, borderColor: 'rgba(244,63,94,0.30)', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   logoutText: { color: '#fda4af', fontSize: 14, fontWeight: '900' },
-  tabs: { position: 'absolute', left: 14, right: 14, bottom: 28, backgroundColor: 'rgba(15,23,42,0.92)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)', borderRadius: 30, padding: 7, flexDirection: 'row', gap: 4, shadowColor: '#000', shadowOpacity: 0.62, shadowRadius: 28, elevation: 24 },
-  tab: { flex: 1, alignItems: 'center', borderRadius: 22, paddingVertical: 8, gap: 2 },
-  tabActive: { backgroundColor: 'rgba(255,255,255,0.07)' },
+  tabs: { position: 'absolute', left: 0, right: 0, bottom: 0, height: BOTTOM_SAFE + 78, backgroundColor: 'rgba(2,6,23,0.94)', borderTopWidth: 1, borderColor: '#1e293b', paddingHorizontal: 12, paddingTop: 9, paddingBottom: BOTTOM_SAFE + 8, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', gap: 4, shadowColor: '#000', shadowOpacity: 0.62, shadowRadius: 28, elevation: 24 },
+  tab: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 4, gap: 4 },
+  tabActive: { backgroundColor: 'transparent' },
   tabIcon: { color: '#64748b', fontSize: 18, fontWeight: '900', lineHeight: 20 },
   tabIconActive: { color: '#34d399' },
   tabText: { color: '#64748b', fontSize: 9, fontWeight: '900', letterSpacing: 0.35 },
