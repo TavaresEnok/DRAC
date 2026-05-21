@@ -26,7 +26,7 @@ const GRID_OPTIONS = [1, 2, 4] as const;
 
 type GridSize = (typeof GRID_OPTIONS)[number];
 type Direction = 'Up' | 'Down' | 'Left' | 'Right' | 'ZoomIn' | 'ZoomOut';
-type Tab = 'dashboard' | 'live' | 'playback' | 'profile';
+type Tab = 'dashboard' | 'live' | 'grid' | 'playback' | 'profile';
 
 type User = {
   id: string;
@@ -203,6 +203,33 @@ function ActionPill({
   );
 }
 
+
+function PtzButton({
+  label,
+  direction,
+  disabled,
+  active,
+  onPress,
+  style,
+}: {
+  label: string;
+  direction: Direction;
+  disabled?: boolean;
+  active?: boolean;
+  onPress: (direction: Direction) => void;
+  style?: object;
+}) {
+  return (
+    <Pressable
+      disabled={disabled}
+      onPress={() => onPress(direction)}
+      style={({ pressed }) => [styles.ptzRoundButton, style, (pressed || active) && styles.ptzRoundButtonActive, disabled && styles.disabled]}
+    >
+      {({ pressed }) => <Text style={[styles.ptzRoundText, (pressed || active) && styles.ptzRoundTextActive]}>{label}</Text>}
+    </Pressable>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
@@ -218,6 +245,8 @@ export default function App() {
   const [streamPosters, setStreamPosters] = useState<Record<string, string | null>>({});
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [relays, setRelays] = useState<Record<string, RelayDiscovery>>({});
+  const [ptzActive, setPtzActive] = useState<Direction | null>(null);
+  const [ptzFeedback, setPtzFeedback] = useState<string | null>(null);
   const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) ?? cameras[0] ?? null;
 
   const visibleGridCameras = useMemo(() => cameras.slice(0, gridSize), [cameras, gridSize]);
@@ -346,13 +375,19 @@ export default function App() {
 
   const sendPtz = async (direction: Direction) => {
     if (!session || !selectedCamera?.canControl) return;
+    setPtzActive(direction);
+    setPtzFeedback(direction);
     try {
       await request(session.apiUrl, `/ptz/${selectedCamera.id}/move`, session.token, {
         method: 'POST',
         body: JSON.stringify({ action: 'step', direction, durationMs: 450, speed: 5 }),
       });
+      setTimeout(() => setPtzFeedback(null), 650);
     } catch (error) {
+      setPtzFeedback(null);
       Alert.alert('PTZ', error instanceof Error ? error.message : 'Comando nao aceito.');
+    } finally {
+      setTimeout(() => setPtzActive(null), 220);
     }
   };
 
@@ -464,9 +499,9 @@ export default function App() {
           <View style={styles.page}>
             <LinearGradient colors={['#1d241f', '#2d3a30']} style={styles.heroCard}>
               <View>
-                <Text style={styles.heroEyebrow}>Operacao ao vivo</Text>
-                <Text style={styles.heroTitle}>{onlineCount}/{cameras.length} cameras online</Text>
-                <Text style={styles.heroSubtitle}>Somente cameras liberadas para o seu usuario aparecem aqui.</Text>
+                <Text style={styles.heroEyebrow}>Cameras</Text>
+                <Text style={styles.heroTitle}>{onlineCount}/{cameras.length} online</Text>
+                <Text style={styles.heroSubtitle}>Toque em uma camera para abrir em tela dedicada. O grid agora fica em uma aba propria.</Text>
               </View>
               <View style={styles.heroDot} />
             </LinearGradient>
@@ -529,81 +564,107 @@ export default function App() {
 
         {tab === 'live' && (
           <View style={styles.page}>
-            <View style={styles.sectionHeader}>
-              <View>
-                <Text style={styles.sectionTitle}>Ao vivo</Text>
-                <Text style={styles.sectionSubtitle}>Grid mobile e controle rapido da camera selecionada.</Text>
-              </View>
-              <View style={styles.segmented}>
-                {GRID_OPTIONS.map((size) => (
-                  <Chip key={size} label={`${size}`} active={gridSize === size} onPress={() => setGridSize(size)} />
-                ))}
-              </View>
-            </View>
-
-            <View style={styles.grid}>
-              {visibleGridCameras.map((camera) => (
-                <Pressable
-                  key={camera.id}
-                  onPress={() => setSelectedCameraId(camera.id)}
-                  style={[styles.gridTile, selectedCamera?.id === camera.id && styles.gridTileActive]}
-                >
-                  <View style={styles.videoFrame}>
-                    <LiveVideo uri={streamUrls[camera.id] ?? null} posterUri={streamPosters[camera.id] ?? null} />
-                    <View style={styles.videoOverlayTop}>
-                      <Text style={styles.videoOverlayTitle}>{camera.name}</Text>
-                      <Text style={styles.videoProtocol}>HLS</Text>
-                    </View>
-                  </View>
-                  <View style={styles.tileFooter}>
-                    <Text style={styles.tileTitle}>{camera.ip}</Text>
-                    <Text style={styles.tileMeta}>{formatResolution(camera)}</Text>
-                  </View>
-                </Pressable>
-              ))}
-            </View>
-
             {selectedCamera ? (
-              <View style={styles.controlCard}>
-                <View style={styles.controlHeader}>
+              <View style={styles.cameraStage}>
+                <View style={styles.cameraHeroHeader}>
                   <View>
-                    <Text style={styles.panelTitle}>{selectedCamera.name}</Text>
-                    <Text style={styles.cameraMeta}>{selectedCamera.group?.name ?? 'Sem grupo'} - {formatResolution(selectedCamera)}</Text>
+                    <Text style={styles.sectionTitle}>{selectedCamera.name}</Text>
+                    <Text style={styles.sectionSubtitle}>{selectedCamera.group?.name ?? 'Sem grupo'} - {formatResolution(selectedCamera)}</Text>
                   </View>
                   <View style={[styles.statusPill, isOnline(selectedCamera) ? styles.statusOnline : styles.statusOffline]}>
                     <Text style={[styles.statusText, isOnline(selectedCamera) ? styles.statusTextOnline : styles.statusTextOffline]}>{selectedCamera.status}</Text>
                   </View>
                 </View>
 
-                <View style={styles.actionGrid}>
+                <View style={styles.singleVideoCard}>
+                  <LiveVideo uri={streamUrls[selectedCamera.id] ?? null} posterUri={streamPosters[selectedCamera.id] ?? null} />
+                  <View style={styles.singleVideoTopOverlay}>
+                    <Text style={styles.liveNowText}>AO VIVO</Text>
+                    <Text style={styles.videoProtocol}>HLS</Text>
+                  </View>
+                </View>
+
+                <View style={styles.actionDock}>
                   <ActionPill label="Gravar" tone="danger" disabled={!selectedCamera.canRecord} onPress={() => toggleRecording(selectedCamera, true)} />
                   <ActionPill label="Parar" tone="success" disabled={!selectedCamera.canRecord} onPress={() => toggleRecording(selectedCamera, false)} />
                   <ActionPill label="Alarme" disabled={!relays[selectedCamera.id]?.triggerable} onPress={triggerRelay} />
                 </View>
 
-                <View style={styles.ptzCard}>
+                <View style={styles.ptzCardPremium}>
                   <View style={styles.ptzHeader}>
-                    <Text style={styles.ptzTitle}>Controle PTZ</Text>
-                    <Text style={styles.ptzSubtitle}>{selectedCamera.canControl ? 'Disponivel' : 'Sem permissao'}</Text>
+                    <View>
+                      <Text style={styles.ptzTitle}>PTZ</Text>
+                      <Text style={styles.ptzSubtitle}>{selectedCamera.canControl ? 'Pressione para mover. Solto, comando enviado.' : 'Sem permissao para controlar'}</Text>
+                    </View>
+                    {ptzFeedback ? <Text style={styles.ptzFeedback}>Enviado: {ptzFeedback}</Text> : null}
                   </View>
-                  <View style={styles.ptzPad}>
-                    <View style={styles.ptzSpacer} />
-                    <Pressable disabled={!selectedCamera.canControl} onPress={() => sendPtz('Up')} style={[styles.ptzButton, !selectedCamera.canControl && styles.disabled]}><Text style={styles.ptzText}>UP</Text></Pressable>
-                    <View style={styles.ptzSpacer} />
-                    <Pressable disabled={!selectedCamera.canControl} onPress={() => sendPtz('Left')} style={[styles.ptzButton, !selectedCamera.canControl && styles.disabled]}><Text style={styles.ptzText}>LEFT</Text></Pressable>
-                    <View style={styles.ptzCenter}><Text style={styles.ptzCenterText}>PTZ</Text></View>
-                    <Pressable disabled={!selectedCamera.canControl} onPress={() => sendPtz('Right')} style={[styles.ptzButton, !selectedCamera.canControl && styles.disabled]}><Text style={styles.ptzText}>RIGHT</Text></Pressable>
-                    <View style={styles.ptzSpacer} />
-                    <Pressable disabled={!selectedCamera.canControl} onPress={() => sendPtz('Down')} style={[styles.ptzButton, !selectedCamera.canControl && styles.disabled]}><Text style={styles.ptzText}>DOWN</Text></Pressable>
-                    <View style={styles.ptzSpacer} />
-                  </View>
-                  <View style={styles.zoomRow}>
-                    <ActionPill label="Zoom -" disabled={!selectedCamera.canControl} onPress={() => sendPtz('ZoomOut')} />
-                    <ActionPill label="Zoom +" disabled={!selectedCamera.canControl} onPress={() => sendPtz('ZoomIn')} />
+
+                  <View style={styles.ptzConsole}>
+                    <View style={styles.ptzDpad}>
+                      <PtzButton label="▲" direction="Up" disabled={!selectedCamera.canControl} active={ptzActive === 'Up'} onPress={sendPtz} style={styles.ptzUp} />
+                      <PtzButton label="◀" direction="Left" disabled={!selectedCamera.canControl} active={ptzActive === 'Left'} onPress={sendPtz} style={styles.ptzLeft} />
+                      <View style={styles.ptzNub}><Text style={styles.ptzNubText}>DRAC</Text></View>
+                      <PtzButton label="▶" direction="Right" disabled={!selectedCamera.canControl} active={ptzActive === 'Right'} onPress={sendPtz} style={styles.ptzRight} />
+                      <PtzButton label="▼" direction="Down" disabled={!selectedCamera.canControl} active={ptzActive === 'Down'} onPress={sendPtz} style={styles.ptzDown} />
+                    </View>
+                    <View style={styles.zoomColumn}>
+                      <PtzButton label="+" direction="ZoomIn" disabled={!selectedCamera.canControl} active={ptzActive === 'ZoomIn'} onPress={sendPtz} style={styles.zoomButton} />
+                      <PtzButton label="-" direction="ZoomOut" disabled={!selectedCamera.canControl} active={ptzActive === 'ZoomOut'} onPress={sendPtz} style={styles.zoomButton} />
+                    </View>
                   </View>
                 </View>
               </View>
-            ) : null}
+            ) : (
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyTitle}>Selecione uma camera</Text>
+                <Text style={styles.emptyText}>Volte em Cameras e toque em uma camera para abrir o ao vivo.</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {tab === 'grid' && (
+          <View style={styles.page}>
+            <View style={styles.sectionHeaderInline}>
+              <View>
+                <Text style={styles.sectionTitle}>Grid</Text>
+                <Text style={styles.sectionSubtitle}>Visualizacao rapida de grupos de cameras.</Text>
+              </View>
+              <View style={styles.segmentedMini}>
+                {GRID_OPTIONS.map((size) => (
+                  <Chip key={size} label={`${size}`} active={gridSize === size} onPress={() => setGridSize(size)} />
+                ))}
+              </View>
+            </View>
+
+            <View style={[styles.gridBoard, gridSize === 1 && styles.gridBoardOne, gridSize === 4 && styles.gridBoardFour]}>
+              {visibleGridCameras.map((camera) => (
+                <Pressable
+                  key={camera.id}
+                  onPress={() => { setSelectedCameraId(camera.id); setTab('live'); }}
+                  style={[styles.gridTilePro, gridSize === 4 && styles.gridTileProHalf, selectedCamera?.id === camera.id && styles.gridTileActive]}
+                >
+                  <View style={styles.videoFrame}>
+                    <LiveVideo uri={streamUrls[camera.id] ?? null} posterUri={streamPosters[camera.id] ?? null} />
+                    <View style={styles.videoOverlayTop}>
+                      <Text style={styles.videoOverlayTitle}>{camera.name}</Text>
+                      <Text style={styles.videoProtocol}>LIVE</Text>
+                    </View>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+
+            {groupedCameras.map(([groupName, items]) => (
+              <View key={groupName} style={styles.groupBlockCompact}>
+                <Text style={styles.groupTitle}>{groupName}</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cameraChips}>
+                  {items.map((camera) => (
+                    <Chip key={camera.id} label={camera.name} active={selectedCamera?.id === camera.id} onPress={() => setSelectedCameraId(camera.id)} />
+                  ))}
+                </ScrollView>
+              </View>
+            ))}
           </View>
         )}
 
@@ -663,9 +724,9 @@ export default function App() {
       </ScrollView>
 
       <View style={styles.tabs}>
-        {(['dashboard', 'live', 'playback', 'profile'] as Tab[]).map((item) => (
+        {(['dashboard', 'live', 'grid', 'playback', 'profile'] as Tab[]).map((item) => (
           <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}>
-            <Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item === 'dashboard' ? 'Painel' : item === 'live' ? 'Ao vivo' : item === 'playback' ? 'Playback' : 'Perfil'}</Text>
+            <Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item === 'dashboard' ? 'Cameras' : item === 'live' ? 'Ao vivo' : item === 'grid' ? 'Grid' : item === 'playback' ? 'Playback' : 'Perfil'}</Text>
           </Pressable>
         ))}
       </View>
@@ -694,7 +755,7 @@ const styles = StyleSheet.create({
   headerMeta: { color: '#789087', fontSize: 12, marginTop: 2 },
   refreshButton: { borderWidth: 1, borderColor: '#1d3632', backgroundColor: '#0c1b19', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 },
   refreshText: { color: '#d6fff0', fontSize: 12, fontWeight: '900' },
-  content: { padding: 16, paddingBottom: 108, backgroundColor: '#071013' },
+  content: { padding: 16, paddingBottom: 142, backgroundColor: '#071013' },
   page: { gap: 16 },
 
   heroCard: { borderRadius: 32, padding: 22, minHeight: 158, justifyContent: 'space-between', overflow: 'hidden', borderWidth: 1, borderColor: '#245047' },
@@ -789,6 +850,38 @@ const styles = StyleSheet.create({
   ptzSpacer: { width: '30%', minHeight: 56 },
   zoomRow: { flexDirection: 'row', gap: 8 },
 
+
+  cameraStage: { gap: 16 },
+  cameraHeroHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
+  singleVideoCard: { borderWidth: 1, borderColor: '#17332f', backgroundColor: '#020605', borderRadius: 30, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 26, elevation: 8 },
+  singleVideoTopOverlay: { position: 'absolute', left: 12, right: 12, top: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  liveNowText: { color: '#f4fff8', fontSize: 11, fontWeight: '900', letterSpacing: 1, backgroundColor: 'rgba(0,0,0,0.62)', borderRadius: 999, overflow: 'hidden', paddingHorizontal: 11, paddingVertical: 6 },
+  actionDock: { flexDirection: 'row', gap: 9, borderWidth: 1, borderColor: '#16322e', backgroundColor: '#091817', borderRadius: 24, padding: 9 },
+  ptzCardPremium: { backgroundColor: '#0b1918', borderRadius: 30, padding: 16, gap: 16, borderWidth: 1, borderColor: '#17332f', shadowColor: '#000', shadowOpacity: 0.24, shadowRadius: 20, elevation: 5 },
+  ptzFeedback: { color: '#06120f', backgroundColor: '#28d08a', overflow: 'hidden', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, fontSize: 10, fontWeight: '900' },
+  ptzConsole: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 18 },
+  ptzDpad: { width: 210, height: 210, borderRadius: 105, backgroundColor: '#06100f', borderWidth: 1, borderColor: '#17332f', position: 'relative', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.28, shadowRadius: 18, elevation: 5 },
+  ptzRoundButton: { position: 'absolute', width: 66, height: 66, borderRadius: 28, backgroundColor: '#102320', borderWidth: 1, borderColor: '#24443e', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 12, elevation: 4 },
+  ptzRoundButtonActive: { backgroundColor: '#28d08a', borderColor: '#84f6b7', transform: [{ scale: 0.92 }], shadowColor: '#28d08a', shadowOpacity: 0.35, shadowRadius: 20 },
+  ptzRoundText: { color: '#d9fff0', fontSize: 24, fontWeight: '900' },
+  ptzRoundTextActive: { color: '#06120f' },
+  ptzUp: { top: 10, left: 72 },
+  ptzLeft: { left: 10, top: 72 },
+  ptzRight: { right: 10, top: 72 },
+  ptzDown: { bottom: 10, left: 72 },
+  ptzNub: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#152c28', borderWidth: 1, borderColor: '#295049', alignItems: 'center', justifyContent: 'center' },
+  ptzNubText: { color: '#8aa39a', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  zoomColumn: { gap: 12 },
+  zoomButton: { position: 'relative', width: 62, height: 82, borderRadius: 24 },
+  sectionHeaderInline: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
+  segmentedMini: { flexDirection: 'row', gap: 6, flexShrink: 0 },
+  gridBoard: { gap: 12 },
+  gridBoardOne: { gap: 14 },
+  gridBoardFour: { flexDirection: 'row', flexWrap: 'wrap' },
+  gridTilePro: { borderWidth: 1, borderColor: '#132927', backgroundColor: '#0d1b1a', borderRadius: 24, overflow: 'hidden', width: '100%', shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 14, elevation: 3 },
+  gridTileProHalf: { width: '48.2%' },
+  groupBlockCompact: { gap: 9, borderTopWidth: 1, borderColor: '#10211f', paddingTop: 14 },
+
   cameraChips: { flexDirection: 'row', gap: 8, paddingRight: 16 },
   timeline: { gap: 10 },
   recordingCard: { borderWidth: 1, borderColor: '#132927', backgroundColor: '#0d1b1a', borderRadius: 24, padding: 13, flexDirection: 'row', gap: 12 },
@@ -814,8 +907,8 @@ const styles = StyleSheet.create({
   infoValue: { color: '#d9fff0', fontSize: 13, fontWeight: '800', marginTop: 4 },
   logoutButton: { width: '100%', height: 52, borderRadius: 19, backgroundColor: 'rgba(255,91,91,0.14)', borderWidth: 1, borderColor: 'rgba(255,91,91,0.28)', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   logoutText: { color: '#ff9d9d', fontSize: 14, fontWeight: '900' },
-  tabs: { position: 'absolute', left: 12, right: 12, bottom: 12, backgroundColor: 'rgba(9,24,23,0.96)', borderWidth: 1, borderColor: '#16322e', borderRadius: 26, padding: 6, flexDirection: 'row', gap: 6, shadowColor: '#000', shadowOpacity: 0.34, shadowRadius: 20, elevation: 10 },
-  tab: { flex: 1, alignItems: 'center', borderRadius: 20, paddingVertical: 12 },
+  tabs: { position: 'absolute', left: 12, right: 12, bottom: 28, backgroundColor: 'rgba(9,24,23,0.98)', borderWidth: 1, borderColor: '#16322e', borderRadius: 28, padding: 6, flexDirection: 'row', gap: 4, shadowColor: '#000', shadowOpacity: 0.42, shadowRadius: 24, elevation: 20 },
+  tab: { flex: 1, alignItems: 'center', borderRadius: 20, paddingVertical: 11 },
   tabActive: { backgroundColor: '#28d08a' },
   tabText: { color: '#789087', fontSize: 11, fontWeight: '900' },
   tabTextActive: { color: '#06120f' },
