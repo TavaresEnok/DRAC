@@ -38,6 +38,12 @@ export default defineConfig({
           if (id.includes('lucide-react') || id.includes('react-icons')) {
             return 'vendor-icons';
           }
+          if (id.includes('@tanstack/react-query') || id.includes('wouter') || id.includes('zustand')) {
+            return 'vendor-state-router';
+          }
+          if (id.includes('axios') || id.includes('date-fns') || id.includes('framer-motion')) {
+            return 'vendor-utils-motion';
+          }
           return 'vendor-core';
         },
       },

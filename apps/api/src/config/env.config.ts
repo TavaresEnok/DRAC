@@ -41,6 +41,7 @@ export const envConfig = () => ({
   alarmWebhookAllowedHosts: process.env.ALARM_WEBHOOK_ALLOWED_HOSTS ?? '',
   alarmWebhookSigningSecret: process.env.ALARM_WEBHOOK_SIGNING_SECRET ?? '',
   alarmEmailFrom: process.env.ALARM_EMAIL_FROM ?? '',
+  aiBaseUrl: process.env.AI_BASE_URL ?? 'http://ai-service:8000',
   smtpHost: process.env.SMTP_HOST ?? '',
   smtpPort: Number(process.env.SMTP_PORT ?? 587),
   smtpSecure: String(process.env.SMTP_SECURE ?? 'false') === 'true',

@@ -6,12 +6,14 @@ import { firstValueFrom } from 'rxjs';
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
-  private readonly aiBaseUrl = 'http://ai-service:8000';
+  private readonly aiBaseUrl: string;
 
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
-  ) {}
+  ) {
+    this.aiBaseUrl = this.configService.get<string>('aiBaseUrl') ?? 'http://ai-service:8000';
+  }
 
   private internalHeaders() {
     const token = (this.configService.get<string>('internalServiceToken') ?? '').trim();

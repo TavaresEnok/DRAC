@@ -8,6 +8,8 @@
     "dev:web": "corepack pnpm --filter web dev",
     "docker:up": "docker compose -f infra/docker-compose.yml up -d",
     "docker:down": "docker compose -f infra/docker-compose.yml down",
+    "verify": "corepack pnpm test:phase2 && corepack pnpm --filter api build && corepack pnpm --filter web build && corepack pnpm --filter mobile typecheck",
+    "test:phase2": "corepack pnpm --filter api test:phase2",
     "db:migrate": "corepack pnpm --filter api prisma migrate deploy",
     "db:studio": "corepack pnpm --filter api prisma studio"
   }

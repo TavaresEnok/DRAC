@@ -378,7 +378,7 @@ export function LiveStreamPlayer({
             throw new Error('Stream indisponível: FLV incompatível e HLS não disponível.');
           }
 
-          const HlsModule = await import('hls.js');
+          const HlsModule = await import('hls.js/dist/hls.light.mjs');
           const Hls = HlsModule.default;
 
           if (Hls.isSupported()) {

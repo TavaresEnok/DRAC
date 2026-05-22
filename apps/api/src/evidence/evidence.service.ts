@@ -1,6 +1,6 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash, createHmac } from 'crypto';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
 
 @Injectable()
 export class EvidenceService {
@@ -51,8 +51,8 @@ export class EvidenceService {
     const providedHash = typeof packageHashEntry?.value === 'string' ? packageHashEntry.value : null;
     const providedSignature = typeof signatureEntry?.value === 'string' ? signatureEntry.value : null;
 
-    const hashValid = Boolean(providedHash && providedHash === computedHash);
-    const signatureValid = Boolean(providedSignature && providedSignature === computedSignature);
+    const hashValid = this.safeCompareHex(providedHash, computedHash);
+    const signatureValid = this.safeCompareHex(providedSignature, computedSignature);
 
     return {
       ok: hashValid && signatureValid,
@@ -98,6 +98,17 @@ export class EvidenceService {
 
   private hmacSha256Hex(value: string) {
     return createHmac('sha256', this.hmacSecret).update(value).digest('hex');
+  }
+
+  private safeCompareHex(provided: string | null, computed: string) {
+    if (!provided) return false;
+    if (!/^[0-9a-f]+$/i.test(provided) || !/^[0-9a-f]+$/i.test(computed)) return false;
+
+    const providedBuffer = Buffer.from(provided, 'hex');
+    const computedBuffer = Buffer.from(computed, 'hex');
+    if (providedBuffer.length !== computedBuffer.length) return false;
+
+    return timingSafeEqual(providedBuffer, computedBuffer);
   }
 
   private stableStringify(value: unknown): string {

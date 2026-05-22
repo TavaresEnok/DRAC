@@ -275,7 +275,7 @@ export default function EvidencePage() {
                   {entry.notes ? <div className="text-xs text-[hsl(var(--muted-foreground))]">{entry.notes}</div> : null}
                   {entry.type === 'export_request' && (
                     <div className="flex flex-wrap gap-2 pt-1">
-                      {(user?.role === 'ADMIN' || user?.role === 'SUPER_ADMIN') && status === 'PENDING' && (
+                      {user?.role === 'admin' && status === 'PENDING' && (
                         <>
                           <button onClick={() => void review(entry.id, 'APPROVED')} className="h-7 px-2.5 rounded border border-emerald-500/40 text-emerald-500 text-xs inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> Aprovar</button>
                           <button onClick={() => void review(entry.id, 'REJECTED')} className="h-7 px-2.5 rounded border border-rose-500/40 text-rose-500 text-xs inline-flex items-center gap-1"><XCircle className="h-3.5 w-3.5" /> Rejeitar</button>
