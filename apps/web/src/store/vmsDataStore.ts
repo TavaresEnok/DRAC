@@ -21,6 +21,7 @@ export interface Camera {
   lastEvent?: string;
   ptzCapable: boolean;
   hasAudio: boolean;
+  aiEnabled: boolean;
   isOnline: boolean;
   signalStrength: number;
   recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
@@ -341,6 +342,7 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
           lastEvent,
           ptzCapable: Boolean(camera.onvifPath || camera.onvifProfileToken),
           hasAudio: Boolean(camera.audioEnabled),
+          aiEnabled: camera.aiEnabled !== false,
           isOnline: camera.status === 'ONLINE',
           signalStrength: camera.status === 'ONLINE' ? 100 : 0,
           recordingMode: effectiveRecordingMode,

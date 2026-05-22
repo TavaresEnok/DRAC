@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Monitor, PlaySquare,
   Camera, Settings,
   Gauge, ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
-  Server, Users, Radar
+  Server, Users, Radar, Brain
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSidebarStore } from '../store/sidebarStore';
@@ -18,6 +18,7 @@ const NAV_SECTIONS = [
       { path: '/dashboard', label: 'Painel', icon: LayoutDashboard },
       { path: '/live', label: 'Ao Vivo', icon: Monitor },
       { path: '/playback', label: 'Reprodução', icon: PlaySquare },
+      { path: '/ai', label: 'IA Central', icon: Brain },
     ],
   },
   {

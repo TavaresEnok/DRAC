@@ -30,14 +30,14 @@ export class AiService {
     }
   }
 
-  async startAnalysis(cameraId: string, rtspUrl: string) {
+  async startAnalysis(cameraId: string, rtspUrl: string, analysisType = 'motion') {
     try {
       const response: any = await firstValueFrom(this.httpService.post(
         `${this.aiBaseUrl}/analyze/start`,
         {
           camera_id: cameraId,
           rtsp_url: rtspUrl,
-          analysis_type: 'motion',
+          analysis_type: analysisType,
         },
         { headers: this.internalHeaders() },
       ));
@@ -59,6 +59,48 @@ export class AiService {
     } catch (error: any) {
       this.logger.error(`Failed to stop AI analysis for camera ${cameraId}: ${error.message}`);
       throw error;
+    }
+  }
+
+  async stopAll() {
+    try {
+      const response: any = await firstValueFrom(this.httpService.post(
+        `${this.aiBaseUrl}/analyze/stop-all`,
+        {},
+        { headers: this.internalHeaders() },
+      ));
+      return response.data;
+    } catch (error: any) {
+      this.logger.error(`Failed to stop all AI analysis: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async resetModels() {
+    try {
+      const response: any = await firstValueFrom(this.httpService.post(
+        `${this.aiBaseUrl}/models/reset`,
+        {},
+        { headers: this.internalHeaders() },
+      ));
+      return response.data;
+    } catch (error: any) {
+      this.logger.warn(`Failed to reset AI models: ${error.message}`);
+      return { status: 'unavailable' };
+    }
+  }
+
+  async loadModel(analysisType: string) {
+    try {
+      const response: any = await firstValueFrom(this.httpService.post(
+        `${this.aiBaseUrl}/models/load`,
+        { analysis_type: analysisType },
+        { headers: this.internalHeaders() },
+      ));
+      return response.data;
+    } catch (error: any) {
+      this.logger.warn(`Failed to load AI model ${analysisType}: ${error.message}`);
+      return { status: 'unavailable', error: error.message };
     }
   }
 }

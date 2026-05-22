@@ -99,6 +99,7 @@ export class CamerasService {
         recordingFps: normalizedProfile.recordingFps,
         recordingBitrateKbps: normalizedProfile.recordingBitrateKbps,
         audioEnabled: dto.audioEnabled ?? false,
+        aiEnabled: dto.aiEnabled ?? true,
       },
     });
 
@@ -163,6 +164,7 @@ export class CamerasService {
         recordingFps: normalizedProfile.recordingFps,
         recordingBitrateKbps: normalizedProfile.recordingBitrateKbps,
         audioEnabled: dto.audioEnabled,
+        aiEnabled: dto.aiEnabled,
       },
       include: { site: true, area: true, group: true },
     });

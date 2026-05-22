@@ -1,7 +1,11 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { CamerasService } from '../cameras/cameras.service';
 import { AiService } from './ai.service';
 import { CryptoService } from '../common/crypto/crypto.service';
+import { PrismaService } from '../common/prisma/prisma.service';
+
+const AI_MODES = ['motion', 'face', 'general', 'recognition'] as const;
+type AiMode = typeof AI_MODES[number];
 
 @Injectable()
 export class AiManagerService implements OnModuleInit {
@@ -11,6 +15,7 @@ export class AiManagerService implements OnModuleInit {
     private readonly camerasService: CamerasService,
     private readonly aiService: AiService,
     private readonly cryptoService: CryptoService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async onModuleInit() {
@@ -25,22 +30,75 @@ export class AiManagerService implements OnModuleInit {
 
   async syncAll() {
     try {
+      const settings = await this.getSettings();
+      if (!settings.enabled) {
+        this.logger.log('IA global desativada. Parando processadores ativos.');
+        await this.aiService.stopAll().catch(() => undefined);
+        return { started: 0, skipped: 'disabled', settings };
+      }
+
       const cameras = await this.camerasService.findAllInternal();
-      this.logger.log(`Iniciando análise de IA para ${cameras.length} câmeras...`);
+      const enabledCameras = cameras.filter((cam: any) => cam.aiEnabled !== false);
+      this.logger.log(`Iniciando IA modo '${settings.mode}' para ${enabledCameras.length}/${cameras.length} câmeras...`);
+      await this.aiService.loadModel(settings.mode);
+      let started = 0;
       
-      for (const cam of cameras) {
+      for (const cam of enabledCameras) {
         try {
           const password = this.cryptoService.decrypt(cam.passwordEncrypted);
           const rtspUrl = this.buildRtspUrl(cam, password);
-          await this.aiService.startAnalysis(cam.id, rtspUrl);
-          this.logger.log(`IA iniciada para câmera: ${cam.name}`);
+          await this.aiService.startAnalysis(cam.id, rtspUrl, settings.mode);
+          started += 1;
+          this.logger.log(`IA ${settings.mode} iniciada para câmera: ${cam.name}`);
         } catch (err: any) {
           this.logger.warn(`Falha ao iniciar IA para ${cam.name}: ${err.message}`);
         }
       }
+      return { started, settings };
     } catch (err: any) {
       this.logger.error(`Erro ao sincronizar IA: ${err.message}`);
+      return { started: 0, error: err.message };
     }
+  }
+
+  async restartAll() {
+    await this.aiService.stopAll().catch(() => undefined);
+    await this.aiService.resetModels().catch(() => undefined);
+    return this.syncAll();
+  }
+
+  async getSettings() {
+    return this.prisma.aiSettings.upsert({
+      where: { id: 'global' },
+      update: {},
+      create: { id: 'global', enabled: true, mode: 'motion', fps: Number(process.env.AI_PROCESS_FPS ?? 2) || 2 },
+    });
+  }
+
+  async updateSettings(input: { enabled?: boolean; mode?: string; fps?: number }) {
+    const data: { enabled?: boolean; mode?: AiMode; fps?: number } = {};
+    if (typeof input.enabled === 'boolean') data.enabled = input.enabled;
+    if (input.mode !== undefined) {
+      if (!AI_MODES.includes(input.mode as AiMode)) {
+        throw new BadRequestException(`Modo de IA inválido: ${input.mode}`);
+      }
+      data.mode = input.mode as AiMode;
+    }
+    if (input.fps !== undefined && Number.isFinite(Number(input.fps))) {
+      data.fps = Math.max(0.2, Math.min(10, Number(input.fps)));
+    }
+    const settings = await this.prisma.aiSettings.upsert({
+      where: { id: 'global' },
+      update: data,
+      create: {
+        id: 'global',
+        enabled: data.enabled ?? true,
+        mode: data.mode ?? 'motion',
+        fps: data.fps ?? (Number(process.env.AI_PROCESS_FPS ?? 2) || 2),
+      },
+    });
+    const sync = await this.restartAll();
+    return { settings, sync };
   }
 
   private buildRtspUrl(cam: any, password: string): string {

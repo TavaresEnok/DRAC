@@ -90,6 +90,7 @@ model Camera {
   recordingFps           Int?
   recordingBitrateKbps   Int?
   audioEnabled           Boolean      @default(false)
+  aiEnabled              Boolean      @default(true)
   detectedVideoCodec     String?
   detectedWidth          Int?
   detectedHeight         Int?
@@ -232,6 +233,40 @@ model User {
   auditLogs          AuditLog[]
   cameraPermissions  CameraPermission[]
   investigations     Investigation[]
+}
+
+model AiSettings {
+  id        String   @id @default("global")
+  enabled   Boolean  @default(true)
+  mode      String   @default("motion")
+  fps       Float    @default(2)
+  updatedAt DateTime @updatedAt
+}
+
+model Person {
+  id         String          @id @default(uuid())
+  name       String
+  externalId String?
+  isActive   Boolean         @default(true)
+  notes      String?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  embeddings FaceEmbedding[]
+
+  @@index([isActive])
+  @@index([name])
+}
+
+model FaceEmbedding {
+  id              String   @id @default(uuid())
+  personId        String
+  person          Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
+  embedding       Json
+  sourceImagePath String?
+  detScore        Float?
+  createdAt       DateTime @default(now())
+
+  @@index([personId])
 }
 
 model AuditLog {

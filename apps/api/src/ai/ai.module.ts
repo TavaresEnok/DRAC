@@ -5,12 +5,14 @@ import { AiService } from './ai.service';
 import { CamerasModule } from '../cameras/cameras.module';
 import { AccessControlModule } from '../access-control/access-control.module';
 import { AiManagerService } from './ai-manager.service';
+import { PrismaModule } from '../common/prisma/prisma.module';
 
 @Module({
   imports: [
     HttpModule,
     CamerasModule,
     AccessControlModule,
+    PrismaModule,
   ],
   controllers: [AiController],
   providers: [AiService, AiManagerService],

@@ -6,13 +6,15 @@ import os
 import numpy as np
 from queue import Queue
 from urllib.parse import urlsplit, urlunsplit
+from model_registry import registry
 
 class StreamProcessor:
-    def __init__(self, camera_id, rtsp_url, api_url, service_token):
+    def __init__(self, camera_id, rtsp_url, api_url, service_token, analysis_type="motion"):
         self.camera_id = camera_id
         self.rtsp_url = rtsp_url
         self.api_url = api_url
         self.service_token = service_token
+        self.analysis_type = (analysis_type or "motion").strip().lower()
         self.running = False
         self.thread = None
         self.capture_thread = None
@@ -21,6 +23,7 @@ class StreamProcessor:
         self.frame_height = max(90, int(os.getenv("AI_FRAME_HEIGHT", "180")))
         self.motion_pixels_threshold = max(1, int(os.getenv("AI_MOTION_PIXELS_THRESHOLD", "1800")))
         self.motion_debounce_seconds = max(5, int(os.getenv("AI_MOTION_DEBOUNCE_SECONDS", "30")))
+        self.detect_debounce_seconds = max(1, int(os.getenv("AI_DETECT_DEBOUNCE_SECONDS", "10")))
         self.frame_queue = Queue(maxsize=1)
         self.last_event_time = 0
         self.last_seen = 0
@@ -92,9 +95,17 @@ class StreamProcessor:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
 
+    def _debounce_seconds(self):
+        return self.motion_debounce_seconds if self.analysis_type == "motion" else self.detect_debounce_seconds
+
     def _process(self):
-        print(f"[{self.camera_id}] Iniciando processamento de movimento ({self.process_fps} fps, {self.frame_width}x{self.frame_height})...")
-        fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=True)
+        print(f"[{self.camera_id}] Iniciando IA modo global '{self.analysis_type}' ({self.process_fps} fps)...")
+        try:
+            registry.ensure_mode(self.analysis_type)
+        except Exception as exc:
+            registry.last_error = str(exc)
+            print(f"[{self.camera_id}] Falha ao carregar detector '{self.analysis_type}': {exc}")
+            return
         
         while self.running:
             if self.frame_queue.empty():
@@ -102,34 +113,48 @@ class StreamProcessor:
                 continue
                 
             frame = self.frame_queue.get()
-            
-            # Reduzir resolução para processamento rápido (mais eficiente para IA local)
-            small_frame = cv2.resize(frame, (self.frame_width, self.frame_height))
-            fgmask = fgbg.apply(small_frame)
-            
-            # Limpeza de ruído morfológica
-            kernel = np.ones((5,5), np.uint8)
-            fgmask = cv2.morphologyEx(fgmask, cv2.MORPH_OPEN, kernel)
-            
-            # Contagem de pixels de movimento
-            motion_pixels = np.count_nonzero(fgmask)
-            
-            if motion_pixels > self.motion_pixels_threshold: 
+
+            try:
+                detections = registry.infer(self.analysis_type, frame)
+            except Exception as exc:
+                registry.last_error = str(exc)
+                print(f"[{self.camera_id}] erro inferência: {exc}")
+                time.sleep(1)
+                continue
+
+            if detections:
                 current_time = time.time()
-                if current_time - self.last_event_time > self.motion_debounce_seconds:
-                    self._report_event("MOTION_DETECTED", motion_pixels)
+                if current_time - self.last_event_time > self._debounce_seconds():
+                    self._report_detections(detections)
                     self.last_event_time = current_time
 
             # Pequena pausa para aliviar CPU em sistemas standalone
             time.sleep(0.02)
 
-    def _report_event(self, event_type, value):
+    def _report_detections(self, detections):
+        for detection in detections:
+            event_type = detection.event_type or registry.event_type
+            metadata = {
+                "label": detection.label,
+                "confidence": round(float(detection.confidence), 4),
+                "bbox": detection.bbox,
+                "analysisType": self.analysis_type,
+                **(detection.extra or {}),
+            }
+            if detection.landmarks is not None:
+                metadata["landmarks"] = detection.landmarks
+            message = f"{detection.label} ({float(detection.confidence):.2f})"
+            self._report_event(event_type, metadata.get("value", detection.confidence), message, metadata)
+
+    def _report_event(self, event_type, value, message=None, metadata=None):
         print(f"[{self.camera_id}] Evento: {event_type} ({value})")
         try:
             url = f"{self.api_url}/cameras/internal/{self.camera_id}/events"
             payload = {
                 "type": event_type,
                 "value": str(value),
+                "message": message or f"Evento {event_type} detectado",
+                "metadata": metadata or {"value": value, "analysisType": self.analysis_type},
                 "occurredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             }
             headers = {"X-Service-Token": self.service_token}

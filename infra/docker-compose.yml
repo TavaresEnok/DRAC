@@ -166,6 +166,18 @@ services:
       - AI_FRAME_HEIGHT=${AI_FRAME_HEIGHT:-180}
       - AI_MOTION_PIXELS_THRESHOLD=${AI_MOTION_PIXELS_THRESHOLD:-1800}
       - AI_MOTION_DEBOUNCE_SECONDS=${AI_MOTION_DEBOUNCE_SECONDS:-30}
+      - AI_DETECT_DEBOUNCE_SECONDS=${AI_DETECT_DEBOUNCE_SECONDS:-10}
+      - AI_MODELS_DIR=/app/models
+      - AI_FACE_PACK=${AI_FACE_PACK:-buffalo_s}
+      - AI_FACE_PACK_REC=${AI_FACE_PACK_REC:-buffalo_l}
+      - AI_FACE_DET_SIZE=${AI_FACE_DET_SIZE:-640}
+      - AI_FACE_MIN_CONF=${AI_FACE_MIN_CONF:-0.5}
+      - AI_OBJ_MIN_CONF=${AI_OBJ_MIN_CONF:-0.4}
+      - AI_REC_THRESHOLD=${AI_REC_THRESHOLD:-0.35}
+      - AI_GALLERY_TTL=${AI_GALLERY_TTL:-300}
+    volumes:
+      - ./storage:/storage
+      - ./ai-models:/app/models
     depends_on:
       - redis
       - api

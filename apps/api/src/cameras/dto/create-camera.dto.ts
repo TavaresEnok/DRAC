@@ -138,4 +138,8 @@ export class CreateCameraDto {
   @IsOptional()
   @IsBoolean()
   audioEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  aiEnabled?: boolean;
 }

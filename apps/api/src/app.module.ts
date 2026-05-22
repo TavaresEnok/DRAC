@@ -17,6 +17,7 @@ import { AreasModule } from './areas/areas.module';
 import { CameraGroupsModule } from './camera-groups/camera-groups.module';
 import { CameraPermissionsModule } from './camera-permissions/camera-permissions.module';
 import { AiModule } from './ai/ai.module';
+import { FacesModule } from './faces/faces.module';
 import { SiteMapLayoutsModule } from './site-map-layouts/site-map-layouts.module';
 import { EvidenceModule } from './evidence/evidence.module';
 import { AlarmsModule } from './alarms/alarms.module';
@@ -55,6 +56,7 @@ import { ThrottlerGuard } from '@nestjs/throttler';
     RecordingsModule,
     JobsModule,
     AiModule,
+    FacesModule,
   ],
   providers: [
     {
