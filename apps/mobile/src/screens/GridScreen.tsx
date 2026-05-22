@@ -21,7 +21,6 @@ interface GridScreenProps {
 
 export function GridScreen({
   cameras,
-  groupedCameras,
   mosaicCameras,
   mosaicAreas,
   streamPosters,
@@ -37,6 +36,7 @@ export function GridScreen({
     () => mosaicAreas.find((area) => `area:${area.id}` === selectedMosaicGroup) ?? null,
     [mosaicAreas, selectedMosaicGroup],
   );
+  const isAreaMode = Boolean(selectedArea);
 
   const createArea = () => {
     onCreateArea(areaName);
@@ -48,7 +48,7 @@ export function GridScreen({
       <View style={styles.mosaicHeader}>
         <View>
           <Text style={styles.mosaicTitle}>Mosaico</Text>
-          <Text style={styles.mosaicSubtitle}>Organize câmeras por área visual.</Text>
+          <Text style={styles.mosaicSubtitle}>Crie uma área e toque nas câmeras que devem aparecer nela.</Text>
         </View>
       </View>
 
@@ -63,7 +63,7 @@ export function GridScreen({
           onSubmitEditing={createArea}
         />
         <Pressable onPress={createArea} style={styles.areaCreatorButton}>
-          <SvgIcon name="plus" size={18} color="#02130f" />
+          <SvgIcon name="plus" size={18} color="#ffffff" />
           <Text style={styles.areaCreatorButtonText}>Criar</Text>
         </Pressable>
       </View>
@@ -84,15 +84,6 @@ export function GridScreen({
             <Text style={[styles.groupFilterText, selectedMosaicGroup === `area:${area.id}` && styles.groupFilterTextActive]}>{area.name}</Text>
           </Pressable>
         ))}
-        {groupedCameras.map(([groupName]) => (
-          <Pressable
-            key={groupName}
-            onPress={() => onSelectGroup(`group:${groupName}`)}
-            style={[styles.groupFilterChip, selectedMosaicGroup === `group:${groupName}` && styles.groupFilterChipActiveSoft]}
-          >
-            <Text style={[styles.groupFilterText, selectedMosaicGroup === `group:${groupName}` && styles.groupFilterTextActiveSoft]}>Grupo: {groupName}</Text>
-          </Pressable>
-        ))}
       </ScrollView>
 
       {selectedArea ? (
@@ -106,23 +97,37 @@ export function GridScreen({
               <Text style={styles.areaDeleteText}>Excluir</Text>
             </Pressable>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.cameraPickerRow}>
+          <View style={styles.cameraSelectionGrid}>
             {cameras.map((camera) => {
               const added = selectedArea.cameraIds.includes(camera.id);
               return (
                 <Pressable
                   key={camera.id}
                   onPress={() => onToggleCameraInArea(selectedArea.id, camera.id)}
-                  style={[styles.cameraPickerChip, added && styles.cameraPickerChipActive]}
+                  style={[styles.cameraSelectionCard, added && styles.cameraSelectionCardActive]}
                 >
-                  <Text style={[styles.cameraPickerText, added && styles.cameraPickerTextActive]}>{added ? 'OK ' : '+ '}{camera.name}</Text>
+                  <View style={styles.cameraSelectionThumb}>
+                    {streamPosters[camera.id] ? (
+                      <Image source={{ uri: streamPosters[camera.id] ?? undefined }} style={styles.cameraSelectionImage} />
+                    ) : (
+                      <SvgIcon name="camera" size={22} color="#94a3b8" />
+                    )}
+                    <View style={[styles.cameraSelectionCheck, added && styles.cameraSelectionCheckActive]}>
+                      <Text style={[styles.cameraSelectionCheckText, added && styles.cameraSelectionCheckTextActive]}>{added ? 'OK' : '+'}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.cameraSelectionName} numberOfLines={1}>{camera.name}</Text>
                 </Pressable>
               );
             })}
-          </ScrollView>
+          </View>
         </View>
       ) : null}
 
+      <View style={styles.mosaicSectionHeader}>
+        <Text style={styles.mosaicSectionTitle}>{isAreaMode ? `Mosaico: ${selectedArea?.name}` : 'Todas as câmeras'}</Text>
+        <Text style={styles.mosaicSectionCount}>{mosaicCameras.length} câmeras</Text>
+      </View>
       <View style={styles.mosaicGrid}>
         {mosaicCameras.map((camera) => (
           <Pressable
@@ -143,8 +148,8 @@ export function GridScreen({
       </View>
       {selectedArea && !mosaicCameras.length ? (
         <View style={styles.emptyCard}>
-          <Text style={styles.emptyTitle}>Área vazia</Text>
-          <Text style={styles.emptyText}>Toque nos chips acima para adicionar câmeras ao mosaico desta área.</Text>
+          <Text style={styles.emptyTitle}>Escolha as câmeras</Text>
+          <Text style={styles.emptyText}>Toque nas câmeras acima. As escolhidas aparecem aqui no mosaico.</Text>
         </View>
       ) : null}
     </View>

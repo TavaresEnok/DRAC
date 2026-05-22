@@ -60,7 +60,7 @@ export function DashboardScreen({ cameras, groupedCameras, streamPosters, previe
                       <Text style={styles.cameraName}>{camera.name}</Text>
                       <Text style={styles.cameraMeta}>{formatResolution(camera)}</Text>
                     </View>
-                    <View style={styles.cardPlayButton}><SvgIcon name="play" size={18} color="#02130f" /></View>
+                    <View style={styles.cardPlayButton}><SvgIcon name="play" size={18} color="#ffffff" /></View>
                   </View>
                 </View>
               </View>

@@ -47,14 +47,14 @@ export function LiveScreen({
       <View style={styles.cameraStage}>
         <View style={styles.cameraDetailHeader}>
           <Pressable onPress={onBack} style={styles.headerIconButton}>
-            <SvgIcon name="chevronLeft" size={28} color="#cbd5e1" />
+            <SvgIcon name="chevronLeft" size={28} color="#374151" />
           </Pressable>
           <View>
             <Text style={styles.cameraDetailTitle}>{selectedCamera.name}</Text>
             <Text style={styles.cameraDetailSubtitle}>{isOnline(selectedCamera) ? 'Conectado' : 'Offline'}</Text>
           </View>
           <View style={[styles.headerIconButton, styles.disabled]}>
-            <SvgIcon name="settings" size={23} color="#64748b" />
+            <SvgIcon name="settings" size={23} color="#6b7280" />
           </View>
         </View>
 
@@ -72,43 +72,57 @@ export function LiveScreen({
             <Text style={styles.liveNowText}>AO VIVO</Text>
             <Text style={styles.videoProtocol}>HLS</Text>
           </View>
+          <View style={styles.liveVideoSideActions}>
+            <Pressable disabled={!selectedCamera.canRecord} onPress={() => onStartRecording(selectedCamera)} style={[styles.liveVideoRoundAction, !selectedCamera.canRecord && styles.disabled]}>
+              <SvgIcon name="video" size={18} color="#ffffff" />
+            </Pressable>
+            <Pressable disabled={!selectedCamera.canControl} onPress={onTogglePtz} style={[styles.liveVideoRoundAction, showPtz && styles.liveVideoRoundActionActive, !selectedCamera.canControl && styles.disabled]}>
+              <SvgIcon name="move" size={18} color="#ffffff" />
+            </Pressable>
+          </View>
+          <View style={styles.liveVideoBottomControls}>
+            <Text style={styles.liveSpeedText}>1.0X</Text>
+            <SvgIcon name="video" size={20} color="#ffffff" />
+          </View>
+          {showPtz ? (
+            <View style={styles.ptzVideoOverlay}>
+              <Pressable onPress={onTogglePtz} style={styles.ptzOverlayClose}>
+                <Text style={styles.ptzOverlayCloseText}>X</Text>
+              </Pressable>
+              <Text style={styles.ptzOverlayTitle}>Controle PTZ</Text>
+              {ptzFeedback ? <Text style={styles.ptzOverlayFeedback}>Enviado: {ptzFeedback}</Text> : null}
+              <View style={styles.ptzOverlayDpad}>
+                <PtzButton label="⌃" direction="Up" disabled={!selectedCamera.canControl} active={ptzActive === 'Up'} onPress={onSendPtz} style={styles.ptzOverlayUp} buttonStyle={styles.ptzOverlayButton} activeButtonStyle={styles.ptzOverlayButtonActive} disabledStyle={styles.disabled} textStyle={styles.ptzOverlayButtonText} activeTextStyle={styles.ptzOverlayButtonTextActive} />
+                <PtzButton label="⌄" direction="Down" disabled={!selectedCamera.canControl} active={ptzActive === 'Down'} onPress={onSendPtz} style={styles.ptzOverlayDown} buttonStyle={styles.ptzOverlayButton} activeButtonStyle={styles.ptzOverlayButtonActive} disabledStyle={styles.disabled} textStyle={styles.ptzOverlayButtonText} activeTextStyle={styles.ptzOverlayButtonTextActive} />
+                <PtzButton label="‹" direction="Left" disabled={!selectedCamera.canControl} active={ptzActive === 'Left'} onPress={onSendPtz} style={styles.ptzOverlayLeft} buttonStyle={styles.ptzOverlayButton} activeButtonStyle={styles.ptzOverlayButtonActive} disabledStyle={styles.disabled} textStyle={styles.ptzOverlayButtonText} activeTextStyle={styles.ptzOverlayButtonTextActive} />
+                <PtzButton label="›" direction="Right" disabled={!selectedCamera.canControl} active={ptzActive === 'Right'} onPress={onSendPtz} style={styles.ptzOverlayRight} buttonStyle={styles.ptzOverlayButton} activeButtonStyle={styles.ptzOverlayButtonActive} disabledStyle={styles.disabled} textStyle={styles.ptzOverlayButtonText} activeTextStyle={styles.ptzOverlayButtonTextActive} />
+                <View style={styles.ptzOverlayNub}><View style={styles.ptzOverlayNubInner} /></View>
+              </View>
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.quickActionsGrid}>
           <Pressable disabled style={[styles.quickActionButton, styles.disabled]}>
-            <View style={styles.quickActionIcon}><SvgIcon name="mic" color="#cbd5e1" /></View>
+            <View style={styles.quickActionIcon}><SvgIcon name="mic" color="#4b5563" /></View>
             <Text style={styles.quickActionLabel}>Falar</Text>
             <Text style={styles.quickActionSoon}>Em breve</Text>
           </Pressable>
           <Pressable disabled style={[styles.quickActionButton, styles.disabled]}>
-            <View style={styles.quickActionIcon}><SvgIcon name="camera" color="#cbd5e1" /></View>
+            <View style={styles.quickActionIcon}><SvgIcon name="camera" color="#4b5563" /></View>
             <Text style={styles.quickActionLabel}>Foto</Text>
             <Text style={styles.quickActionSoon}>Em breve</Text>
           </Pressable>
           <Pressable disabled={!selectedCamera.canRecord} onPress={() => onStartRecording(selectedCamera)} style={[styles.quickActionButton, !selectedCamera.canRecord && styles.disabled]}>
-            <View style={styles.quickActionIcon}><SvgIcon name="video" color="#cbd5e1" /></View>
+            <View style={styles.quickActionIcon}><SvgIcon name="video" color="#4b5563" /></View>
             <Text style={styles.quickActionLabel}>Gravar</Text>
           </Pressable>
           <Pressable disabled={!selectedCamera.canControl} onPress={onTogglePtz} style={[styles.quickActionButton, !selectedCamera.canControl && styles.disabled]}>
-            <View style={[styles.quickActionIcon, showPtz && styles.quickActionIconActive]}><SvgIcon name="move" color={showPtz ? '#020617' : '#cbd5e1'} /></View>
+            <View style={[styles.quickActionIcon, showPtz && styles.quickActionIconActive]}><SvgIcon name="move" color={showPtz ? '#ffffff' : '#4b5563'} /></View>
             <Text style={styles.quickActionLabel}>PTZ</Text>
           </Pressable>
         </View>
 
-        {showPtz ? (
-          <View style={styles.ptzCardPremium}>
-            {ptzFeedback ? <Text style={styles.ptzFeedback}>Enviado: {ptzFeedback}</Text> : null}
-            <View style={styles.ptzConsole}>
-              <View style={styles.ptzDpad}>
-                <PtzButton label="⌃" direction="Up" disabled={!selectedCamera.canControl} active={ptzActive === 'Up'} onPress={onSendPtz} style={styles.ptzUp} buttonStyle={styles.ptzRoundButton} activeButtonStyle={styles.ptzRoundButtonActive} disabledStyle={styles.disabled} textStyle={styles.ptzRoundText} activeTextStyle={styles.ptzRoundTextActive} />
-                <PtzButton label="⌄" direction="Down" disabled={!selectedCamera.canControl} active={ptzActive === 'Down'} onPress={onSendPtz} style={styles.ptzDown} buttonStyle={styles.ptzRoundButton} activeButtonStyle={styles.ptzRoundButtonActive} disabledStyle={styles.disabled} textStyle={styles.ptzRoundText} activeTextStyle={styles.ptzRoundTextActive} />
-                <PtzButton label="‹" direction="Left" disabled={!selectedCamera.canControl} active={ptzActive === 'Left'} onPress={onSendPtz} style={styles.ptzLeft} buttonStyle={styles.ptzRoundButton} activeButtonStyle={styles.ptzRoundButtonActive} disabledStyle={styles.disabled} textStyle={styles.ptzRoundText} activeTextStyle={styles.ptzRoundTextActive} />
-                <PtzButton label="›" direction="Right" disabled={!selectedCamera.canControl} active={ptzActive === 'Right'} onPress={onSendPtz} style={styles.ptzRight} buttonStyle={styles.ptzRoundButton} activeButtonStyle={styles.ptzRoundButtonActive} disabledStyle={styles.disabled} textStyle={styles.ptzRoundText} activeTextStyle={styles.ptzRoundTextActive} />
-                <View style={styles.ptzNub}><View style={styles.ptzNubInner} /></View>
-              </View>
-            </View>
-          </View>
-        ) : null}
       </View>
     </View>
   );
