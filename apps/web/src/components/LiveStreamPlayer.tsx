@@ -19,9 +19,17 @@ const API_URL = getApiBaseUrl();
 const FLV_FIRST_FRAME_TIMEOUT_MS = 2500;
 const HLS_FIRST_FRAME_TIMEOUT_MS = 3500;
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 3500;
+const LIVE_RESUME_GRACE_MS = 1200;
+const LIVE_EDGE_OFFSET_SECONDS = 0.35;
 const LIVE_PROTOCOL_STORAGE_PREFIX = 'drac-live-protocol';
 type ActiveLiveProtocol = 'WEBRTC' | 'FLV' | 'HLS';
 type LiveProtocol = 'flv' | 'hls' | 'webrtc' | 'mjpeg';
+type HlsController = {
+  destroy: () => void;
+  startLoad?: (startPosition?: number) => void;
+  recoverMediaError?: () => void;
+  liveSyncPosition?: number | null;
+};
 
 function normalizeCodec(codec?: string | null) {
   return String(codec ?? '').trim().toLowerCase();
@@ -80,6 +88,24 @@ function buildProtocolOrder(cameraId: string, preferred: LiveProtocol | null | u
   return order;
 }
 
+function seekVideoToLiveEdge(element: HTMLVideoElement) {
+  const ranges = element.seekable;
+  if (!ranges.length) return false;
+
+  const liveEdge = ranges.end(ranges.length - 1);
+  if (!Number.isFinite(liveEdge) || liveEdge <= 0) return false;
+
+  const target = Math.max(ranges.start(ranges.length - 1), liveEdge - LIVE_EDGE_OFFSET_SECONDS);
+  const drift = liveEdge - element.currentTime;
+
+  if (Number.isFinite(drift) && drift > LIVE_EDGE_OFFSET_SECONDS) {
+    element.currentTime = target;
+    return true;
+  }
+
+  return false;
+}
+
 export function LiveStreamPlayer({
   cameraId,
   cameraName,
@@ -92,13 +118,15 @@ export function LiveStreamPlayer({
   const accessToken = useAuthStore((state) => state.accessToken);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<mpegts.Player | null>(null);
-  const hlsRef = useRef<{ destroy: () => void } | null>(null);
+  const hlsRef = useRef<HlsController | null>(null);
   const webrtcPcRef = useRef<RTCPeerConnection | null>(null);
   const webrtcSessionUrlRef = useRef<string | null>(null);
   const webrtcStreamRef = useRef<MediaStream | null>(null);
   const hasFrameRef = useRef(false);
   const retryTimerRef = useRef<number | null>(null);
   const retryAttemptRef = useRef(0);
+  const activeProtocolRef = useRef<ActiveLiveProtocol | null>(null);
+  const hiddenAtRef = useRef<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(muted);
@@ -132,6 +160,7 @@ export function LiveStreamPlayer({
       setRetryMessage(null);
       setError(null);
       setActiveProtocol(protocol);
+      activeProtocolRef.current = protocol;
       setIsLoading(false);
       setHasLiveFrame(true);
       storeProtocol(cameraId, protocol);
@@ -145,6 +174,7 @@ export function LiveStreamPlayer({
       retryAttemptRef.current = attempt + 1;
       setError(null);
       setActiveProtocol(null);
+      activeProtocolRef.current = null;
       setRetryMessage(`${message} Reconectando automaticamente...`);
       setIsLoading(true);
       setHasLiveFrame(false);
@@ -158,6 +188,7 @@ export function LiveStreamPlayer({
       setIsLoading(true);
       setError(null);
       setActiveProtocol(null);
+      activeProtocolRef.current = null;
       setHasLiveFrame(false);
       setPosterUrl(null);
       hasFrameRef.current = false;
@@ -585,6 +616,77 @@ export function LiveStreamPlayer({
       element.load();
     };
   }, [accessToken, autoPlay, cameraId, startDelayMs, tokenHeaders, reloadNonce]);
+
+  useEffect(() => {
+    const resumeAtLiveEdge = () => {
+      const element = videoRef.current;
+      if (!element || !hasFrameRef.current) return;
+
+      const hiddenForMs = hiddenAtRef.current == null ? 0 : Date.now() - hiddenAtRef.current;
+      hiddenAtRef.current = null;
+      if (hiddenForMs > 0 && hiddenForMs < LIVE_RESUME_GRACE_MS) return;
+
+      const protocol = activeProtocolRef.current;
+
+      if (protocol === 'HLS') {
+        try {
+          hlsRef.current?.startLoad?.(-1);
+          const liveSyncPosition = hlsRef.current?.liveSyncPosition;
+          if (typeof liveSyncPosition === 'number' && Number.isFinite(liveSyncPosition)) {
+            element.currentTime = Math.max(0, liveSyncPosition - LIVE_EDGE_OFFSET_SECONDS);
+          } else {
+            seekVideoToLiveEdge(element);
+          }
+        } catch {
+          setReloadNonce((value) => value + 1);
+          return;
+        }
+      } else if (protocol === 'FLV') {
+        const didSeek = seekVideoToLiveEdge(element);
+        try {
+          void playerRef.current?.play();
+        } catch {
+        }
+        if (!didSeek && hiddenForMs > LIVE_RESUME_GRACE_MS) {
+          setReloadNonce((value) => value + 1);
+          return;
+        }
+      }
+
+      if (autoPlay) {
+        void element.play().catch(() => {
+          if (protocol !== 'WEBRTC') {
+            setReloadNonce((value) => value + 1);
+          }
+        });
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        hiddenAtRef.current = Date.now();
+        return;
+      }
+      resumeAtLiveEdge();
+    };
+
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        setReloadNonce((value) => value + 1);
+        return;
+      }
+      resumeAtLiveEdge();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', resumeAtLiveEdge);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', resumeAtLiveEdge);
+      window.removeEventListener('pageshow', onPageShow);
+    };
+  }, [autoPlay]);
 
   return (
     <div className={`relative overflow-hidden bg-black ${className ?? ''}`}>
