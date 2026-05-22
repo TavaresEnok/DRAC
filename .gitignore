@@ -34,3 +34,6 @@ infra/storage/
 .android-sdk/
 infra/backups/
 concorrente/
+
+# Local planning/audit notes
+*.md
