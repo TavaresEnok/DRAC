@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import mpegts from 'mpegts.js';
 import axios from 'axios';
 import { AlertTriangle, LoaderCircle, VideoOff, Volume2, VolumeX } from 'lucide-react';
@@ -20,6 +20,11 @@ const FLV_FIRST_FRAME_TIMEOUT_MS = 2500;
 const HLS_FIRST_FRAME_TIMEOUT_MS = 3500;
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 3500;
 const LIVE_RESUME_GRACE_MS = 1200;
+const LIVE_FORCE_RECONNECT_AFTER_MS = 5000;
+const LIVE_STALL_CHECK_INTERVAL_MS = 4000;
+const LIVE_STALL_SOFT_RECOVER_MS = 8000;
+const LIVE_STALL_RECONNECT_MS = 16000;
+const LIVE_RECONNECT_DEBOUNCE_MS = 1200;
 const LIVE_EDGE_OFFSET_SECONDS = 0.35;
 const LIVE_PROTOCOL_STORAGE_PREFIX = 'drac-live-protocol';
 type ActiveLiveProtocol = 'WEBRTC' | 'FLV' | 'HLS';
@@ -29,6 +34,11 @@ type HlsController = {
   startLoad?: (startPosition?: number) => void;
   recoverMediaError?: () => void;
   liveSyncPosition?: number | null;
+};
+
+type PlaybackProgress = {
+  wallTime: number;
+  mediaTime: number;
 };
 
 function normalizeCodec(codec?: string | null) {
@@ -106,6 +116,13 @@ function seekVideoToLiveEdge(element: HTMLVideoElement) {
   return false;
 }
 
+function getPlaybackProgress(element: HTMLVideoElement): PlaybackProgress {
+  return {
+    wallTime: Date.now(),
+    mediaTime: Number.isFinite(element.currentTime) ? element.currentTime : 0,
+  };
+}
+
 export function LiveStreamPlayer({
   cameraId,
   cameraName,
@@ -127,6 +144,8 @@ export function LiveStreamPlayer({
   const retryAttemptRef = useRef(0);
   const activeProtocolRef = useRef<ActiveLiveProtocol | null>(null);
   const hiddenAtRef = useRef<number | null>(null);
+  const liveReloadAtRef = useRef(0);
+  const lastProgressRef = useRef<PlaybackProgress>({ wallTime: Date.now(), mediaTime: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(muted);
@@ -140,6 +159,21 @@ export function LiveStreamPlayer({
     () => (accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined),
     [accessToken],
   );
+
+  const requestFreshLiveBoot = useCallback((message = 'Atualizando transmissão ao vivo...') => {
+    const now = Date.now();
+    if (now - liveReloadAtRef.current < LIVE_RECONNECT_DEBOUNCE_MS) return;
+
+    liveReloadAtRef.current = now;
+    setRetryMessage(message);
+    setError(null);
+    setActiveProtocol(null);
+    activeProtocolRef.current = null;
+    hasFrameRef.current = false;
+    setIsLoading(true);
+    setHasLiveFrame(false);
+    setReloadNonce((value) => value + 1);
+  }, []);
 
   useEffect(() => {
     const element = videoRef.current;
@@ -161,6 +195,7 @@ export function LiveStreamPlayer({
       setError(null);
       setActiveProtocol(protocol);
       activeProtocolRef.current = protocol;
+      lastProgressRef.current = getPlaybackProgress(element);
       setIsLoading(false);
       setHasLiveFrame(true);
       storeProtocol(cameraId, protocol);
@@ -618,13 +653,30 @@ export function LiveStreamPlayer({
   }, [accessToken, autoPlay, cameraId, startDelayMs, tokenHeaders, reloadNonce]);
 
   useEffect(() => {
-    const resumeAtLiveEdge = () => {
+    const element = videoRef.current;
+    if (!element) return;
+
+    const markProgress = () => {
+      if (element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+      lastProgressRef.current = getPlaybackProgress(element);
+    };
+
+    element.addEventListener('timeupdate', markProgress);
+    element.addEventListener('playing', markProgress);
+    element.addEventListener('loadeddata', markProgress);
+    element.addEventListener('canplay', markProgress);
+    return () => {
+      element.removeEventListener('timeupdate', markProgress);
+      element.removeEventListener('playing', markProgress);
+      element.removeEventListener('loadeddata', markProgress);
+      element.removeEventListener('canplay', markProgress);
+    };
+  }, []);
+
+  useEffect(() => {
+    const softResumeAtLiveEdge = () => {
       const element = videoRef.current;
       if (!element || !hasFrameRef.current) return;
-
-      const hiddenForMs = hiddenAtRef.current == null ? 0 : Date.now() - hiddenAtRef.current;
-      hiddenAtRef.current = null;
-      if (hiddenForMs > 0 && hiddenForMs < LIVE_RESUME_GRACE_MS) return;
 
       const protocol = activeProtocolRef.current;
 
@@ -638,55 +690,136 @@ export function LiveStreamPlayer({
             seekVideoToLiveEdge(element);
           }
         } catch {
-          setReloadNonce((value) => value + 1);
-          return;
+          try {
+            hlsRef.current?.recoverMediaError?.();
+            hlsRef.current?.startLoad?.(-1);
+          } catch {
+          }
         }
       } else if (protocol === 'FLV') {
-        const didSeek = seekVideoToLiveEdge(element);
+        seekVideoToLiveEdge(element);
         try {
           void playerRef.current?.play();
         } catch {
         }
-        if (!didSeek && hiddenForMs > LIVE_RESUME_GRACE_MS) {
-          setReloadNonce((value) => value + 1);
-          return;
-        }
       }
 
       if (autoPlay) {
-        void element.play().catch(() => {
-          if (protocol !== 'WEBRTC') {
-            setReloadNonce((value) => value + 1);
-          }
-        });
+        void element.play().catch(() => {});
       }
+    };
+
+    const markHidden = () => {
+      if (hiddenAtRef.current == null) {
+        hiddenAtRef.current = Date.now();
+      }
+    };
+
+    const resumeFromBrowserLifecycle = (forceReconnect = false) => {
+      const hiddenForMs = hiddenAtRef.current == null ? 0 : Date.now() - hiddenAtRef.current;
+      hiddenAtRef.current = null;
+
+      if (forceReconnect || hiddenForMs >= LIVE_FORCE_RECONNECT_AFTER_MS) {
+        requestFreshLiveBoot('Retomando câmera em tempo real...');
+        return;
+      }
+
+      if (hiddenForMs > 0 && hiddenForMs < LIVE_RESUME_GRACE_MS) return;
+      softResumeAtLiveEdge();
     };
 
     const onVisibilityChange = () => {
       if (document.hidden) {
-        hiddenAtRef.current = Date.now();
+        markHidden();
         return;
       }
-      resumeAtLiveEdge();
+      resumeFromBrowserLifecycle();
     };
 
-    const onPageShow = (event: PageTransitionEvent) => {
-      if (event.persisted) {
-        setReloadNonce((value) => value + 1);
-        return;
-      }
-      resumeAtLiveEdge();
-    };
+    const onFocus = () => resumeFromBrowserLifecycle();
+    const onPageShow = (event: PageTransitionEvent) => resumeFromBrowserLifecycle(event.persisted);
+    const onPageHide = () => markHidden();
+    const onFreeze = () => markHidden();
+    const onResume = () => resumeFromBrowserLifecycle(true);
 
     document.addEventListener('visibilitychange', onVisibilityChange);
-    window.addEventListener('focus', resumeAtLiveEdge);
+    document.addEventListener('freeze', onFreeze);
+    document.addEventListener('resume', onResume);
+    window.addEventListener('blur', markHidden);
+    window.addEventListener('focus', onFocus);
     window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('pagehide', onPageHide);
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
-      window.removeEventListener('focus', resumeAtLiveEdge);
+      document.removeEventListener('freeze', onFreeze);
+      document.removeEventListener('resume', onResume);
+      window.removeEventListener('blur', markHidden);
+      window.removeEventListener('focus', onFocus);
       window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('pagehide', onPageHide);
     };
-  }, [autoPlay]);
+  }, [autoPlay, requestFreshLiveBoot]);
+
+  useEffect(() => {
+    const softRecoverStalledPlayer = () => {
+      const element = videoRef.current;
+      if (!element) return;
+
+      const protocol = activeProtocolRef.current;
+      if (protocol === 'HLS') {
+        try {
+          hlsRef.current?.startLoad?.(-1);
+          seekVideoToLiveEdge(element);
+        } catch {
+          try {
+            hlsRef.current?.recoverMediaError?.();
+          } catch {
+          }
+        }
+      } else if (protocol === 'FLV') {
+        seekVideoToLiveEdge(element);
+        try {
+          void playerRef.current?.play();
+        } catch {
+        }
+      }
+
+      if (autoPlay) {
+        void element.play().catch(() => {});
+      }
+    };
+
+    const interval = window.setInterval(() => {
+      if (document.hidden || isLoading || error || !hasFrameRef.current) return;
+
+      const element = videoRef.current;
+      if (!element) return;
+
+      if (autoPlay && element.paused) {
+        void element.play().catch(() => {});
+      }
+
+      const now = Date.now();
+      const currentMediaTime = Number.isFinite(element.currentTime) ? element.currentTime : 0;
+      const lastProgress = lastProgressRef.current;
+      if (Math.abs(currentMediaTime - lastProgress.mediaTime) > 0.05) {
+        lastProgressRef.current = { wallTime: now, mediaTime: currentMediaTime };
+        return;
+      }
+
+      const stalledForMs = now - lastProgress.wallTime;
+      if (stalledForMs >= LIVE_STALL_RECONNECT_MS) {
+        requestFreshLiveBoot('Transmissão parada. Recarregando ao vivo...');
+        return;
+      }
+
+      if (stalledForMs >= LIVE_STALL_SOFT_RECOVER_MS) {
+        softRecoverStalledPlayer();
+      }
+    }, LIVE_STALL_CHECK_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [autoPlay, error, isLoading, requestFreshLiveBoot]);
 
   return (
     <div className={`relative overflow-hidden bg-black ${className ?? ''}`}>
