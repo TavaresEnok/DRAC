@@ -21,7 +21,7 @@ import { LiveVideo, PlaybackVideo } from './src/components/VideoPlayers';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { request, normalizeServerUrl } from './src/services/api';
 import { cleanApiUrl, clearStoredSession, loadStoredSession, saveStoredSession } from './src/services/sessionStore';
-import type { ActivePlayback, Camera, Direction, Recording, RelayDiscovery, Session, StreamUrls, Tab, User } from './src/types';
+import type { ActivePlayback, Camera, Direction, Recording, Session, StreamUrls, Tab, User } from './src/types';
 import { formatBytes, formatDuration, formatResolution, formatTime, isOnline } from './src/utils/format';
 
 export default function App() {
@@ -38,11 +38,11 @@ export default function App() {
   const [streamPosters, setStreamPosters] = useState<Record<string, string | null>>({});
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [activePlayback, setActivePlayback] = useState<ActivePlayback | null>(null);
-  const [relays, setRelays] = useState<Record<string, RelayDiscovery>>({});
   const [ptzActive, setPtzActive] = useState<Direction | null>(null);
   const [ptzFeedback, setPtzFeedback] = useState<string | null>(null);
   const [showPtz, setShowPtz] = useState(true);
   const [selectedMosaicGroup, setSelectedMosaicGroup] = useState<string>('Todas');
+  const previewLimit = 8;
   const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) ?? cameras[0] ?? null;
 
   const groupedCameras = useMemo(() => {
@@ -80,7 +80,6 @@ export default function App() {
     if (selectedCamera && session) {
       void loadStream(selectedCamera.id);
       void loadRecordings(selectedCamera.id);
-      void loadRelaySupport(selectedCamera.id);
     }
   }, [selectedCamera?.id, session?.token]);
 
@@ -88,7 +87,7 @@ export default function App() {
     setLoading(true);
     try {
       const nextApiUrl = cleanApiUrl(apiUrl);
-      if (!nextApiUrl) throw new Error('Informe a URL da API nas configuracoes do app.');
+      if (!nextApiUrl) throw new Error('Informe a URL da API nas configurações do app.');
       const data = await request<{ accessToken: string; user: User }>(nextApiUrl, '/auth/login', undefined, {
         method: 'POST',
         body: JSON.stringify({ email, password }),
@@ -98,7 +97,7 @@ export default function App() {
       setSession(nextSession);
       setPassword('');
     } catch (error) {
-      Alert.alert('Falha no login', error instanceof Error ? error.message : 'Nao foi possivel entrar.');
+      Alert.alert('Falha no login', error instanceof Error ? error.message : 'Não foi possível entrar.');
     } finally {
       setLoading(false);
     }
@@ -119,9 +118,9 @@ export default function App() {
       const data = await request<Camera[]>(session.apiUrl, '/cameras', session.token);
       setCameras(data);
       setSelectedCameraId((current) => current ?? data[0]?.id ?? null);
-      void Promise.all(data.slice(0, 8).map((camera) => loadStream(camera.id)));
+      void Promise.all(data.slice(0, previewLimit).map((camera) => loadStream(camera.id)));
     } catch (error) {
-      Alert.alert('Falha ao carregar', error instanceof Error ? error.message : 'Nao foi possivel carregar cameras.');
+      Alert.alert('Falha ao carregar', error instanceof Error ? error.message : 'Não foi possível carregar câmeras.');
     } finally {
       setRefreshing(false);
     }
@@ -141,16 +140,6 @@ export default function App() {
     } catch {
       setStreamUrls((current) => ({ ...current, [cameraId]: null }));
       setStreamPosters((current) => ({ ...current, [cameraId]: null }));
-    }
-  };
-
-  const loadRelaySupport = async (cameraId: string) => {
-    if (!session) return;
-    try {
-      const data = await request<RelayDiscovery>(session.apiUrl, `/ptz/${cameraId}/relays`, session.token);
-      setRelays((current) => ({ ...current, [cameraId]: data }));
-    } catch {
-      setRelays((current) => ({ ...current, [cameraId]: { ok: false, relays: [], relayCount: 0, triggerable: false } }));
     }
   };
 
@@ -183,7 +172,7 @@ export default function App() {
       setTimeout(() => setPtzFeedback(null), 650);
     } catch (error) {
       setPtzFeedback(null);
-      Alert.alert('PTZ', error instanceof Error ? error.message : 'Comando nao aceito.');
+      Alert.alert('PTZ', error instanceof Error ? error.message : 'Comando não aceito.');
     } finally {
       setTimeout(() => setPtzActive(null), 220);
     }
@@ -198,23 +187,7 @@ export default function App() {
       });
       await loadAll();
     } catch (error) {
-      Alert.alert('Gravacao', error instanceof Error ? error.message : 'Nao foi possivel alterar a gravacao.');
-    }
-  };
-
-  const triggerRelay = async () => {
-    if (!session || !selectedCamera) return;
-    const discovery = relays[selectedCamera.id];
-    const token = discovery?.relays?.[0]?.token;
-    if (!discovery?.triggerable || !token) return;
-    try {
-      await request(session.apiUrl, `/ptz/${selectedCamera.id}/relays/trigger`, session.token, {
-        method: 'POST',
-        body: JSON.stringify({ token, durationMs: 1500 }),
-      });
-      Alert.alert('Alarme', 'Pulso enviado para a camera.');
-    } catch (error) {
-      Alert.alert('Alarme', error instanceof Error ? error.message : 'Nao foi possivel acionar.');
+      Alert.alert('Gravação', error instanceof Error ? error.message : 'Não foi possível alterar a gravação.');
     }
   };
 
@@ -223,10 +196,10 @@ export default function App() {
     try {
       const data = await request<{ playToken: string }>(session.apiUrl, `/recordings/${recording.id}/play-token`, session.token, { method: 'POST' });
       const url = normalizeServerUrl(`${session.apiUrl}/recordings/${recording.id}/play?token=${encodeURIComponent(data.playToken)}&compatible=1`, session.apiUrl);
-      if (!url) throw new Error('URL de playback indisponivel.');
+      if (!url) throw new Error('URL de playback indisponível.');
       setActivePlayback({ recording, url });
     } catch (error) {
-      Alert.alert('Playback', error instanceof Error ? error.message : 'Nao foi possivel abrir a gravacao.');
+      Alert.alert('Playback', error instanceof Error ? error.message : 'Não foi possível abrir a gravação.');
     }
   };
 
@@ -235,17 +208,17 @@ export default function App() {
     try {
       const target = `${FileSystem.documentDirectory}${recording.id}.mp4`;
       const url = normalizeServerUrl(`${session.apiUrl}/recordings/${recording.id}/download`, session.apiUrl);
-      if (!url) throw new Error('URL de download indisponivel.');
+      if (!url) throw new Error('URL de download indisponível.');
       const result = await FileSystem.downloadAsync(url, target, {
         headers: { Authorization: `Bearer ${session.token}` },
       });
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(result.uri, { mimeType: 'video/mp4', dialogTitle: 'Compartilhar gravacao' });
+        await Sharing.shareAsync(result.uri, { mimeType: 'video/mp4', dialogTitle: 'Compartilhar gravação' });
       } else {
         Alert.alert('Download concluido', result.uri);
       }
     } catch (error) {
-      Alert.alert('Download', error instanceof Error ? error.message : 'Nao foi possivel baixar.');
+      Alert.alert('Download', error instanceof Error ? error.message : 'Não foi possível baixar.');
     }
   };
 
@@ -272,8 +245,13 @@ export default function App() {
           <View style={styles.page}>
             <View style={styles.dashboardHeader}>
               <View>
-                <Text style={styles.dashboardTitle}>Cameras</Text>
+                <Text style={styles.dashboardTitle}>Câmeras</Text>
                 <Text style={styles.dashboardSubtitle}>Acesso filtrado pelo seu grupo</Text>
+                {cameras.length > previewLimit ? (
+                  <Text style={styles.previewLimitHint}>
+                    Pré-visualização carregada para as primeiras {previewLimit} câmeras.
+                  </Text>
+                ) : null}
               </View>
             </View>
 
@@ -281,7 +259,7 @@ export default function App() {
               <View key={groupName} style={styles.groupBlock}>
                 <View style={styles.groupHeader}>
                   <Text style={styles.groupTitle}>{groupName}</Text>
-                  <Text style={styles.groupCount}>{items.length} cameras</Text>
+                  <Text style={styles.groupCount}>{items.length} câmeras</Text>
                 </View>
                 {items.map((camera) => (
                   <Pressable
@@ -331,9 +309,9 @@ export default function App() {
                     <Text style={styles.cameraDetailTitle}>{selectedCamera.name}</Text>
                     <Text style={styles.cameraDetailSubtitle}>{isOnline(selectedCamera) ? 'Conectado' : 'Offline'}</Text>
                   </View>
-                  <Pressable style={styles.headerIconButton}>
-                    <SvgIcon name="settings" size={23} color="#cbd5e1" />
-                  </Pressable>
+                  <View style={[styles.headerIconButton, styles.disabled]}>
+                    <SvgIcon name="settings" size={23} color="#64748b" />
+                  </View>
                 </View>
 
                 <View style={styles.singleVideoCard}>
@@ -353,13 +331,15 @@ export default function App() {
                 </View>
 
                 <View style={styles.quickActionsGrid}>
-                  <Pressable style={styles.quickActionButton}>
+                  <Pressable disabled style={[styles.quickActionButton, styles.disabled]}>
                     <View style={styles.quickActionIcon}><SvgIcon name="mic" color="#cbd5e1" /></View>
                     <Text style={styles.quickActionLabel}>Falar</Text>
+                    <Text style={styles.quickActionSoon}>Em breve</Text>
                   </Pressable>
-                  <Pressable style={styles.quickActionButton}>
+                  <Pressable disabled style={[styles.quickActionButton, styles.disabled]}>
                     <View style={styles.quickActionIcon}><SvgIcon name="camera" color="#cbd5e1" /></View>
                     <Text style={styles.quickActionLabel}>Foto</Text>
+                    <Text style={styles.quickActionSoon}>Em breve</Text>
                   </Pressable>
                   <Pressable disabled={!selectedCamera.canRecord} onPress={() => toggleRecording(selectedCamera, true)} style={[styles.quickActionButton, !selectedCamera.canRecord && styles.disabled]}>
                     <View style={styles.quickActionIcon}><SvgIcon name="video" color="#cbd5e1" /></View>
@@ -388,8 +368,8 @@ export default function App() {
               </View>
             ) : (
               <View style={styles.emptyCard}>
-                <Text style={styles.emptyTitle}>Selecione uma camera</Text>
-                <Text style={styles.emptyText}>Volte em Cameras e toque em uma camera para abrir o ao vivo.</Text>
+                <Text style={styles.emptyTitle}>Selecione uma câmera</Text>
+                <Text style={styles.emptyText}>Volte em Câmeras e toque em uma câmera para abrir o ao vivo.</Text>
               </View>
             )}
           </View>
@@ -399,8 +379,9 @@ export default function App() {
           <View style={styles.page}>
             <View style={styles.mosaicHeader}>
               <Text style={styles.mosaicTitle}>Mosaico</Text>
-              <Pressable style={styles.editLayoutButton}>
+              <Pressable disabled style={[styles.editLayoutButton, styles.disabled]}>
                 <Text style={styles.editLayoutText}>Editar Layout</Text>
+                <Text style={styles.editLayoutSoon}>Em breve</Text>
               </Pressable>
             </View>
 
@@ -440,8 +421,8 @@ export default function App() {
         {tab === 'playback' && (
           <View style={styles.page}>
             <View>
-              <Text style={styles.recordingsTitle}>Gravacoes</Text>
-              <Text style={styles.recordingsSubtitle}>Selecione uma camera para ver os arquivos salvos e historico.</Text>
+              <Text style={styles.recordingsTitle}>Gravações</Text>
+              <Text style={styles.recordingsSubtitle}>Selecione uma câmera para ver os arquivos salvos e histórico.</Text>
             </View>
 
             <View style={styles.recordingCameraList}>
@@ -464,7 +445,7 @@ export default function App() {
                     <Text style={styles.recordingCameraMeta}>{camera.group?.name ?? 'Sem grupo'}</Text>
                     <View style={styles.recordingCameraHistory}>
                       <SvgIcon name="calendar" size={12} color="#34d399" />
-                      <Text style={styles.recordingCameraHistoryText}>Ver Historico</Text>
+                      <Text style={styles.recordingCameraHistoryText}>Ver Histórico</Text>
                     </View>
                   </View>
                   <View style={styles.recordingCameraArrow}><Text style={styles.recordingCameraArrowText}>›</Text></View>
@@ -488,7 +469,7 @@ export default function App() {
                 <PlaybackVideo uri={activePlayback.url} style={styles.playbackVideo} />
                 <View style={styles.rowButtons}>
                   <Pressable onPress={() => downloadRecording(activePlayback.recording)} style={styles.smallButton}>
-                    <Text style={styles.smallButtonText}>Baixar esta gravacao</Text>
+                    <Text style={styles.smallButtonText}>Baixar esta gravação</Text>
                   </Pressable>
                   <Pressable onPress={() => setActivePlayback(null)} style={styles.smallButtonDark}>
                     <Text style={styles.smallButtonDarkText}>Voltar para lista</Text>
@@ -530,8 +511,8 @@ export default function App() {
             </View>
             {!recordings.length ? (
               <View style={styles.emptyCard}>
-                <Text style={styles.emptyTitle}>Sem gravacoes hoje</Text>
-                <Text style={styles.emptyText}>Troque a camera acima ou atualize para buscar novos segmentos.</Text>
+                <Text style={styles.emptyTitle}>Sem gravações hoje</Text>
+                <Text style={styles.emptyText}>Troque a câmera acima ou atualize para buscar novos segmentos.</Text>
               </View>
             ) : null}
           </View>
@@ -550,8 +531,11 @@ export default function App() {
               </View>
             </View>
             <View style={styles.settingsList}>
-              {['Gerenciar Dispositivos', 'Armazenamento em Nuvem', 'Notificacoes', 'Ajuda e Suporte'].map((item) => (
-                <View key={item} style={styles.settingsRow}><Text style={styles.settingsRowText}>{item}</Text></View>
+              {['Gerenciar Dispositivos', 'Armazenamento em Nuvem', 'Notificações', 'Ajuda e Suporte'].map((item) => (
+                <View key={item} style={[styles.settingsRow, styles.settingsRowDisabled]}>
+                  <Text style={styles.settingsRowText}>{item}</Text>
+                  <Text style={styles.settingsSoonText}>Em breve</Text>
+                </View>
               ))}
             </View>
             <Pressable onPress={logout} style={styles.logoutButton}><Text style={styles.logoutText}>Sair do app</Text></Pressable>
@@ -571,6 +555,7 @@ const styles = StyleSheet.create({
   dashboardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   dashboardTitle: { color: '#ffffff', fontSize: 28, fontWeight: '900', letterSpacing: -0.6 },
   dashboardSubtitle: { color: '#94a3b8', fontSize: 14, marginTop: 4, fontWeight: '600' },
+  previewLimitHint: { color: '#64748b', fontSize: 11, lineHeight: 16, marginTop: 6, fontWeight: '700' },
 
 
   groupBlock: { gap: 13, marginTop: 4 },
@@ -621,6 +606,7 @@ const styles = StyleSheet.create({
   quickActionIcon: { width: 56, height: 56, borderRadius: 18, backgroundColor: '#0f172a', borderWidth: 1, borderColor: '#1e293b', alignItems: 'center', justifyContent: 'center' },
   quickActionIconActive: { backgroundColor: '#10b981', borderColor: '#10b981', shadowColor: '#10b981', shadowOpacity: 0.32, shadowRadius: 15, elevation: 7 },
   quickActionLabel: { color: '#94a3b8', fontSize: 12, fontWeight: '700' },
+  quickActionSoon: { color: '#64748b', fontSize: 9, fontWeight: '800', marginTop: -5 },
   ptzCardPremium: { backgroundColor: 'transparent', borderRadius: 0, padding: 0, gap: 18, borderWidth: 0 },
   ptzFeedback: { color: '#02130f', backgroundColor: '#34d399', overflow: 'hidden', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, fontSize: 10, fontWeight: '900' },
   ptzConsole: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 18, backgroundColor: '#0f172a', borderRadius: 32, borderWidth: 1, borderColor: 'rgba(30,41,59,0.9)', paddingVertical: 24, paddingHorizontal: 10, shadowColor: '#000', shadowOpacity: 0.45, shadowRadius: 22, elevation: 8 },
@@ -637,8 +623,9 @@ const styles = StyleSheet.create({
   ptzNubInner: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(51,65,85,0.52)' },
   mosaicHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 2, marginBottom: 4 },
   mosaicTitle: { color: '#ffffff', fontSize: 25, fontWeight: '900' },
-  editLayoutButton: { borderWidth: 1, borderColor: 'rgba(52,211,153,0.24)', backgroundColor: 'rgba(16,185,129,0.10)', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  editLayoutButton: { borderWidth: 1, borderColor: 'rgba(52,211,153,0.24)', backgroundColor: 'rgba(16,185,129,0.10)', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, alignItems: 'center' },
   editLayoutText: { color: '#34d399', fontSize: 13, fontWeight: '800' },
+  editLayoutSoon: { color: '#64748b', fontSize: 9, fontWeight: '800', marginTop: 1 },
   groupFilterRow: { gap: 9, paddingRight: 16, paddingBottom: 2 },
   groupFilterChip: { borderWidth: 1, borderColor: '#1e293b', backgroundColor: '#0f172a', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 },
   groupFilterChipActive: { backgroundColor: '#10b981', borderColor: '#10b981' },
@@ -708,7 +695,9 @@ const styles = StyleSheet.create({
   profileSimplePlan: { color: '#34d399', fontSize: 12, fontWeight: '700', marginTop: 3 },
   settingsList: { gap: 12 },
   settingsRow: { backgroundColor: '#0f172a', borderRadius: 18, borderWidth: 1, borderColor: '#1e293b', padding: 16 },
+  settingsRowDisabled: { opacity: 0.54 },
   settingsRowText: { color: '#cbd5e1', fontSize: 14, fontWeight: '700' },
+  settingsSoonText: { color: '#64748b', fontSize: 11, fontWeight: '800', marginTop: 5 },
   logoutButton: { width: '100%', height: 54, borderRadius: 20, backgroundColor: 'rgba(244,63,94,0.14)', borderWidth: 1, borderColor: 'rgba(244,63,94,0.30)', alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   logoutText: { color: '#fda4af', fontSize: 14, fontWeight: '900' },
 });

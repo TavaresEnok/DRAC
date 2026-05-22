@@ -10,7 +10,7 @@ interface BottomTabsProps {
 
 const tabs: Array<{ id: Tab; label: string; icon: 'home' | 'play' | 'grid' | 'user' }> = [
   { id: 'dashboard', icon: 'home', label: 'Casa' },
-  { id: 'playback', icon: 'play', label: 'Gravacao' },
+  { id: 'playback', icon: 'play', label: 'Gravação' },
   { id: 'grid', icon: 'grid', label: 'Mosaico' },
   { id: 'profile', icon: 'user', label: 'Perfil' },
 ];

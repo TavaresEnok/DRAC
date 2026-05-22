@@ -22,7 +22,7 @@ export function LiveVideo({ uri, posterUri, videoStyle, emptyStyle, posterStyle,
       <View style={[videoStyle, emptyStyle]}>
         {posterUri ? <Image source={{ uri: posterUri }} style={posterStyle} /> : null}
         <Text style={emptyTitleStyle}>Stream indisponivel</Text>
-        <Text style={emptyTextStyle}>Atualize ou abra a camera novamente.</Text>
+        <Text style={emptyTextStyle}>Atualize ou abra a câmera novamente.</Text>
       </View>
     );
   }

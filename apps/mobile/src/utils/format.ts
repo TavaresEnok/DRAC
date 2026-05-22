@@ -21,7 +21,7 @@ export function formatBytes(value?: string | number | null) {
 }
 
 export function formatResolution(camera?: Camera | null) {
-  if (!camera?.detectedWidth || !camera.detectedHeight) return 'Resolucao pendente';
+  if (!camera?.detectedWidth || !camera.detectedHeight) return 'Resolução pendente';
   const fps = camera.detectedFps ? ` @ ${camera.detectedFps} FPS` : '';
   return `${camera.detectedWidth}x${camera.detectedHeight}${fps}`;
 }

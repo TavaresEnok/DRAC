@@ -1,18 +1,33 @@
+const DEFAULT_TIMEOUT_MS = 15_000;
+
 export async function request<T>(apiUrl: string, path: string, token?: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiUrl}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
-  const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
-  if (!response.ok) {
-    throw new Error(data?.message ?? `HTTP ${response.status}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${apiUrl}${path}`, {
+      ...init,
+      signal: init?.signal ?? controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(init?.headers ?? {}),
+      },
+    });
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : null;
+    if (!response.ok) {
+      throw new Error(data?.message ?? `HTTP ${response.status}`);
+    }
+    return data as T;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Tempo esgotado. Verifique a conexão.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return data as T;
 }
 
 export function normalizeServerUrl(value: string | null | undefined, apiUrl: string) {

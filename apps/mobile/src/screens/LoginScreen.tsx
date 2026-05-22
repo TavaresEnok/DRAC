@@ -32,8 +32,8 @@ export function LoginScreen({
             <View style={styles.logoLens} />
           </View>
           <Text style={styles.brand}>Drac</Text>
-          <Text style={styles.title}>Central de cameras no bolso</Text>
-          <Text style={styles.subtitle}>Live, PTZ, playback, alarme e gravacao com acesso filtrado por grupo.</Text>
+          <Text style={styles.title}>Central de câmeras no bolso</Text>
+          <Text style={styles.subtitle}>Live, PTZ, playback, alarme e gravação com acesso filtrado por grupo.</Text>
         </View>
 
         <View style={styles.card}>
@@ -44,7 +44,7 @@ export function LoginScreen({
           <Text style={styles.label}>Senha</Text>
           <TextInput value={password} onChangeText={onPasswordChange} secureTextEntry style={styles.input} placeholder="Sua senha" placeholderTextColor="#8d877b" />
           <Pressable disabled={loading} onPress={onSubmit} style={styles.primaryButton}>
-            {loading ? <ActivityIndicator color="#f7f3ea" /> : <Text style={styles.primaryButtonText}>Entrar com seguranca</Text>}
+            {loading ? <ActivityIndicator color="#f7f3ea" /> : <Text style={styles.primaryButtonText}>Entrar com segurança</Text>}
           </Pressable>
         </View>
       </SafeAreaView>
