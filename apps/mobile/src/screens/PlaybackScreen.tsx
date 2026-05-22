@@ -69,7 +69,7 @@ export function PlaybackScreen({
         <View style={styles.playbackPlayerCard}>
           <View style={styles.playbackHeader}>
             <View>
-              <Text style={styles.playbackTitle}>Reproduzindo no app</Text>
+              <Text style={styles.playbackTitle}>Cloud Replay</Text>
               <Text style={styles.cameraMeta}>
                 {formatTime(activePlayback.recording.startedAt)} - {formatTime(activePlayback.recording.endedAt)}
               </Text>
@@ -78,7 +78,13 @@ export function PlaybackScreen({
               <Text style={styles.closePlaybackText}>Fechar</Text>
             </Pressable>
           </View>
-          <PlaybackVideo uri={activePlayback.url} style={styles.playbackVideo} />
+          <View style={styles.cloudReplayStage}>
+            <PlaybackVideo uri={activePlayback.url} style={styles.playbackVideo} />
+            <View style={styles.cloudReplayTopBar}>
+              <Text style={styles.cloudReplayBadge}>CLOUD REPLAY</Text>
+              <Text style={styles.cloudReplayTime}>{formatDuration(activePlayback.recording.durationSeconds)}</Text>
+            </View>
+          </View>
           <View style={styles.rowButtons}>
             <Pressable onPress={() => onDownloadRecording(activePlayback.recording)} style={styles.smallButton}>
               <Text style={styles.smallButtonText}>Baixar esta gravação</Text>
@@ -122,7 +128,13 @@ export function PlaybackScreen({
               <Pressable onPress={() => onOpenPlayback(recording)} style={styles.recordingPreview}>
                 {selectedCamera && streamPosters[selectedCamera.id] ? <Image source={{ uri: streamPosters[selectedCamera.id] ?? undefined }} style={styles.recordingPreviewImage} /> : null}
                 <View style={styles.recordingPreviewShade} />
-                <View style={styles.recordingPlayCircle}><SvgIcon name="play" size={24} color="#ffffff" /></View>
+                <View style={styles.recordingCloudBadge}>
+                  <Text style={styles.recordingCloudBadgeText}>Cloud Replay</Text>
+                </View>
+                <View style={styles.recordingPlayOuter}>
+                  <View style={styles.recordingPlayCircle}><SvgIcon name="play" size={23} color="#02130f" /></View>
+                  <Text style={styles.recordingPlayLabel}>Reproduzir</Text>
+                </View>
                 <Text style={styles.recordingDurationBadge}>{formatDuration(recording.durationSeconds)}</Text>
               </Pressable>
             </View>

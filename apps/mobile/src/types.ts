@@ -2,6 +2,12 @@ export type Direction = 'Up' | 'Down' | 'Left' | 'Right' | 'ZoomIn' | 'ZoomOut';
 export type Tab = 'dashboard' | 'live' | 'grid' | 'playback' | 'profile';
 export type IconName = 'home' | 'grid' | 'user' | 'settings' | 'camera' | 'mic' | 'video' | 'chevronLeft' | 'plus' | 'bell' | 'move' | 'play' | 'download' | 'calendar';
 
+export type MosaicArea = {
+  id: string;
+  name: string;
+  cameraIds: string[];
+};
+
 export type User = {
   id: string;
   name: string;

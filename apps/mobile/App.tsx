@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -18,8 +19,10 @@ import { PlaybackScreen } from './src/screens/PlaybackScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { request, normalizeServerUrl } from './src/services/api';
 import { cleanApiUrl, clearStoredSession, loadStoredSession, saveStoredSession } from './src/services/sessionStore';
-import type { ActivePlayback, Camera, Direction, Recording, Session, StreamUrls, Tab, User } from './src/types';
+import type { ActivePlayback, Camera, Direction, MosaicArea, Recording, Session, StreamUrls, Tab, User } from './src/types';
 import { styles } from './src/styles/appStyles';
+
+const MOSAIC_AREAS_KEY = '@drac:mosaic-areas:v1';
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -38,7 +41,9 @@ export default function App() {
   const [ptzActive, setPtzActive] = useState<Direction | null>(null);
   const [ptzFeedback, setPtzFeedback] = useState<string | null>(null);
   const [showPtz, setShowPtz] = useState(true);
-  const [selectedMosaicGroup, setSelectedMosaicGroup] = useState<string>('Todas');
+  const [selectedMosaicGroup, setSelectedMosaicGroup] = useState<string>('all');
+  const [mosaicAreas, setMosaicAreas] = useState<MosaicArea[]>([]);
+  const [mosaicAreasLoaded, setMosaicAreasLoaded] = useState(false);
   const [recordingDate, setRecordingDate] = useState(() => new Date().toISOString().slice(0, 10));
   const previewLimit = 8;
   const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) ?? cameras[0] ?? null;
@@ -52,9 +57,40 @@ export default function App() {
     return Array.from(map.entries());
   }, [cameras]);
   const mosaicCameras = useMemo(() => {
-    if (selectedMosaicGroup === 'Todas') return cameras;
-    return groupedCameras.find(([groupName]) => groupName === selectedMosaicGroup)?.[1] ?? cameras;
-  }, [cameras, groupedCameras, selectedMosaicGroup]);
+    if (selectedMosaicGroup === 'all') return cameras;
+    if (selectedMosaicGroup.startsWith('area:')) {
+      const area = mosaicAreas.find((item) => `area:${item.id}` === selectedMosaicGroup);
+      if (!area) return cameras;
+      return cameras.filter((camera) => area.cameraIds.includes(camera.id));
+    }
+    if (selectedMosaicGroup.startsWith('group:')) {
+      const groupName = selectedMosaicGroup.slice('group:'.length);
+      return groupedCameras.find(([name]) => name === groupName)?.[1] ?? cameras;
+    }
+    return cameras;
+  }, [cameras, groupedCameras, mosaicAreas, selectedMosaicGroup]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(MOSAIC_AREAS_KEY)
+      .then((raw) => {
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as MosaicArea[];
+        if (Array.isArray(parsed)) setMosaicAreas(parsed);
+      })
+      .catch(() => undefined)
+      .finally(() => setMosaicAreasLoaded(true));
+  }, []);
+
+  useEffect(() => {
+    if (!mosaicAreasLoaded) return;
+    void AsyncStorage.setItem(MOSAIC_AREAS_KEY, JSON.stringify(mosaicAreas));
+  }, [mosaicAreas, mosaicAreasLoaded]);
+
+  useEffect(() => {
+    if (!selectedMosaicGroup.startsWith('area:')) return;
+    const areaExists = mosaicAreas.some((area) => `area:${area.id}` === selectedMosaicGroup);
+    if (!areaExists) setSelectedMosaicGroup('all');
+  }, [mosaicAreas, selectedMosaicGroup]);
   useEffect(() => {
     loadStoredSession()
       .then((raw) => {
@@ -186,6 +222,36 @@ export default function App() {
     }
   };
 
+  const createMosaicArea = (name: string) => {
+    const cleanName = name.trim();
+    if (!cleanName) {
+      Alert.alert('Mosaico', 'Informe o nome da área.');
+      return;
+    }
+    if (mosaicAreas.some((area) => area.name.toLowerCase() === cleanName.toLowerCase())) {
+      Alert.alert('Mosaico', 'Já existe uma área com esse nome.');
+      return;
+    }
+    const nextArea = { id: `${Date.now()}`, name: cleanName, cameraIds: [] };
+    setMosaicAreas((current) => [...current, nextArea]);
+    setSelectedMosaicGroup(`area:${nextArea.id}`);
+  };
+
+  const toggleCameraInMosaicArea = (areaId: string, cameraId: string) => {
+    setMosaicAreas((current) => current.map((area) => {
+      if (area.id !== areaId) return area;
+      const exists = area.cameraIds.includes(cameraId);
+      return {
+        ...area,
+        cameraIds: exists ? area.cameraIds.filter((id) => id !== cameraId) : [...area.cameraIds, cameraId],
+      };
+    }));
+  };
+
+  const deleteMosaicArea = (areaId: string) => {
+    setMosaicAreas((current) => current.filter((area) => area.id !== areaId));
+  };
+
   const toggleRecording = async (camera: Camera, start: boolean) => {
     if (!session || !camera.canRecord) return;
     try {
@@ -277,10 +343,15 @@ export default function App() {
         {tab === 'grid' && (
           <GridScreen
             groupedCameras={groupedCameras}
+            cameras={cameras}
             mosaicCameras={mosaicCameras}
+            mosaicAreas={mosaicAreas}
             streamPosters={streamPosters}
             selectedMosaicGroup={selectedMosaicGroup}
             onSelectGroup={setSelectedMosaicGroup}
+            onCreateArea={createMosaicArea}
+            onDeleteArea={deleteMosaicArea}
+            onToggleCameraInArea={toggleCameraInMosaicArea}
             onOpenCamera={(cameraId) => { setSelectedCameraId(cameraId); setShowPtz(true); setTab('live'); }}
           />
         )}

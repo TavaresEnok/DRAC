@@ -54,13 +54,15 @@ export function DashboardScreen({ cameras, groupedCameras, streamPosters, previe
                     {isOnline(camera) ? 'ONLINE' : 'OFF'}
                   </Text>
                 </View>
-              </View>
-              <View style={styles.cameraCardBody}>
-                <View style={styles.cameraCardTop}>
-                  <Text style={styles.cameraName}>{camera.name}</Text>
-                  <View style={styles.cardPlayButton}><SvgIcon name="play" size={18} color="#34d399" /></View>
+                <View style={styles.cameraOverlayBody}>
+                  <View style={styles.cameraCardTop}>
+                    <View style={styles.cameraOverlayTextBlock}>
+                      <Text style={styles.cameraName}>{camera.name}</Text>
+                      <Text style={styles.cameraMeta}>{formatResolution(camera)}</Text>
+                    </View>
+                    <View style={styles.cardPlayButton}><SvgIcon name="play" size={18} color="#02130f" /></View>
+                  </View>
                 </View>
-                <Text style={styles.cameraMeta}>{formatResolution(camera)}</Text>
               </View>
             </Pressable>
           ))}
