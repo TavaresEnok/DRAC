@@ -5,6 +5,14 @@ export function formatTime(value?: string | null) {
   return new Date(value).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
+export function formatDateLabel(value: string) {
+  const date = new Date(`${value}T12:00:00`);
+  const today = new Date();
+  const todayKey = today.toISOString().slice(0, 10);
+  if (value === todayKey) return 'Hoje';
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' });
+}
+
 export function formatDuration(seconds?: number | null) {
   if (!seconds || seconds <= 0) return 'em andamento';
   const minutes = Math.floor(seconds / 60);

@@ -1,0 +1,71 @@
+import { Image, Pressable, Text, View } from 'react-native';
+import { SvgIcon } from '../components/SvgIcon';
+import { styles } from '../styles/appStyles';
+import type { Camera } from '../types';
+import { formatResolution, isOnline } from '../utils/format';
+
+interface DashboardScreenProps {
+  cameras: Camera[];
+  groupedCameras: Array<[string, Camera[]]>;
+  streamPosters: Record<string, string | null>;
+  previewLimit: number;
+  onOpenCamera: (cameraId: string) => void;
+}
+
+export function DashboardScreen({ cameras, groupedCameras, streamPosters, previewLimit, onOpenCamera }: DashboardScreenProps) {
+  return (
+    <View style={styles.page}>
+      <View style={styles.dashboardHeader}>
+        <View>
+          <Text style={styles.dashboardTitle}>Câmeras</Text>
+          <Text style={styles.dashboardSubtitle}>Acesso filtrado pelo seu grupo</Text>
+          {cameras.length > previewLimit ? (
+            <Text style={styles.previewLimitHint}>
+              Pré-visualização carregada para as primeiras {previewLimit} câmeras.
+            </Text>
+          ) : null}
+        </View>
+      </View>
+
+      {groupedCameras.map(([groupName, items]) => (
+        <View key={groupName} style={styles.groupBlock}>
+          <View style={styles.groupHeader}>
+            <Text style={styles.groupTitle}>{groupName}</Text>
+            <Text style={styles.groupCount}>{items.length} câmeras</Text>
+          </View>
+          {items.map((camera) => (
+            <Pressable
+              key={camera.id}
+              onPress={() => onOpenCamera(camera.id)}
+              style={styles.cameraCard}
+            >
+              <View style={styles.cameraPreview}>
+                {streamPosters[camera.id] ? (
+                  <Image source={{ uri: streamPosters[camera.id] ?? undefined }} style={styles.cameraPreviewImage} />
+                ) : (
+                  <View style={styles.cameraPreviewFallback}>
+                    <Text style={styles.cameraPreviewText}>DRAC</Text>
+                  </View>
+                )}
+                <View style={styles.cameraPreviewShade} />
+                <View style={[styles.liveBadge, isOnline(camera) ? styles.liveBadgeOnline : styles.liveBadgeOffline]}>
+                  <View style={[styles.liveDot, isOnline(camera) ? styles.liveDotOnline : styles.liveDotOffline]} />
+                  <Text style={[styles.liveBadgeText, isOnline(camera) ? styles.liveBadgeTextOnline : styles.liveBadgeTextOffline]}>
+                    {isOnline(camera) ? 'ONLINE' : 'OFF'}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.cameraCardBody}>
+                <View style={styles.cameraCardTop}>
+                  <Text style={styles.cameraName}>{camera.name}</Text>
+                  <View style={styles.cardPlayButton}><SvgIcon name="play" size={18} color="#34d399" /></View>
+                </View>
+                <Text style={styles.cameraMeta}>{formatResolution(camera)}</Text>
+              </View>
+            </Pressable>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}

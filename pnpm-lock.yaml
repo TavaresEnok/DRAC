@@ -144,6 +144,9 @@ importers:
       '@types/react':
         specifier: ~19.1.0
         version: 19.1.17
+      tsx:
+        specifier: ^4.19.4
+        version: 4.21.0
       typescript:
         specifier: ~5.9.2
         version: 5.9.3
