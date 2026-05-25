@@ -42,9 +42,19 @@ export class CameraHealthCheckProcessor extends WorkerHost {
     });
 
     if (staleCameras.length > 0) {
-      this.logger.warn(`${staleCameras.length} câmeras parecem estar offline (sem reports recentes).`);
-      
+      this.logger.warn(`${staleCameras.length} câmera(s) sem heartbeat recente; executando reteste ativo antes de marcar offline.`);
+
       for (const cam of staleCameras) {
+        try {
+          const result = await this.camerasService.getStatus(cam.id);
+          if (result.status === CameraStatus.ONLINE) {
+            this.logger.debug(`Heartbeat renovado por reteste ativo: ${cam.name} (${cam.id})`);
+            continue;
+          }
+        } catch (error) {
+          this.logger.warn(`Reteste ativo falhou camera=${cam.id}: ${(error as Error).message}`);
+        }
+
         await this.prisma.camera.update({
           where: { id: cam.id },
           data: { status: CameraStatus.OFFLINE },
@@ -53,7 +63,7 @@ export class CameraHealthCheckProcessor extends WorkerHost {
           cam.id,
           'HEALTH_CAMERA_OFFLINE',
           'WARNING',
-          'Câmera marcada como offline por ausência de heartbeat.',
+          'Câmera marcada como offline após falha no reteste ativo de saúde.',
           {
             staleThreshold: staleThreshold.toISOString(),
             offlineMinutes,
@@ -328,7 +338,7 @@ export class CameraHealthCheckProcessor extends WorkerHost {
         }
 
         const codec = String(status.detectedVideoCodec ?? '').toLowerCase();
-        const liveProtocol = String(status.preferredLiveProtocol ?? camera.preferredLiveProtocol ?? 'flv').toLowerCase();
+        const liveProtocol = String(status.preferredLiveProtocol ?? camera.preferredLiveProtocol ?? 'auto').toLowerCase();
         const incompatibleCodecForFlv = liveProtocol === 'flv' && (codec.includes('h265') || codec.includes('hevc') || codec.includes('265'));
         if (incompatibleCodecForFlv && await this.shouldEmitWithCooldown(camera.id, 'HEALTH_STREAM_CODEC_INCOMPATIBLE', cooldownSeconds)) {
           await this.camerasService.registerEvent(

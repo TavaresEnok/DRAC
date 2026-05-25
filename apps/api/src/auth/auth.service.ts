@@ -4,15 +4,32 @@ import { User, UserRole } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 import { AuthUser, JwtAuthPayload, PlayTokenPayload, StreamTokenPayload } from '../common/types/auth-user.type';
+
+type LoginAttempt = { count: number; lockedUntil: number };
 
 @Injectable()
 export class AuthService {
+  private static readonly LOCKOUT_MS = 15 * 60 * 1000;
+  private readonly loginAttempts = new Map<string, LoginAttempt>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly settingsService: SettingsService,
   ) {}
+
+  private registerFailedAttempt(email: string, maxAttempts: number) {
+    const current = this.loginAttempts.get(email) ?? { count: 0, lockedUntil: 0 };
+    current.count += 1;
+    if (current.count >= maxAttempts) {
+      current.lockedUntil = Date.now() + AuthService.LOCKOUT_MS;
+      current.count = 0;
+    }
+    this.loginAttempts.set(email, current);
+  }
 
   private sanitizeUser(user: User): AuthUser {
     return {
@@ -25,16 +42,28 @@ export class AuthService {
 
   async login(email: string, password: string) {
     const normalizedEmail = email.trim().toLowerCase();
+
+    const lock = this.loginAttempts.get(normalizedEmail);
+    if (lock && lock.lockedUntil > Date.now()) {
+      const remainingMin = Math.ceil((lock.lockedUntil - Date.now()) / 60000);
+      throw new UnauthorizedException(`Conta temporariamente bloqueada por excesso de tentativas. Tente novamente em ${remainingMin} min.`);
+    }
+
+    const maxAttempts = await this.settingsService.getMaxLoginAttempts().catch(() => 5);
     const user = await this.prisma.user.findUnique({ where: { email: normalizedEmail } });
 
     if (!user || !user.isActive) {
+      this.registerFailedAttempt(normalizedEmail, maxAttempts);
       throw new UnauthorizedException('Credenciais inválidas.');
     }
 
     const isValid = await bcrypt.compare(password, user.passwordHash);
     if (!isValid) {
+      this.registerFailedAttempt(normalizedEmail, maxAttempts);
       throw new UnauthorizedException('Credenciais inválidas.');
     }
+
+    this.loginAttempts.delete(normalizedEmail);
 
     const payload: JwtAuthPayload = {
       sub: user.id,
@@ -43,9 +72,9 @@ export class AuthService {
       type: 'access',
     };
 
-    const accessToken = await this.jwtService.signAsync(payload, {
-      expiresIn: this.configService.get<string>('jwtExpiresIn') ?? '8h',
-    });
+    const sessionMinutes = await this.settingsService.getSessionTimeoutMinutes().catch(() => 0);
+    const expiresIn = sessionMinutes > 0 ? `${sessionMinutes}m` : (this.configService.get<string>('jwtExpiresIn') ?? '8h');
+    const accessToken = await this.jwtService.signAsync(payload, { expiresIn });
 
     return {
       accessToken,

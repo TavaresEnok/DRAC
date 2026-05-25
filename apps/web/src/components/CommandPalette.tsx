@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLocation } from 'wouter';
 import {
-  LayoutDashboard, Monitor, PlaySquare,
+  Monitor, PlaySquare,
   Camera, Settings,
   Gauge, LogOut, Sun, Moon, Shield, Clock, Users
 } from 'lucide-react';
@@ -12,7 +12,6 @@ import { useThemeStore } from '../store/themeStore';
 import { useVmsDataStore } from '../store/vmsDataStore';
 
 const PAGES = [
-  { label: 'Painel', path: '/dashboard', icon: LayoutDashboard, description: 'Visão geral da central de comando' },
   { label: 'Ao Vivo', path: '/live', icon: Monitor, description: 'Grade de câmeras e controles' },
   { label: 'Reprodução', path: '/playback', icon: PlaySquare, description: 'Revisar gravações' },
   { label: 'Câmeras', path: '/cameras', icon: Camera, description: 'Gestão e configuração de câmeras' },

@@ -14,7 +14,7 @@ import { basename, join } from 'node:path';
 import { type Readable } from 'stream';
 import Redis from 'ioredis';
 import { CamerasService } from '../cameras/cameras.service';
-import { buildRtspUrl } from '../cameras/helpers/rtsp-url.helper';
+import { buildRtspUrl, resolveRecordingRtspProfile } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { buildRecordingOutputDir, buildRecordingOutputPattern } from './helpers/recording-path.helper';
@@ -256,38 +256,74 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
   }
 
   private buildRtsp(camera: Camera, password: string): string {
+    const recordingProfile = resolveRecordingRtspProfile(camera);
     return buildRtspUrl({
       username: camera.username,
       password,
       ip: camera.ip,
       rtspPort: camera.rtspPort,
       rtspPath: camera.rtspPath ?? undefined,
-      channel: camera.channel,
-      subtype: camera.subtype,
+      channel: recordingProfile.channel,
+      subtype: recordingProfile.subtype,
     });
   }
 
-  private shouldTranscodeRecording(camera: Camera) {
-    return Boolean(
-      !this.copyCodec ||
+  private getSourceCodec(camera: Camera): string {
+    const recording = (camera.recordingVideoCodec ?? '').toLowerCase();
+    if (recording && recording !== 'original' && recording !== 'copy') {
+      return recording;
+    }
+    const configured = (camera.streamVideoCodec ?? '').toLowerCase();
+    const detected = (camera.detectedVideoCodec ?? '').toLowerCase();
+    return (!configured || configured === 'original') ? detected : configured;
+  }
+
+  private sourceIsHevc(camera: Camera): boolean {
+    const codec = this.getSourceCodec(camera);
+    return codec.includes('h265') || codec.includes('hevc') || codec.includes('265');
+  }
+
+  private shouldTranscodeRecording(camera: Camera): boolean {
+    // Always transcode if user set explicit dimensions/fps/bitrate
+    if (
       camera.recordingWidth ||
       camera.recordingHeight ||
       camera.recordingFps ||
       camera.recordingBitrateKbps ||
-      (camera.recordingVideoCodec && camera.recordingVideoCodec !== 'copy'),
-    );
+      (camera.recordingVideoCodec && !['copy', 'original'].includes(camera.recordingVideoCodec))
+    ) {
+      return true;
+    }
+    // H.264 cameras: transcode to H.265 for ~50% disk savings
+    // H.265 cameras: copy as-is (no re-encoding needed)
+    if (!this.copyCodec) return true;
+    return !this.sourceIsHevc(camera);
   }
 
   private buildArgs(camera: Camera, rtspUrl: string, outputPattern: string, segmentSeconds: number): string[] {
     const transport = camera.preferredRtspTransport ?? this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp';
     const stimeout = String(this.configService.get<number>('ffmpegStimeoutUs') ?? 8000000);
     const shouldTranscode = this.shouldTranscodeRecording(camera);
-    const videoCodec =
-      camera.recordingVideoCodec === 'h265'
-        ? 'libx265'
-        : camera.recordingVideoCodec === 'mjpeg'
-          ? 'mjpeg'
-          : 'libx264';
+
+    // Determine target codec for recording:
+    // - Explicit user setting takes priority
+    // - H.264 source → libx265 (saves ~50% disk with same quality)
+    // - H.265 source → copy (already efficient)
+    // - Unknown source → libx265 (safe default for storage efficiency)
+    let videoCodec: string;
+    if (camera.recordingVideoCodec && !['copy', 'original'].includes(camera.recordingVideoCodec)) {
+      const recordingCodec = camera.recordingVideoCodec.toLowerCase();
+      videoCodec =
+        ['h265', 'hevc'].includes(recordingCodec) ? 'libx265' :
+        recordingCodec === 'mjpeg' ? 'mjpeg' :
+        'libx264';
+    } else {
+      // Auto: H.264 → H.265, everything else copy
+      videoCodec = this.sourceIsHevc(camera) ? 'copy' : 'libx265';
+    }
+
+    const isH265Output = videoCodec === 'libx265';
+
     const args = [
       '-hide_banner',
       '-loglevel',
@@ -303,7 +339,12 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
       '-map',
       '0:a:0?',
       ...(shouldTranscode ? ['-c:v', videoCodec] : ['-c:v', 'copy']),
-      ...(shouldTranscode && videoCodec !== 'mjpeg' ? ['-preset', 'ultrafast'] : []),
+      // H.265: use slower preset (medium) for better compression vs H.264 ultrafast
+      ...(shouldTranscode && isH265Output ? ['-preset', 'medium', '-crf', '28'] : []),
+      // H.264 (fallback if explicit): ultrafast
+      ...(shouldTranscode && videoCodec === 'libx264' ? ['-preset', 'ultrafast'] : []),
+      // H.265 needs tag for MP4 container compatibility
+      ...(isH265Output ? ['-tag:v', 'hvc1'] : []),
       ...(shouldTranscode && camera.recordingWidth && camera.recordingHeight
         ? ['-vf', `scale=${camera.recordingWidth}:${camera.recordingHeight}`]
         : []),
@@ -329,6 +370,7 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
     ];
     return args;
   }
+
 
   private async registerSegment(cameraId: string, filePath: string, segmentSeconds: number, sizeBytesNumber?: number) {
     const fileName = basename(filePath);

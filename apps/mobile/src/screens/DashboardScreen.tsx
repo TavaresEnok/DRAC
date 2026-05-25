@@ -1,6 +1,7 @@
 import { Image, Pressable, Text, View } from 'react-native';
 import { SvgIcon } from '../components/SvgIcon';
 import { styles } from '../styles/appStyles';
+import { C } from '../styles/colors';
 import type { Camera } from '../types';
 import { formatResolution, isOnline } from '../utils/format';
 
@@ -13,12 +14,26 @@ interface DashboardScreenProps {
 }
 
 export function DashboardScreen({ cameras, groupedCameras, streamPosters, previewLimit, onOpenCamera }: DashboardScreenProps) {
+  const onlineCount  = cameras.filter(isOnline).length;
+  const offlineCount = cameras.length - onlineCount;
+
   return (
     <View style={styles.page}>
       <View style={styles.dashboardHeader}>
         <View>
           <Text style={styles.dashboardTitle}>Câmeras</Text>
           <Text style={styles.dashboardSubtitle}>Acesso filtrado pelo seu grupo</Text>
+          {/* Online / offline counters */}
+          <View style={styles.dashboardStatRow}>
+            <View style={styles.dashboardStat}>
+              <View style={[styles.dashboardStatDot, { backgroundColor: C.success }]} />
+              <Text style={styles.dashboardStatText}>{onlineCount} online</Text>
+            </View>
+            <View style={styles.dashboardStat}>
+              <View style={[styles.dashboardStatDot, { backgroundColor: C.danger }]} />
+              <Text style={styles.dashboardStatText}>{offlineCount} offline</Text>
+            </View>
+          </View>
           {cameras.length > previewLimit ? (
             <Text style={styles.previewLimitHint}>
               Pré-visualização carregada para as primeiras {previewLimit} câmeras.

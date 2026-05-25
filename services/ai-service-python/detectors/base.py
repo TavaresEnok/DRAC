@@ -21,5 +21,5 @@ class Detector:
     def close(self) -> None:
         return None
 
-    def infer(self, frame) -> list[Detection]:
+    def infer(self, frame, context_key: str | None = None, **kwargs) -> list[Detection]:
         raise NotImplementedError

@@ -17,11 +17,12 @@ import { AreasModule } from './areas/areas.module';
 import { CameraGroupsModule } from './camera-groups/camera-groups.module';
 import { CameraPermissionsModule } from './camera-permissions/camera-permissions.module';
 import { AiModule } from './ai/ai.module';
-import { FacesModule } from './faces/faces.module';
 import { SiteMapLayoutsModule } from './site-map-layouts/site-map-layouts.module';
 import { EvidenceModule } from './evidence/evidence.module';
 import { AlarmsModule } from './alarms/alarms.module';
 import { InvestigationsModule } from './investigations/investigations.module';
+import { SettingsModule } from './settings/settings.module';
+import { RolePermissionsModule } from './role-permissions/role-permissions.module';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard } from '@nestjs/throttler';
 
@@ -38,6 +39,8 @@ import { ThrottlerGuard } from '@nestjs/throttler';
       },
     ]),
     PrismaModule,
+    SettingsModule,
+    RolePermissionsModule,
     HealthModule,
     AuthModule,
     UsersModule,
@@ -56,7 +59,6 @@ import { ThrottlerGuard } from '@nestjs/throttler';
     RecordingsModule,
     JobsModule,
     AiModule,
-    FacesModule,
   ],
   providers: [
     {

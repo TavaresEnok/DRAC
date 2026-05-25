@@ -14,6 +14,7 @@ import { AlarmsService } from '../alarms/alarms.service';
 import { CreateCameraDto } from './dto/create-camera.dto';
 import { TestCameraConnectionDto } from './dto/test-camera-connection.dto';
 import { UpdateCameraDto } from './dto/update-camera.dto';
+import { resolveDeliveryRtspProfile } from './helpers/rtsp-url.helper';
 
 export function sanitizeCamera<T extends { passwordEncrypted: string }>(camera: T): Omit<T, 'passwordEncrypted'> {
   const { passwordEncrypted, ...safeCamera } = camera;
@@ -29,14 +30,14 @@ type ProbedStreamMetadata = {
 };
 
 type CameraProfilePayload = {
-  streamWidth?: number;
-  streamHeight?: number;
-  streamFps?: number;
-  streamBitrateKbps?: number;
-  recordingWidth?: number;
-  recordingHeight?: number;
-  recordingFps?: number;
-  recordingBitrateKbps?: number;
+  streamWidth?: number | null;
+  streamHeight?: number | null;
+  streamFps?: number | null;
+  streamBitrateKbps?: number | null;
+  recordingWidth?: number | null;
+  recordingHeight?: number | null;
+  recordingFps?: number | null;
+  recordingBitrateKbps?: number | null;
 };
 
 @Injectable()
@@ -80,6 +81,10 @@ export class CamerasService {
         onvifProfileToken: dto.onvifProfileToken,
         channel: dto.channel ?? 1,
         subtype: dto.subtype ?? 0,
+        liveChannel: dto.liveChannel ?? null,
+        liveSubtype: dto.liveSubtype ?? null,
+        recordingChannel: dto.recordingChannel ?? null,
+        recordingSubtype: dto.recordingSubtype ?? null,
         siteId: dto.siteId,
         areaId: dto.areaId,
         groupId: dto.groupId,
@@ -87,19 +92,21 @@ export class CamerasService {
         recordingMode: dto.recordingMode ?? ((dto.recordingEnabled ?? true) ? 'continuous' : 'manual'),
         retentionDays: dto.retentionDays ?? this.getDefaultRetentionDays(),
         preferredRtspTransport: dto.preferredRtspTransport ?? 'tcp',
-        preferredLiveProtocol: dto.preferredLiveProtocol ?? 'flv',
-        streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec),
+        preferredLiveProtocol: this.normalizeLiveProtocol(dto.preferredLiveProtocol) ?? 'auto',
+        streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec, { allowOriginal: true }),
         streamWidth: normalizedProfile.streamWidth,
         streamHeight: normalizedProfile.streamHeight,
         streamFps: normalizedProfile.streamFps,
         streamBitrateKbps: normalizedProfile.streamBitrateKbps,
-        recordingVideoCodec: this.normalizeVideoCodec(dto.recordingVideoCodec),
+        recordingVideoCodec: this.normalizeVideoCodec(dto.recordingVideoCodec, { allowOriginal: true }),
         recordingWidth: normalizedProfile.recordingWidth,
         recordingHeight: normalizedProfile.recordingHeight,
         recordingFps: normalizedProfile.recordingFps,
         recordingBitrateKbps: normalizedProfile.recordingBitrateKbps,
         audioEnabled: dto.audioEnabled ?? false,
         aiEnabled: dto.aiEnabled ?? true,
+        hasEdgeAi: dto.hasEdgeAi ?? false,
+        motionTrigger: dto.motionTrigger ?? (dto.hasEdgeAi ? 'CAMERA' : 'SYSTEM'),
       },
     });
 
@@ -145,6 +152,10 @@ export class CamerasService {
         onvifProfileToken: dto.onvifProfileToken,
         channel: dto.channel,
         subtype: dto.subtype,
+        liveChannel: dto.liveChannel,
+        liveSubtype: dto.liveSubtype,
+        recordingChannel: dto.recordingChannel,
+        recordingSubtype: dto.recordingSubtype,
         siteId: dto.siteId,
         areaId: dto.areaId,
         groupId: dto.groupId,
@@ -152,19 +163,21 @@ export class CamerasService {
         recordingMode: dto.recordingMode,
         retentionDays: dto.retentionDays,
         preferredRtspTransport: dto.preferredRtspTransport,
-        preferredLiveProtocol: dto.preferredLiveProtocol,
-        streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec),
+        preferredLiveProtocol: this.normalizeLiveProtocol(dto.preferredLiveProtocol),
+        streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec, { allowOriginal: true }),
         streamWidth: normalizedProfile.streamWidth,
         streamHeight: normalizedProfile.streamHeight,
         streamFps: normalizedProfile.streamFps,
         streamBitrateKbps: normalizedProfile.streamBitrateKbps,
-        recordingVideoCodec: this.normalizeVideoCodec(dto.recordingVideoCodec),
+        recordingVideoCodec: this.normalizeVideoCodec(dto.recordingVideoCodec, { allowOriginal: true }),
         recordingWidth: normalizedProfile.recordingWidth,
         recordingHeight: normalizedProfile.recordingHeight,
         recordingFps: normalizedProfile.recordingFps,
         recordingBitrateKbps: normalizedProfile.recordingBitrateKbps,
         audioEnabled: dto.audioEnabled,
         aiEnabled: dto.aiEnabled,
+        hasEdgeAi: dto.hasEdgeAi !== undefined ? dto.hasEdgeAi : existing.hasEdgeAi,
+        motionTrigger: dto.motionTrigger ?? existing.motionTrigger,
       },
       include: { site: true, area: true, group: true },
     });
@@ -208,6 +221,48 @@ export class CamerasService {
       occurredAt: event.occurredAt,
     });
     return event;
+  }
+
+  async listLatestDetections(cameraId: string, seconds = 8, limit = 12) {
+    const since = new Date(Date.now() - Math.max(1, Math.min(30, seconds)) * 1000);
+    const take = Math.max(1, Math.min(30, limit));
+    const events = await this.prisma.cameraEvent.findMany({
+      where: {
+        cameraId,
+        occurredAt: { gte: since },
+        type: { in: ['FACE_DETECTED', 'FACE_RECOGNIZED', 'FACE_UNKNOWN', 'OBJECT_DETECTED'] },
+      },
+      orderBy: { occurredAt: 'desc' },
+      take,
+    });
+
+    return events
+      .map((event) => {
+        const metadata = event.metadata && typeof event.metadata === 'object'
+          ? (event.metadata as Record<string, any>)
+          : {};
+        const bbox = Array.isArray(metadata.bbox) ? metadata.bbox.map((v: unknown) => Number(v)) : null;
+        if (!bbox || bbox.length !== 4 || bbox.some((v) => !Number.isFinite(v))) return null;
+        return {
+          id: event.id,
+          cameraId: event.cameraId,
+          type: event.type,
+          label: typeof metadata.name === 'string'
+            ? metadata.name
+            : typeof metadata.label === 'string'
+              ? metadata.label
+              : event.type.replace(/_/g, ' ').toLowerCase(),
+          confidence: Number.isFinite(Number(metadata.confidence)) ? Number(metadata.confidence) : null,
+          similarity: Number.isFinite(Number(metadata.similarity)) ? Number(metadata.similarity) : null,
+          bbox,
+          frameWidth: Number.isFinite(Number(metadata.frameWidth)) ? Number(metadata.frameWidth) : null,
+          frameHeight: Number.isFinite(Number(metadata.frameHeight)) ? Number(metadata.frameHeight) : null,
+          occurredAt: event.occurredAt,
+          overlayMode: typeof metadata.overlayMode === 'string' ? metadata.overlayMode : null,
+          trackId: Number.isFinite(Number(metadata.trackId)) ? Number(metadata.trackId) : null,
+        };
+      })
+      .filter(Boolean);
   }
 
   async testConnection(id: string) {
@@ -351,6 +406,7 @@ export class CamerasService {
       detectedOnvifPort,
       detectedOnvifPath,
       detectedOnvifProfileToken,
+      hasEdgeAi: ptzDigestOk || onvifReachable,
       status,
       checkedAt: new Date().toISOString(),
     };
@@ -565,12 +621,13 @@ export class CamerasService {
       if (rtspReachable) {
         try {
           const password = this.cryptoService.decrypt(camera.passwordEncrypted);
+          const liveProfile = resolveDeliveryRtspProfile(camera);
           const rtspPathCandidates = Array.from(
             new Set(
               [
+                `/cam/realmonitor?channel=${liveProfile.channel}&subtype=${liveProfile.subtype}`,
                 camera.rtspPath?.trim().length ? camera.rtspPath : null,
-                `/cam/realmonitor?channel=${camera.channel}&subtype=${camera.subtype}`,
-                `/cam/realmonitor?channel=${camera.channel}&subtype=0`,
+                `/cam/realmonitor?channel=${liveProfile.channel}&subtype=0`,
                 '/cam/realmonitor?channel=1&subtype=0',
                 '/cam/realmonitor?channel=1&subtype=1',
               ].filter((v): v is string => Boolean(v)),
@@ -635,7 +692,7 @@ export class CamerasService {
         detectedFps: refreshed.detectedFps ?? null,
         configuredFps: refreshed.streamFps ?? null,
         recordingEnabled: refreshed.recordingEnabled,
-        preferredLiveProtocol: refreshed.preferredLiveProtocol ?? 'flv',
+        preferredLiveProtocol: refreshed.preferredLiveProtocol ?? 'auto',
         status,
         lastSeenAt: refreshed.lastSeenAt,
         liveProbeLatencyMs: Math.max(0, Date.now() - startedAt),
@@ -804,12 +861,24 @@ export class CamerasService {
     return Number.isFinite(parsed) ? parsed : null;
   }
 
-  private normalizeVideoCodec(codec?: string | null) {
+  private normalizeVideoCodec(codec?: string | null, opts?: { allowOriginal?: boolean }) {
     const value = codec?.trim().toLowerCase();
     if (!value) return undefined;
+    if (opts?.allowOriginal && ['original', 'source', 'passthrough', 'pass-through'].includes(value)) return 'original';
     if (['hevc', 'h.265', 'h265'].includes(value)) return 'h265';
     if (['avc1', 'h.264', 'h264'].includes(value)) return 'h264';
     if (['mjpeg', 'mjpg', 'jpeg'].includes(value)) return 'mjpeg';
+    return value;
+  }
+
+  private normalizeLiveProtocol(protocol?: string | null) {
+    const value = protocol?.trim().toLowerCase();
+    if (!value) return undefined;
+    if (['auto', 'default', 'padrao', 'padrão', 'smart'].includes(value)) return 'auto';
+    if (['mjpg', 'jpeg'].includes(value)) return 'mjpeg';
+    if (value === 'flv') return 'auto';
+    if (['ll-hls', 'low-latency-hls'].includes(value)) return 'llhls';
+    if (['webrtc', 'hls', 'llhls', 'mjpeg'].includes(value)) return value;
     return value;
   }
 
@@ -831,7 +900,7 @@ export class CamerasService {
     const maxFps = existing?.detectedFps ?? null;
     const maxBitrate = existing?.detectedBitrateKbps ?? null;
 
-    const clamp = (value: number | undefined, max: number | null) => {
+    const clamp = (value: number | null | undefined, max: number | null) => {
       if (value == null) return value;
       if (!max || max <= 0) return value;
       return Math.min(value, max);
@@ -842,10 +911,10 @@ export class CamerasService {
       streamHeight: clamp(profile.streamHeight, maxHeight),
       streamFps: clamp(profile.streamFps, maxFps),
       streamBitrateKbps: clamp(profile.streamBitrateKbps, maxBitrate),
-      recordingWidth: clamp(profile.recordingWidth, maxWidth),
-      recordingHeight: clamp(profile.recordingHeight, maxHeight),
-      recordingFps: clamp(profile.recordingFps, maxFps),
-      recordingBitrateKbps: clamp(profile.recordingBitrateKbps, maxBitrate),
+      recordingWidth: profile.recordingWidth,
+      recordingHeight: profile.recordingHeight,
+      recordingFps: profile.recordingFps,
+      recordingBitrateKbps: profile.recordingBitrateKbps,
     };
   }
 

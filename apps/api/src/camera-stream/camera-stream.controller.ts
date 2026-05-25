@@ -11,6 +11,17 @@ import { type AuthUser } from '../common/types/auth-user.type';
 import { FfmpegMjpegService } from './ffmpeg-mjpeg.service';
 import { MediamtxProxyService } from './mediamtx-proxy.service';
 import { CamerasService } from '../cameras/cameras.service';
+import {
+  isHevcCodec,
+  isOriginalLiveProfileRequested,
+  resolveDeliveryRtspProfile,
+  resolveDeliveryVideoCodec,
+  resolveLiveRtspProfile,
+  resolveOriginalRtspProfile,
+  resolveOriginalVideoCodec,
+} from '../cameras/helpers/rtsp-url.helper';
+
+type LiveProtocol = 'auto' | 'flv' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
 
 @Controller('camera-stream')
 export class CameraStreamController {
@@ -29,6 +40,21 @@ export class CameraStreamController {
     if (!authHeader.toLowerCase().startsWith('bearer ')) return null;
     const token = authHeader.slice(7).trim();
     return token || null;
+  }
+
+  private supportsHevcWebPlayback(req: Request) {
+    const ua = String(req.headers['user-agent'] ?? '').toLowerCase();
+    const isAppleDevice = /iphone|ipad|ipod|macintosh|mac os x/.test(ua);
+    const isSafariFamily =
+      ua.includes('safari') &&
+      !ua.includes('chrome') &&
+      !ua.includes('chromium') &&
+      !ua.includes('crios') &&
+      !ua.includes('fxios') &&
+      !ua.includes('edgios') &&
+      !ua.includes('opr') &&
+      !ua.includes('opera');
+    return isAppleDevice && isSafariFamily;
   }
 
   @Roles(UserRole.VIEWER)
@@ -67,8 +93,8 @@ export class CameraStreamController {
     const token = await this.authService.createStreamToken(user.id, cameraId);
     let camera = await this.camerasService.getCameraOrThrow(cameraId);
 
-    // Se ainda não temos codec detectado, tenta uma sondagem rápida para persistir metadados.
-    if (!camera.streamVideoCodec && !camera.detectedVideoCodec) {
+    // Se ainda não temos metadados detectados, tenta uma sondagem rápida do perfil live.
+    if (!camera.detectedVideoCodec || !camera.detectedWidth || !camera.detectedHeight) {
       try {
         await this.camerasService.getStatus(cameraId);
         camera = await this.camerasService.getCameraOrThrow(cameraId);
@@ -95,16 +121,65 @@ export class CameraStreamController {
     const flvUrl = `${reqProto}://${apiHost}/camera-stream/${cameraId}/flv`;
     const posterUrl = `${reqProto}://${apiHost}/camera-stream/${cameraId}/poster`;
 
-    const configuredPreferred = (camera.preferredLiveProtocol ?? 'flv').toLowerCase();
+    const configuredPreferred = (camera.preferredLiveProtocol ?? 'auto').toLowerCase();
+    const configuredCodec = camera.streamVideoCodec ?? null;
+    const originalCodec = resolveOriginalVideoCodec(camera);
+    const sourceCodec = resolveDeliveryVideoCodec(camera);
+    const liveProfile = resolveLiveRtspProfile(camera);
+    const originalProfile = resolveOriginalRtspProfile(camera);
+    const deliveryProfile = resolveDeliveryRtspProfile(camera);
+    const originalProfileRequested = isOriginalLiveProfileRequested(camera);
+    const smartOriginalEnabled = originalProfileRequested && isHevcCodec(originalCodec);
+    const supportsOriginalOnClient = this.supportsHevcWebPlayback(req);
 
     const { sourceUrl: _sourceUrl, ...safeMediaBridge } = mediaBridge;
+    const fallbackManualOrder: LiveProtocol[] = (() => {
+      switch (configuredPreferred as LiveProtocol) {
+        case 'webrtc':
+          return ['webrtc', 'llhls', 'hls'];
+        case 'llhls':
+          return ['llhls', 'hls', 'webrtc'];
+        case 'hls':
+          return ['hls', 'llhls', 'webrtc'];
+        case 'flv':
+          // FLV legado: mantém compatibilidade de leitura, mas força rota HTTP estável.
+          return ['llhls', 'hls', 'webrtc'];
+        case 'auto':
+          return ['webrtc', 'llhls', 'hls'];
+        default:
+          return ['webrtc', 'llhls', 'hls'];
+      }
+    })();
+
+    const protocolOrder: LiveProtocol[] = smartOriginalEnabled
+      ? ['webrtc', 'llhls', 'hls']
+      : fallbackManualOrder;
 
     return {
       cameraId,
       streamToken: token.streamToken,
       preferredLiveProtocol: configuredPreferred,
       preferredRtspTransport: camera.preferredRtspTransport ?? 'tcp',
-      detectedVideoCodec: camera.streamVideoCodec ?? camera.detectedVideoCodec ?? null,
+      configuredVideoCodec: configuredCodec,
+      sourceVideoCodec: sourceCodec,
+      detectedVideoCodec: sourceCodec, // retrocompatibilidade no frontend
+      originalVideoCodec: originalCodec,
+      liveProfile,
+      originalProfile,
+      deliveryProfile,
+      smartLive: {
+        enabled: smartOriginalEnabled,
+        supportsOriginalOnClient,
+        recommendedProtocol: smartOriginalEnabled
+          ? 'webrtc'
+          : fallbackManualOrder[0],
+        protocolOrder,
+        reason: smartOriginalEnabled
+          ? 'Original da câmera é HEVC; live web usa perfil H.264 compatível e mantém HEVC para gravação.'
+          : configuredPreferred === 'auto'
+            ? 'Modo automático: valida vídeo renderizado e faz fallback WebRTC -> LL-HLS -> HLS.'
+            : 'Ordem de fallback baseada no protocolo configurado.',
+      },
       protocols: {
         flvUrl,
         posterUrl,

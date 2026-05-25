@@ -18,12 +18,11 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import { LiveStreamPlayer } from '../components/LiveStreamPlayer';
+import { LiveStreamPlayer, type LivePlayerStatus } from '../components/LiveStreamPlayer';
 import { toast } from '../hooks/use-toast';
 import { getApiBaseUrl } from '../lib/api-base';
 import { sendPtzCommand, type PTZDirection } from '../lib/ptz';
@@ -40,7 +39,7 @@ const RESOLUTION_PRESETS = [
 ] as const;
 
 type CommandState = 'idle' | 'sending' | 'ok' | 'error';
-type VideoCodec = 'h264' | 'h265' | 'mjpeg';
+type VideoCodec = 'original' | 'h264' | 'h265' | 'mjpeg';
 type RecordingMode = 'continuous' | 'motion' | 'schedule' | 'manual';
 
 const RECORDING_MODE_COPY: Record<RecordingMode, { label: string; detail: string; className: string }> = {
@@ -82,11 +81,15 @@ type CameraConfig = {
   onvifProfileToken: string;
   channel: string;
   subtype: string;
+  liveChannel: string;
+  liveSubtype: string;
+  recordingChannel: string;
+  recordingSubtype: string;
   recordingEnabled: boolean;
   recordingMode: RecordingMode;
   retentionDays: string;
   preferredRtspTransport: 'tcp' | 'udp';
-  preferredLiveProtocol: 'flv' | 'hls' | 'webrtc' | 'mjpeg';
+  preferredLiveProtocol: 'auto' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
   streamVideoCodec: VideoCodec;
   streamWidth: string;
   streamHeight: string;
@@ -98,6 +101,8 @@ type CameraConfig = {
   recordingFps: string;
   recordingBitrateKbps: string;
   audioEnabled: boolean;
+  hasEdgeAi: boolean;
+  motionTrigger: string;
 };
 
 type PtzDiagnostics = {
@@ -137,12 +142,16 @@ const emptyConfig: CameraConfig = {
   onvifProfileToken: '',
   channel: '1',
   subtype: '0',
+  liveChannel: '',
+  liveSubtype: '',
+  recordingChannel: '',
+  recordingSubtype: '',
   recordingEnabled: true,
   recordingMode: 'continuous',
   retentionDays: '7',
   preferredRtspTransport: 'tcp',
-  preferredLiveProtocol: 'flv',
-  streamVideoCodec: 'h264',
+  preferredLiveProtocol: 'auto',
+  streamVideoCodec: 'original',
   streamWidth: '',
   streamHeight: '',
   streamFps: '',
@@ -153,13 +162,44 @@ const emptyConfig: CameraConfig = {
   recordingFps: '',
   recordingBitrateKbps: '',
   audioEnabled: false,
+  hasEdgeAi: false,
+  motionTrigger: 'SYSTEM',
 };
 
 function normalizeVideoCodec(codec?: string | null): VideoCodec {
   const value = codec?.trim().toLowerCase();
+  if (!value || value === 'original' || value === 'source' || value === 'passthrough' || value === 'pass-through') {
+    return 'original';
+  }
   if (value === 'hevc' || value === 'h.265' || value === 'h265') return 'h265';
   if (value === 'mjpeg' || value === 'mjpg' || value === 'jpeg') return 'mjpeg';
   return 'h264';
+}
+
+function formatLiveProtocol(protocol?: string | null) {
+  switch (String(protocol ?? '').toLowerCase()) {
+    case 'auto':
+      return 'Padrão (WebRTC -> LL-HLS -> HLS)';
+    case 'webrtc':
+      return 'WebRTC';
+    case 'hls':
+      return 'HLS';
+    case 'llhls':
+    case 'll-hls':
+      return 'LL-HLS';
+    case 'mjpeg':
+      return 'MJPEG';
+    default:
+      return 'Padrão (WebRTC -> LL-HLS -> HLS)';
+  }
+}
+
+function normalizePreferredLiveProtocol(protocol?: string | null): CameraConfig['preferredLiveProtocol'] {
+  const value = String(protocol ?? '').trim().toLowerCase();
+  if (value === 'webrtc' || value === 'hls' || value === 'llhls' || value === 'll-hls' || value === 'mjpeg') {
+    return value === 'll-hls' ? 'llhls' : value;
+  }
+  return 'auto';
 }
 
 function SettingsCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
@@ -292,7 +332,6 @@ export default function CameraDetailPage() {
   const loadData = useVmsDataStore((state) => state.load);
   const cam = cameras.find((camera) => camera.id === params.id);
 
-  const [motionSensitivity, setMotionSensitivity] = useState([65]);
   const [activeDirection, setActiveDirection] = useState<PTZDirection | null>(null);
   const [commandState, setCommandState] = useState<CommandState>('idle');
   const [lastCommand, setLastCommand] = useState('Nenhum comando PTZ enviado');
@@ -304,6 +343,7 @@ export default function CameraDetailPage() {
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
 
   const [form, setForm] = useState<CameraConfig>(emptyConfig);
+  const [cameraConfigMeta, setCameraConfigMeta] = useState<any | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
@@ -312,6 +352,11 @@ export default function CameraDetailPage() {
   const [motionRecordingLoading, setMotionRecordingLoading] = useState(false);
   const [recordingRuntimeStatus, setRecordingRuntimeStatus] = useState<RecordingRuntimeStatus | null>(null);
   const [recordingOverride, setRecordingOverride] = useState<boolean | null>(null);
+  const [livePlayerStatus, setLivePlayerStatus] = useState<LivePlayerStatus>({
+    activeProtocol: null,
+    state: 'loading',
+    reason: null,
+  });
   const [discoveringEndpoints, setDiscoveringEndpoints] = useState(false);
   const [diagnosingPtz, setDiagnosingPtz] = useState(false);
   const [triggeringAlarm, setTriggeringAlarm] = useState(false);
@@ -329,6 +374,10 @@ export default function CameraDetailPage() {
   const [sidePanelTab, setSidePanelTab] = useState<'info' | 'ptz'>(initialTabs.side);
 
   useEffect(() => {
+    setLivePlayerStatus({ activeProtocol: null, state: 'loading', reason: null });
+  }, [cam?.id]);
+
+  useEffect(() => {
     if (!cam?.id || !accessToken) return;
 
     let cancelled = false;
@@ -341,6 +390,7 @@ export default function CameraDetailPage() {
 
         if (cancelled) return;
 
+        setCameraConfigMeta(data);
         setForm({
           name: data.name ?? '',
           ip: data.ip ?? '',
@@ -353,22 +403,28 @@ export default function CameraDetailPage() {
           onvifProfileToken: data.onvifProfileToken ?? '',
           channel: String(data.channel ?? 1),
           subtype: String(data.subtype ?? 0),
+          liveChannel: data.liveChannel == null ? '' : String(data.liveChannel),
+          liveSubtype: data.liveSubtype == null ? '' : String(data.liveSubtype),
+          recordingChannel: data.recordingChannel == null ? '' : String(data.recordingChannel),
+          recordingSubtype: data.recordingSubtype == null ? '' : String(data.recordingSubtype),
           recordingEnabled: Boolean(data.recordingEnabled),
           recordingMode: data.recordingMode ?? (data.recordingEnabled ? 'continuous' : 'manual'),
           retentionDays: String(data.retentionDays ?? 7),
           preferredRtspTransport: data.preferredRtspTransport ?? 'tcp',
-          preferredLiveProtocol: data.preferredLiveProtocol ?? 'flv',
-          streamVideoCodec: normalizeVideoCodec(data.streamVideoCodec ?? data.detectedVideoCodec),
+          preferredLiveProtocol: normalizePreferredLiveProtocol(data.preferredLiveProtocol),
+          streamVideoCodec: normalizeVideoCodec(data.streamVideoCodec),
           streamWidth: data.streamWidth == null ? '' : String(data.streamWidth),
           streamHeight: data.streamHeight == null ? '' : String(data.streamHeight),
           streamFps: data.streamFps == null ? '' : String(data.streamFps),
           streamBitrateKbps: data.streamBitrateKbps == null ? '' : String(data.streamBitrateKbps),
-          recordingVideoCodec: 'h264',
+          recordingVideoCodec: normalizeVideoCodec(data.recordingVideoCodec),
           recordingWidth: data.recordingWidth == null ? '' : String(data.recordingWidth),
           recordingHeight: data.recordingHeight == null ? '' : String(data.recordingHeight),
           recordingFps: data.recordingFps == null ? '' : String(data.recordingFps),
           recordingBitrateKbps: data.recordingBitrateKbps == null ? '' : String(data.recordingBitrateKbps),
           audioEnabled: Boolean(data.audioEnabled),
+          hasEdgeAi: Boolean(data.hasEdgeAi),
+          motionTrigger: data.motionTrigger ?? 'SYSTEM',
         });
       } catch (error) {
         if (!cancelled) {
@@ -388,6 +444,10 @@ export default function CameraDetailPage() {
       cancelled = true;
     };
   }, [accessToken, cam?.id]);
+
+  useEffect(() => {
+    setCameraConfigMeta(null);
+  }, [cam?.id]);
 
   useEffect(() => {
     return () => {
@@ -560,10 +620,10 @@ export default function CameraDetailPage() {
       const detectedBitrate = cam.detectedBitrateKbps ?? null;
 
       const clampedFields: string[] = [];
-      const clampToDetected = (label: string, value: string, max: number | null) => {
-        if (!value.trim()) return undefined;
+      const clampToDetected = (label: string, value: string, max: number | null): number | null => {
+        if (!value.trim()) return null;
         const numeric = Number(value);
-        if (!Number.isFinite(numeric) || numeric <= 0) return undefined;
+        if (!Number.isFinite(numeric) || numeric <= 0) return null;
         if (max && max > 0) {
           const clamped = Math.min(numeric, max);
           if (clamped !== numeric) {
@@ -573,18 +633,13 @@ export default function CameraDetailPage() {
         }
         return numeric;
       };
-
-      const applyDetectedBitrateDefault = (value: string) => {
-        if (value.trim()) {
-          return clampToDetected('bitrate', value, detectedBitrate);
-        }
-        if (detectedBitrate && detectedBitrate > 0) {
-          return detectedBitrate;
-        }
-        return undefined;
+      const parseOptionalPositive = (value: string): number | null => {
+        if (!value.trim()) return null;
+        const numeric = Number(value);
+        return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
       };
 
-      await axios.patch(
+      const { data: updatedCamera } = await axios.patch(
         `${API_URL}/cameras/${cam.id}`,
         {
           name: form.name.trim(),
@@ -598,6 +653,10 @@ export default function CameraDetailPage() {
           onvifProfileToken: form.onvifProfileToken.trim(),
           channel: Number(form.channel),
           subtype: Number(form.subtype),
+          liveChannel: form.liveChannel.trim() ? Number(form.liveChannel) : null,
+          liveSubtype: form.liveSubtype.trim() ? Number(form.liveSubtype) : null,
+          recordingChannel: form.recordingChannel.trim() ? Number(form.recordingChannel) : null,
+          recordingSubtype: form.recordingSubtype.trim() ? Number(form.recordingSubtype) : null,
           recordingEnabled: form.recordingEnabled,
           recordingMode: form.recordingMode,
           retentionDays: Number(form.retentionDays),
@@ -607,12 +666,12 @@ export default function CameraDetailPage() {
           streamWidth: clampToDetected('Live largura', form.streamWidth, detectedWidth),
           streamHeight: clampToDetected('Live altura', form.streamHeight, detectedHeight),
           streamFps: clampToDetected('Live FPS', form.streamFps, detectedFps),
-          streamBitrateKbps: applyDetectedBitrateDefault(form.streamBitrateKbps),
-          recordingVideoCodec: 'h264',
-          recordingWidth: clampToDetected('Rec largura', form.recordingWidth, detectedWidth),
-          recordingHeight: clampToDetected('Rec altura', form.recordingHeight, detectedHeight),
-          recordingFps: clampToDetected('Rec FPS', form.recordingFps, detectedFps),
-          recordingBitrateKbps: applyDetectedBitrateDefault(form.recordingBitrateKbps),
+          streamBitrateKbps: clampToDetected('Live bitrate', form.streamBitrateKbps, detectedBitrate),
+          recordingVideoCodec: normalizeVideoCodec(form.recordingVideoCodec),
+          recordingWidth: parseOptionalPositive(form.recordingWidth),
+          recordingHeight: parseOptionalPositive(form.recordingHeight),
+          recordingFps: parseOptionalPositive(form.recordingFps),
+          recordingBitrateKbps: parseOptionalPositive(form.recordingBitrateKbps),
           audioEnabled: form.audioEnabled,
         },
         {
@@ -620,6 +679,7 @@ export default function CameraDetailPage() {
         },
       );
 
+      setCameraConfigMeta(updatedCamera);
       await loadData();
       setForm((current) => ({ ...current, password: '' }));
       const appliedLiveResolution = form.streamWidth && form.streamHeight ? `${form.streamWidth}x${form.streamHeight}` : 'Original';
@@ -722,7 +782,6 @@ export default function CameraDetailPage() {
       }
       if (data.detectedStream?.codec) {
         updateField('streamVideoCodec', normalizeVideoCodec(data.detectedStream.codec));
-        updateField('recordingVideoCodec', 'h264');
       }
       if (typeof data.detectedStream?.width === 'number') {
         updateField('streamWidth', String(data.detectedStream.width));
@@ -814,15 +873,44 @@ export default function CameraDetailPage() {
   const isRecordingActive = recordingOverride ?? recordingRuntimeStatus?.isRecording ?? (cam?.status === 'recording');
   const isMotionRecordingMode = form.recordingMode === 'motion' || cam?.recordingMode === 'motion';
   const isMotionRecordingActive = isMotionRecordingMode && isRecordingActive;
+  const cameraMeta = cameraConfigMeta ?? cam;
   const resolutionMatch = cam?.resolution?.match(/(\d+)\s*x\s*(\d+)/i) ?? null;
-  const originalWidth = cam?.detectedWidth ?? cam?.streamWidth ?? (resolutionMatch ? Number(resolutionMatch[1]) : null);
-  const originalHeight = cam?.detectedHeight ?? cam?.streamHeight ?? (resolutionMatch ? Number(resolutionMatch[2]) : null);
-  const originalFps = cam?.detectedFps ?? cam?.fps ?? null;
-  const originalCodec = (cam?.detectedVideoCodec ?? cam?.streamVideoCodec ?? '--').toUpperCase();
-  const originalBitrate = cam?.detectedBitrateKbps ?? cam?.streamBitrateKbps ?? null;
+  const liveCodecSetting = normalizeVideoCodec(form.streamVideoCodec || cameraMeta?.streamVideoCodec);
+  const liveCodecRequestsOriginal = liveCodecSetting === 'original';
+  const liveUsesOriginalResolution = !form.streamWidth.trim() && !form.streamHeight.trim() && cameraMeta?.streamWidth == null && cameraMeta?.streamHeight == null;
+  const liveUsesOriginalProfile = liveCodecSetting === 'original' && liveUsesOriginalResolution;
+  const originalWidth = cameraMeta?.recordingWidth ?? cameraMeta?.detectedWidth ?? cameraMeta?.streamWidth ?? (resolutionMatch ? Number(resolutionMatch[1]) : null);
+  const originalHeight = cameraMeta?.recordingHeight ?? cameraMeta?.detectedHeight ?? cameraMeta?.streamHeight ?? (resolutionMatch ? Number(resolutionMatch[2]) : null);
+  const originalFps = cameraMeta?.recordingFps ?? cameraMeta?.detectedFps ?? cam?.fps ?? null;
+  const originalCodecValue = normalizeVideoCodec(cameraMeta?.recordingVideoCodec ?? cameraMeta?.detectedVideoCodec ?? cameraMeta?.streamVideoCodec);
+  const originalCodec = originalCodecValue.toUpperCase();
+  const originalCodecIsHevc = originalCodecValue === 'h265';
+  const originalBitrate = cameraMeta?.recordingBitrateKbps ?? cameraMeta?.detectedBitrateKbps ?? cameraMeta?.streamBitrateKbps ?? null;
   const originalStreamText = `${originalWidth ?? '--'}x${originalHeight ?? '--'} @ ${originalFps ?? '--'} FPS`;
   const configuredLiveResolution = form.streamWidth && form.streamHeight ? `${form.streamWidth}x${form.streamHeight}` : 'Original';
-  const configuredLiveText = `${configuredLiveResolution} @ ${form.streamFps || 'auto'} FPS`;
+  // Live entrega SEMPRE o stream principal em resolução cheia quando "Original" é solicitado:
+  // H.264 por passthrough; H.265 é transcodificado para H.264 mantendo a resolução original.
+  const deliveryUsesOriginalProfile = liveUsesOriginalProfile;
+  const liveProfileWidth = cameraMeta?.detectedWidth ?? cameraMeta?.streamWidth ?? (resolutionMatch ? Number(resolutionMatch[1]) : null);
+  const liveProfileHeight = cameraMeta?.detectedHeight ?? cameraMeta?.streamHeight ?? (resolutionMatch ? Number(resolutionMatch[2]) : null);
+  const liveProfileFps = cameraMeta?.detectedFps ?? cameraMeta?.streamFps ?? cam?.fps ?? null;
+  const liveProfileCodecValue = normalizeVideoCodec(cameraMeta?.detectedVideoCodec ?? cameraMeta?.streamVideoCodec);
+  const effectiveLiveWidth = deliveryUsesOriginalProfile ? originalWidth : (form.streamWidth.trim() ? Number(form.streamWidth) : liveProfileWidth);
+  const effectiveLiveHeight = deliveryUsesOriginalProfile ? originalHeight : (form.streamHeight.trim() ? Number(form.streamHeight) : liveProfileHeight);
+  const effectiveLiveFps = deliveryUsesOriginalProfile ? originalFps : (form.streamFps.trim() ? Number(form.streamFps) : liveProfileFps);
+  // O navegador sempre recebe H.264; quando o principal é H.265 ele é transcodificado.
+  const liveTranscodedFromHevc = deliveryUsesOriginalProfile && originalCodecIsHevc;
+  const effectiveLiveCodecValue = liveCodecRequestsOriginal
+    ? (deliveryUsesOriginalProfile ? (originalCodecIsHevc ? 'h264' : originalCodecValue) : liveProfileCodecValue)
+    : liveCodecSetting;
+  const effectiveLiveCodec = effectiveLiveCodecValue.toUpperCase();
+  const effectiveLiveText = `${effectiveLiveWidth ?? '--'}x${effectiveLiveHeight ?? '--'} @ ${effectiveLiveFps ?? '--'} FPS · ${effectiveLiveCodec}${liveTranscodedFromHevc ? ' (transcod. de H265)' : ''}`;
+  const deliverySubtype = deliveryUsesOriginalProfile
+    ? (cameraMeta?.recordingSubtype ?? cam?.recordingSubtype ?? cameraMeta?.subtype ?? null)
+    : (cameraMeta?.liveSubtype ?? cam?.liveSubtype ?? cameraMeta?.subtype ?? null);
+  const configuredLiveText = liveUsesOriginalProfile
+    ? `Original/principal: ${originalStreamText}${originalCodecIsHevc ? ' · H265→H264' : ''} · subtype ${deliverySubtype ?? '--'}`
+    : `${configuredLiveResolution} @ ${form.streamFps || 'auto'} FPS · subtype ${deliverySubtype ?? '--'}`;
   const recordingModeCopy = getRecordingModeCopy(form.recordingMode);
 
   const startManualRecording = async () => {
@@ -1044,13 +1132,13 @@ export default function CameraDetailPage() {
         </button>
         <div className="flex flex-col leading-tight">
           <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-            Original: {originalStreamText} · {originalCodec} · {originalBitrate ?? '--'} kbps
+            Original/gravação: {originalStreamText} · {originalCodec} · {originalBitrate ?? '--'} kbps
           </span>
           <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground/80">
-            Perfil live: {configuredLiveText}
+            Entrega live: {effectiveLiveText} · protocolo {formatLiveProtocol(form.preferredLiveProtocol)}
           </span>
           <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            Regra gravação: {recordingModeCopy.detail}
+            Configuração live: {configuredLiveText}
           </span>
         </div>
       </div>
@@ -1078,7 +1166,15 @@ export default function CameraDetailPage() {
                   className="absolute inset-0 h-full w-full"
                   style={{ transform: `translate(${videoPan.x}px, ${videoPan.y}px) scale(${videoZoom})`, transformOrigin: 'center center' }}
                 >
-                  <LiveStreamPlayer cameraId={cam.id} cameraName={cam.name} className="absolute inset-0 h-full w-full" muted />
+                  <LiveStreamPlayer
+                    cameraId={cam.id}
+                    cameraName={cam.name}
+                    className="absolute inset-0 h-full w-full"
+                    muted
+                    showOverlay
+                    liveViewMode="selected"
+                    onStatusChange={setLivePlayerStatus}
+                  />
                 </div>
               ) : null}
               <div className="scan-line-overlay absolute inset-0" />
@@ -1162,10 +1258,26 @@ export default function CameraDetailPage() {
                   </p>
                   <div className="flex justify-between"><span className="text-muted-foreground">Localização</span><span>{cam.location}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Modelo</span><span className="font-mono">{cam.model}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Resolução</span><span className="font-mono">{cam.resolution}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">FPS</span><span className="font-mono">{cam.fps}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Codec</span><span className="font-mono uppercase">{cam.streamVideoCodec ?? cam.detectedVideoCodec ?? '—'}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Live</span><span className="font-mono uppercase">{cam.preferredLiveProtocol}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Original/gravação</span><span className="font-mono">{originalStreamText}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Codec original</span><span className="font-mono uppercase">{originalCodec}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Configuração Live</span><span className="max-w-[58%] text-right font-mono">{configuredLiveText}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Entrega Live</span><span className="font-mono">{effectiveLiveText}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Protocolo configurado</span><span className="font-mono">{formatLiveProtocol(form.preferredLiveProtocol || cam.preferredLiveProtocol)}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Protocolo ativo</span><span className="font-mono">{livePlayerStatus.activeProtocol ?? '--'}</span></div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Status do player</span>
+                    <span className="font-mono uppercase">{livePlayerStatus.state}</span>
+                  </div>
+                  {livePlayerStatus.reason ? (
+                    <div className="rounded-md border border-sky-500/25 bg-sky-500/10 px-2 py-1 text-[10px] leading-relaxed text-sky-700 dark:text-sky-200">
+                      {livePlayerStatus.reason}
+                    </div>
+                  ) : null}
+                  {liveUsesOriginalProfile && originalCodecIsHevc ? (
+                    <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[10px] leading-relaxed text-amber-700 dark:text-amber-200">
+                      O perfil original é HEVC. Para estabilidade no navegador, a live usa o perfil H.264 compatível; a gravação mantém o perfil original.
+                    </div>
+                  ) : null}
                   <div className="flex justify-between"><span className="text-muted-foreground">RTSP</span><span className="font-mono uppercase">{cam.preferredRtspTransport}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Áudio</span><span className="font-mono">{cam.hasAudio ? 'Sim' : 'Não'}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Retenção</span><span className="font-mono">{cam.retentionDays}d</span></div>
@@ -1405,6 +1517,18 @@ export default function CameraDetailPage() {
                               <option value="2">Substream 2 (2)</option>
                             </SettingsSelect>
                           </SettingsField>
+                          <SettingsField label="Canal Live" hint="Vazio = usa Canal legado">
+                            <SettingsInput type="number" min={1} value={form.liveChannel} onChange={(event) => updateField('liveChannel', event.target.value)} className="font-mono" />
+                          </SettingsField>
+                          <SettingsField label="Subtype Live" hint="Vazio = usa Perfil legado">
+                            <SettingsInput type="number" min={0} value={form.liveSubtype} onChange={(event) => updateField('liveSubtype', event.target.value)} className="font-mono" />
+                          </SettingsField>
+                          <SettingsField label="Canal Gravação" hint="Vazio = usa Canal legado">
+                            <SettingsInput type="number" min={1} value={form.recordingChannel} onChange={(event) => updateField('recordingChannel', event.target.value)} className="font-mono" />
+                          </SettingsField>
+                          <SettingsField label="Subtype Gravação" hint="Vazio = usa Perfil legado">
+                            <SettingsInput type="number" min={0} value={form.recordingSubtype} onChange={(event) => updateField('recordingSubtype', event.target.value)} className="font-mono" />
+                          </SettingsField>
                         </div>
                       </SettingsCard>
 
@@ -1412,6 +1536,7 @@ export default function CameraDetailPage() {
                         <div className="grid gap-3 md:grid-cols-3">
                           <SettingsField label="Codec">
                             <SettingsSelect value={form.streamVideoCodec} onChange={(event) => updateField('streamVideoCodec', event.target.value as CameraConfig['streamVideoCodec'])}>
+                              <option value="original">Original da câmera</option>
                               <option value="h264">H.264</option>
                               <option value="h265">H.265</option>
                               <option value="mjpeg">MJPEG</option>
@@ -1419,9 +1544,10 @@ export default function CameraDetailPage() {
                           </SettingsField>
                           <SettingsField label="Protocolo">
                             <SettingsSelect value={form.preferredLiveProtocol} onChange={(event) => updateField('preferredLiveProtocol', event.target.value as CameraConfig['preferredLiveProtocol'])}>
-                              <option value="flv">FLV</option>
-                              <option value="hls">HLS</option>
+                              <option value="auto">Padrão (WebRTC -&gt; LL-HLS -&gt; HLS)</option>
                               <option value="webrtc">WebRTC</option>
+                              <option value="llhls">LL-HLS</option>
+                              <option value="hls">HLS</option>
                               <option value="mjpeg">MJPEG</option>
                             </SettingsSelect>
                           </SettingsField>
@@ -1471,7 +1597,7 @@ export default function CameraDetailPage() {
                         />
                       </SettingsCard>
 
-                      <SettingsCard title="Gravação" description="Perfil salvo para playback e exportação. Codec fixo em H.264 para compatibilidade no navegador.">
+                      <SettingsCard title="Gravação" description="Perfil salvo para playback e exportação. Use Original/H.265 quando quiser preservar o stream da câmera; H.264 mantém maior compatibilidade web.">
                         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
                           <SettingsField label="Modo">
                             <SettingsSelect value={form.recordingMode} onChange={(event) => updateField('recordingMode', event.target.value as CameraConfig['recordingMode'])}>
@@ -1485,8 +1611,11 @@ export default function CameraDetailPage() {
                             <SettingsInput type="number" min={1} value={form.retentionDays} onChange={(event) => updateField('retentionDays', event.target.value)} className="font-mono" />
                           </SettingsField>
                           <SettingsField label="Codec">
-                            <SettingsSelect value={form.recordingVideoCodec} onChange={() => updateField('recordingVideoCodec', 'h264')}>
+                            <SettingsSelect value={form.recordingVideoCodec} onChange={(event) => updateField('recordingVideoCodec', event.target.value as CameraConfig['recordingVideoCodec'])}>
+                              <option value="original">Original da câmera</option>
                               <option value="h264">H.264</option>
+                              <option value="h265">H.265 / HEVC</option>
+                              <option value="mjpeg">MJPEG</option>
                             </SettingsSelect>
                           </SettingsField>
                           <SettingsField label="Resolução">
@@ -1512,13 +1641,37 @@ export default function CameraDetailPage() {
                         </div>
                       </SettingsCard>
 
-                      <SettingsCard title="Ajuste local" description="Configuração visual da interface, sem alterar a câmera física.">
-                        <div className="rounded-xl border border-border/80 bg-card px-4 py-4">
-                          <div className="mb-3 flex items-center justify-between gap-3">
-                            <span className="text-sm font-medium">Sensibilidade de movimento</span>
-                            <span className="rounded-md border border-border bg-background px-2 py-0.5 font-mono text-xs text-muted-foreground">{motionSensitivity[0] ?? 0}%</span>
-                          </div>
-                          <Slider value={motionSensitivity} onValueChange={setMotionSensitivity} max={100} className="w-full" />
+                      <SettingsCard title="Inteligência Artificial Híbrida" description="Gerencie como o servidor desperta para processar imagens.">
+                        <div className="space-y-4">
+                          <label className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="motionTrigger"
+                              value="SYSTEM"
+                              checked={form.motionTrigger === 'SYSTEM'}
+                              onChange={() => updateField('motionTrigger', 'SYSTEM')}
+                              className="h-4 w-4 accent-primary"
+                            />
+                            <div className="flex flex-col">
+                              <span className="text-sm font-medium">Servidor DRAC (Contínuo)</span>
+                              <span className="text-xs text-muted-foreground">O servidor analisa o vídeo 100% do tempo. (Alto uso de CPU)</span>
+                            </div>
+                          </label>
+                          <label className={`flex items-center gap-3 rounded-lg border p-3 cursor-pointer ${!form.hasEdgeAi ? 'opacity-50 grayscale' : 'hover:bg-muted/50'}`}>
+                            <input
+                              type="radio"
+                              name="motionTrigger"
+                              value="CAMERA"
+                              disabled={!form.hasEdgeAi}
+                              checked={form.motionTrigger === 'CAMERA'}
+                              onChange={() => updateField('motionTrigger', 'CAMERA')}
+                              className="h-4 w-4 accent-primary"
+                            />
+                            <div className="flex flex-col">
+                              <span className="text-sm font-medium">Câmera ONVIF (Gatilho)</span>
+                              <span className="text-xs text-muted-foreground">{form.hasEdgeAi ? 'A câmera acorda o servidor apenas quando há movimento. (Baixo uso de CPU)' : 'Não suportado: A câmera não possui suporte a eventos ONVIF.'}</span>
+                            </div>
+                          </label>
                         </div>
                       </SettingsCard>
                     </div>

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header, UploadFile, File
+from fastapi import FastAPI, HTTPException, Header, Query
 import os
 import uvicorn
 from pydantic import BaseModel
@@ -6,6 +6,8 @@ from typing import Optional, Dict
 import hmac
 from stream_processor import StreamProcessor
 from model_registry import registry
+from runtime_profiles import exposed_profiles
+from onnxruntime_session import inference_threading_status
 
 app = FastAPI(title="VMS AI Service", description="AI analysis service for VMS Drac")
 
@@ -15,11 +17,17 @@ processors: Dict[str, StreamProcessor] = {}
 class AnalysisRequest(BaseModel):
     camera_id: str
     rtsp_url: str
-    analysis_type: str  # 'motion', 'face', 'general', 'recognition'
+    analysis_type: str  # 'motion' = base only; 'face' and 'general' run with motion too.
 
 
 class ModeRequest(BaseModel):
     analysis_type: str
+
+
+class LiveViewLeaseRequest(BaseModel):
+    session_id: str
+    ttl_seconds: int = 20
+    view_mode: str = "grid"
 
 
 def validate_internal_token(x_service_token: Optional[str]):
@@ -35,19 +43,49 @@ def health_check():
         "status": "online",
         "service": "ai-service",
         "active_processors": list(processors.keys()),
-        "process_fps": os.getenv("AI_PROCESS_FPS", "2"),
-        "frame_size": f"{os.getenv('AI_FRAME_WIDTH', '320')}x{os.getenv('AI_FRAME_HEIGHT', '180')}",
-        "motion_debounce_seconds": os.getenv("AI_MOTION_DEBOUNCE_SECONDS", "30"),
-        "detect_debounce_seconds": os.getenv("AI_DETECT_DEBOUNCE_SECONDS", "10"),
+        "static_profiles": exposed_profiles(),
         "model_registry": registry.status(),
+        "inference_threading": inference_threading_status(),
         "processors": {
             camera_id: {
                 "analysis_type": processor.analysis_type,
+                "base_motion_enabled": True,
+                "advanced_analysis_type": processor.advanced_analysis_type,
+                "runtime_profile": processor.profile,
+                "process_fps": processor.process_fps,
+                "advanced_process_fps": processor.advanced_process_fps,
                 "last_seen": processor.last_seen,
+                "last_error": processor.last_error,
                 "running": processor.running,
+                "live_snapshot_count": len(processor.get_live_snapshot(max_age_ms=15000, limit=100)),
+                "capture_frames_enqueued": processor.capture_frames_enqueued,
+                "capture_frames_dropped": processor.capture_frames_dropped,
+                "motion_trigger": processor.motion_trigger,
+                "wakeup_until": processor.wakeup_until,
+                "hibernating": processor.motion_trigger == "CAMERA" and __import__("time").time() >= processor.wakeup_until,
+                "live_view": processor.live_view_state(),
+                "performance": processor.performance_state(),
             }
             for camera_id, processor in processors.items()
         },
+    }
+
+
+@app.get("/detections/latest/{camera_id}")
+async def latest_detections(
+    camera_id: str,
+    max_age_ms: int = Query(default=5000, ge=200, le=30000),
+    limit: int = Query(default=12, ge=1, le=50),
+    x_service_token: Optional[str] = Header(default=None),
+):
+    validate_internal_token(x_service_token)
+    processor = processors.get(camera_id)
+    if processor is None:
+        return {"status": "not_running", "camera_id": camera_id, "detections": []}
+    return {
+        "status": "ok",
+        "camera_id": camera_id,
+        "detections": processor.get_live_snapshot(max_age_ms=max_age_ms, limit=limit),
     }
 
 @app.post("/analyze/start")
@@ -59,7 +97,13 @@ async def start_analysis(request: AnalysisRequest, x_service_token: Optional[str
     api_url = os.getenv("API_URL", "http://api:3000")
     service_token = os.getenv("INTERNAL_SERVICE_TOKEN", "change_me_service_token")
     
-    processor = StreamProcessor(request.camera_id, request.rtsp_url, api_url, service_token, request.analysis_type)
+    processor = StreamProcessor(
+        request.camera_id,
+        request.rtsp_url,
+        api_url,
+        service_token,
+        request.analysis_type,
+    )
     processor.start()
     processors[request.camera_id] = processor
     
@@ -75,6 +119,58 @@ async def stop_analysis(camera_id: str, x_service_token: Optional[str] = Header(
     processor.stop()
     
     return {"status": "stopped", "camera_id": camera_id}
+
+@app.post("/analyze/wakeup/{camera_id}")
+async def wakeup_camera(camera_id: str, duration_seconds: int = Query(20, ge=5, le=300), x_service_token: Optional[str] = Header(default=None)):
+    validate_internal_token(x_service_token)
+    processor = processors.get(camera_id)
+    if not processor:
+        raise HTTPException(status_code=404, detail="Processador não encontrado")
+    import time
+    now = time.time()
+    if now < processor.wakeup_until:
+        return {"status": "already_awake", "camera_id": camera_id, "until": processor.wakeup_until}
+    processor.wakeup_until = time.time() + duration_seconds
+    return {"status": "awoken", "camera_id": camera_id, "until": processor.wakeup_until}
+
+
+@app.post("/live-view/start/{camera_id}")
+async def start_live_view(camera_id: str, request: LiveViewLeaseRequest, x_service_token: Optional[str] = Header(default=None)):
+    validate_internal_token(x_service_token)
+    processor = processors.get(camera_id)
+    if not processor:
+        return {"status": "not_running", "camera_id": camera_id, "session_id": request.session_id}
+    try:
+        lease = processor.touch_live_view_session(request.session_id, request.ttl_seconds, request.view_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"camera_id": camera_id, **lease}
+
+
+@app.post("/live-view/heartbeat/{camera_id}")
+async def heartbeat_live_view(camera_id: str, request: LiveViewLeaseRequest, x_service_token: Optional[str] = Header(default=None)):
+    validate_internal_token(x_service_token)
+    processor = processors.get(camera_id)
+    if not processor:
+        return {"status": "not_running", "camera_id": camera_id, "session_id": request.session_id}
+    try:
+        lease = processor.touch_live_view_session(request.session_id, request.ttl_seconds, request.view_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"camera_id": camera_id, **lease}
+
+
+@app.post("/live-view/stop/{camera_id}")
+async def stop_live_view(camera_id: str, request: LiveViewLeaseRequest, x_service_token: Optional[str] = Header(default=None)):
+    validate_internal_token(x_service_token)
+    processor = processors.get(camera_id)
+    if not processor:
+        return {"status": "not_running", "camera_id": camera_id, "session_id": request.session_id}
+    try:
+        lease = processor.stop_live_view_session(request.session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"camera_id": camera_id, **lease}
 
 
 @app.post("/analyze/stop-all")
@@ -104,56 +200,6 @@ async def load_model(request: ModeRequest, x_service_token: Optional[str] = Head
         raise HTTPException(status_code=500, detail=str(exc))
     return {"status": "loaded", "model_registry": registry.status()}
 
-
-_embed_app = None
-
-
-def get_embed_app():
-    global _embed_app
-    if _embed_app is not None:
-        return _embed_app
-    try:
-        from insightface.app import FaceAnalysis
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"insightface indisponível: {exc}")
-    pack = os.getenv("AI_FACE_PACK_REC", "buffalo_l")
-    det_size = int(os.getenv("AI_FACE_DET_SIZE", "640"))
-    app_rec = FaceAnalysis(
-        name=pack,
-        root=os.getenv("AI_MODELS_DIR", "/app/models"),
-        providers=["CPUExecutionProvider"],
-    )
-    app_rec.prepare(ctx_id=-1, det_size=(det_size, det_size))
-    _embed_app = app_rec
-    return _embed_app
-
-
-@app.post("/embed")
-async def embed(file: UploadFile = File(...), x_service_token: Optional[str] = Header(default=None)):
-    validate_internal_token(x_service_token)
-    try:
-        import cv2
-        import numpy as np
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"opencv/numpy indisponível: {exc}")
-
-    raw = await file.read()
-    img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        raise HTTPException(status_code=422, detail="Imagem inválida.")
-
-    faces = get_embed_app().get(img)
-    if not faces:
-        raise HTTPException(status_code=422, detail="Nenhum rosto detectado na imagem.")
-    face = max(faces, key=lambda f: float((f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])))
-    embedding = getattr(face, "normed_embedding", None)
-    if embedding is None:
-        raise HTTPException(status_code=422, detail="Não foi possível gerar embedding facial.")
-    return {
-        "embedding": embedding.tolist(),
-        "detScore": float(getattr(face, "det_score", 0.0)),
-        "bbox": [int(v) for v in face.bbox],
-    }
 
 if __name__ == "__main__":
     port = int(os.getenv("AI_PORT", 8000))

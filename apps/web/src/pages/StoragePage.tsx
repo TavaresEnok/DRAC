@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { ChevronRight, HardDrive, ShieldAlert, Thermometer, Server, Gauge, RefreshCw, FileText } from 'lucide-react';
+import { HardDrive, ShieldAlert, Thermometer, Server, RefreshCw, FileText, Cpu, MemoryStick, Activity } from 'lucide-react';
 import { useVmsDataStore } from '../store/vmsDataStore';
 import { useAuthStore } from '../store/authStore';
 import { getApiBaseUrl } from '../lib/api-base';
@@ -84,6 +84,9 @@ export default function MonitoramentoPage() {
   const used = system ? system.disk.usedBytes / 1024 / 1024 / 1024 / 1024 : 0;
   const free = system ? system.disk.freeBytes / 1024 / 1024 / 1024 / 1024 : 0;
   const percent = system?.disk.usagePercent ?? 0;
+  const cpuUsage = system ? Math.min(100, Math.round(((system.server.loadAverage[0] ?? 0) / Math.max(system.server.cpuCount, 1)) * 100)) : 0;
+  const ramUsage = system ? Math.min(100, Math.round(((system.server.totalMemoryBytes - system.server.freeMemoryBytes) / Math.max(system.server.totalMemoryBytes, 1)) * 100)) : 0;
+  const streamCount = cameras.filter((camera) => camera.isOnline).length;
 
   return (
     <div className="p-6 space-y-6">
@@ -107,6 +110,51 @@ export default function MonitoramentoPage() {
           <div className="bg-card border border-card-border rounded-xl p-4"><div className="text-[10px] uppercase text-[hsl(var(--muted-foreground))]">Livre</div><div className="mt-2 text-2xl font-semibold">{free.toFixed(1)} TB</div></div>
         </div>
       </div>
+      <section className="rounded-2xl border border-border bg-card shadow-sm">
+        <div className="flex items-start justify-between gap-4 border-b border-border/70 px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-muted-foreground">Infra</p>
+            <h3 className="mt-1 text-[15px] font-semibold tracking-tight text-foreground">Telemetria do sistema</h3>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">Carga atual consolidada do servidor.</p>
+          </div>
+        </div>
+        <div className="px-5 py-4">
+          <div className="space-y-3">
+            {[
+              { label: 'CPU', value: cpuUsage, unit: '%', icon: Cpu },
+              { label: 'RAM', value: ramUsage, unit: '%', icon: MemoryStick },
+              { label: 'Disco', value: percent, unit: '%', icon: HardDrive },
+              { label: 'Streams', value: streamCount, unit: '', icon: Activity },
+            ].map((metric) => {
+              const Icon = metric.icon;
+              const pct = metric.unit === '%' ? metric.value : Math.min(100, (metric.value / 200) * 100);
+              const barColor = pct > 82 ? 'hsl(354,52%,52%)' : pct > 62 ? 'hsl(38,58%,54%)' : 'hsl(213,68%,57%)';
+              return (
+                <div key={metric.label} className="grid grid-cols-[18px_56px_1fr_58px] items-center gap-2">
+                  <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-[10px] text-muted-foreground">{metric.label}</span>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-border/70">
+                    <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, pct)}%`, background: barColor }} />
+                  </div>
+                  <span className="text-right font-mono text-[10px] tabular-nums">{metric.value.toFixed(0)}{metric.unit}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-4 rounded-xl border border-border/80 bg-background px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-semibold">{system?.server.hostname ?? 'Servidor'}</div>
+                <div className="mt-0.5 text-[10px] text-muted-foreground">{system?.recordingsRoot ?? '/storage'} · {cameras.length} câmeras</div>
+              </div>
+              <div className="text-right">
+                <div className="text-[11px] font-semibold">{cpuUsage}% CPU</div>
+                <div className="mt-0.5 text-[10px] text-muted-foreground">{ramUsage}% RAM</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
       <div className="bg-card border border-card-border rounded-xl">
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <div>

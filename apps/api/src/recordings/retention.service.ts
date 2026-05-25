@@ -4,6 +4,7 @@ import { existsSync, rmSync, readdirSync, rmdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { ConfigService } from '@nestjs/config';
+import { SettingsService } from '../settings/settings.service';
 import { ensureFileUnderRoot } from './helpers/safe-file.helper';
 
 @Injectable()
@@ -14,6 +15,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly settings: SettingsService,
   ) {}
 
   onModuleInit() {
@@ -44,7 +46,8 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
   }
 
   async handleRetention() {
-    const globalDays = parseInt(this.config.get('RECORDING_RETENTION_DAYS') || '7');
+    const configuredDays = await this.settings.getDefaultRetentionDays().catch(() => 0);
+    const globalDays = configuredDays > 0 ? configuredDays : parseInt(this.config.get('RECORDING_RETENTION_DAYS') || '7');
     this.logger.log(`Iniciando verificação de retenção (global=${globalDays} dias, com override por câmera)...`);
 
     // Ler legal holds ativos para proteger evidências
@@ -204,8 +207,13 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
       const percent = parseInt(percentStr);
 
       if (percent > 90) {
+        const autoCleanup = await this.settings.isAutoCleanupEnabled().catch(() => true);
+        if (!autoCleanup) {
+          this.logger.warn(`Espaço em disco CRÍTICO: ${percent}%. Limpeza automática desativada nas configurações; nenhuma remoção será feita.`);
+          return;
+        }
         this.logger.warn(`Espaço em disco CRÍTICO: ${percent}%. Iniciando limpeza agressiva...`);
-        
+
         // Deletar os 100 registros mais antigos
         const oldest = await this.prisma.recording.findMany({
           orderBy: { startedAt: 'asc' },

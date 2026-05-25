@@ -69,12 +69,13 @@ function mapUser(user: LoginResponse['user'] | MeResponse): AuthUser {
 function getStoredUser(): AuthUser | null {
   if (typeof window === 'undefined') return null;
 
-  const raw = window.sessionStorage.getItem(USER_STORAGE_KEY);
+  const raw = window.localStorage.getItem(USER_STORAGE_KEY) ?? window.sessionStorage.getItem(USER_STORAGE_KEY);
   if (!raw) return null;
 
   try {
     return JSON.parse(raw) as AuthUser;
   } catch {
+    window.localStorage.removeItem(USER_STORAGE_KEY);
     window.sessionStorage.removeItem(USER_STORAGE_KEY);
     return null;
   }
@@ -84,14 +85,18 @@ function persistSession(accessToken: string | null, user: AuthUser | null) {
   if (typeof window === 'undefined') return;
 
   if (accessToken) {
-    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
+    window.localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
+    window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
   } else {
+    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
     window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
   }
 
   if (user) {
-    window.sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+    window.localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+    window.sessionStorage.removeItem(USER_STORAGE_KEY);
   } else {
+    window.localStorage.removeItem(USER_STORAGE_KEY);
     window.sessionStorage.removeItem(USER_STORAGE_KEY);
   }
 }
@@ -108,7 +113,7 @@ async function fetchMe(accessToken: string) {
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: getStoredUser(),
-  accessToken: typeof window === 'undefined' ? null : window.sessionStorage.getItem(TOKEN_STORAGE_KEY),
+  accessToken: typeof window === 'undefined' ? null : (window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? window.sessionStorage.getItem(TOKEN_STORAGE_KEY)),
   isAuthenticated: false,
   isLoading: false,
   isBootstrapped: false,

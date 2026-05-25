@@ -306,8 +306,9 @@ export default function PTZPage() {
                 cameraId={selectedCam.id}
                 cameraName={selectedCam.name}
                 className="absolute inset-0 h-full w-full"
-                muted={!selectedCam.hasAudio}
+                muted
                 showOverlay
+                liveViewMode="selected"
               />
             ) : null}
 

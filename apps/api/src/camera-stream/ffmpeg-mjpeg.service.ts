@@ -6,7 +6,7 @@ import { execFile, spawn, spawnSync, type ChildProcessByStdio } from 'child_proc
 import { type Readable } from 'stream';
 import { promisify } from 'util';
 import { CamerasService } from '../cameras/cameras.service';
-import { buildRtspUrl } from '../cameras/helpers/rtsp-url.helper';
+import { buildRtspUrl, resolveDeliveryRtspProfile } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { MediamtxProxyService } from './mediamtx-proxy.service';
 
@@ -194,7 +194,9 @@ export class FfmpegMjpegService {
           '-c:v',
           'libx264',
           '-preset',
-          'ultrafast',
+          'superfast',
+          '-crf',
+          '22',
           '-tune',
           'zerolatency',
           '-pix_fmt',
@@ -242,8 +244,16 @@ export class FfmpegMjpegService {
 
   private buildAttempts(urls: string[], camera?: Camera): StreamAttempt[] {
     const transports = this.getTransportCandidates(camera);
-    const codec = (camera?.streamVideoCodec ?? camera?.detectedVideoCodec ?? '').toLowerCase();
-    const browserNeedsH264 = codec.includes('h265') || codec.includes('hevc') || codec.includes('265');
+    const selectedCodec = (camera?.streamVideoCodec ?? '').toLowerCase();
+    const detectedCodec = (camera?.detectedVideoCodec ?? '').toLowerCase();
+    const passthroughOriginal = selectedCodec === '' || selectedCodec === 'original';
+    const codecForDecision = passthroughOriginal ? detectedCodec : selectedCodec;
+    const sourceIsHevc =
+      codecForDecision.includes('h265') ||
+      codecForDecision.includes('hevc') ||
+      codecForDecision.includes('265');
+    // FLV no navegador precisa sair em H.264; "original" com fonte HEVC não pode usar copy.
+    const browserNeedsH264 = sourceIsHevc;
     const forceTranscode = Boolean(
       browserNeedsH264 ||
       camera?.streamFps ||
@@ -328,6 +338,10 @@ export class FfmpegMjpegService {
       String(this.config.analyzedurationUs),
       '-i',
       rtspUrl,
+      '-an',
+      '-sn',
+      '-vf',
+      'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuvj420p',
       '-frames:v',
       '1',
       '-q:v',
@@ -413,6 +427,21 @@ export class FfmpegMjpegService {
     }
   }
 
+  private async getMediamtxLiveSource(cameraId: string) {
+    if (!this.mediamtxProxyService.isEnabled()) return null;
+    try {
+      const ensured = await this.mediamtxProxyService.ensurePathForCamera(cameraId);
+      const internalUrl = this.mediamtxProxyService.buildInternalRtspUrl(ensured.pathName);
+      if (internalUrl) {
+        this.logger.debug(`FLV usando restream interno MediaMTX camera=${cameraId}: ${internalUrl}`);
+      }
+      return internalUrl;
+    } catch (error) {
+      this.logger.debug(`FLV seguirá por RTSP direto; MediaMTX indisponível camera=${cameraId}: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
   // Deprecated overload kept internal for compatibility with existing call sites.
   private tryStartFlvProcess(rtspUrl: string, transport: RtspTransport, transcodeVideo: boolean, camera?: Camera) {
     const ffmpegArgs = this.buildFfmpegFlvArgs(rtspUrl, transport, transcodeVideo, camera);
@@ -432,14 +461,15 @@ export class FfmpegMjpegService {
 
   private buildCameraRtspUrl(camera: Camera, password: string, subtypeOverride?: number): string {
     const hasRtspPath = typeof camera.rtspPath === 'string' && camera.rtspPath.trim().length > 0;
+    const liveProfile = resolveDeliveryRtspProfile(camera);
     return buildRtspUrl({
       username: camera.username,
       password,
       ip: camera.ip,
       rtspPort: camera.rtspPort,
       rtspPath: hasRtspPath ? camera.rtspPath : undefined,
-      channel: camera.channel,
-      subtype: subtypeOverride ?? camera.subtype,
+      channel: liveProfile.channel,
+      subtype: subtypeOverride ?? liveProfile.subtype,
     });
   }
 
@@ -517,9 +547,11 @@ export class FfmpegMjpegService {
     const password = this.cryptoService.decrypt(camera.passwordEncrypted);
     const primaryUrl = this.buildCameraRtspUrl(camera, password);
     const fallbackUrl = camera.subtype !== 0 ? this.buildCameraRtspUrl(camera, password, 0) : null;
-    const urls = fallbackUrl ? [primaryUrl, fallbackUrl] : [primaryUrl];
-    const expandedUrls = this.expandUrlsWithPortFallbacks(urls, camera.rtspPort);
-    const attempts = this.buildAttempts(expandedUrls, camera);
+    const directUrls = fallbackUrl ? [primaryUrl, fallbackUrl] : [primaryUrl];
+    const expandedDirectUrls = this.expandUrlsWithPortFallbacks(directUrls, camera.rtspPort);
+    const mediamtxUrl = await this.getMediamtxLiveSource(cameraId);
+    const urls = Array.from(new Set([...(mediamtxUrl ? [mediamtxUrl] : []), ...expandedDirectUrls]));
+    const attempts = this.buildAttempts(urls, camera);
 
     let index = 0;
     let activeProc: ChildProcessByStdio<null, Readable, Readable> | null = null;

@@ -33,7 +33,7 @@ export default function LoginPage() {
   };
 
   useEffect(() => {
-    if (isAuthenticated) setLocation('/dashboard');
+    if (isAuthenticated) setLocation('/live');
   }, [isAuthenticated, setLocation]);
 
   useEffect(() => {
@@ -49,7 +49,7 @@ export default function LoginPage() {
     setError('');
     try {
       await login(username, password);
-      setLocation('/dashboard');
+      setLocation('/live');
     } catch (error) {
       setError(getLoginErrorMessage(error));
     } finally {

@@ -144,6 +144,13 @@ export class RecordingsService {
       throw new NotFoundException('Arquivo de gravação não encontrado no disco.');
     }
 
+    // Auto-detect H.265 or incompatible codec and transparently transcode to H.264 for the browser.
+    // The compatible file is cached in .playback-compatible/ so the transcoding only happens once.
+    const needsCompat = await this.shouldPreferCompatiblePlayback(recordingId).catch(() => false);
+    if (needsCompat) {
+      return this.streamRecordingCompatible(recordingId, res);
+    }
+
     const stats = statSync(filePath);
     const fileSize = stats.size;
     const range = res.req.headers.range;
@@ -198,6 +205,8 @@ export class RecordingsService {
       return outputPath;
     }
 
+    // Transcode H.265 (or any incompatible codec) → H.264 preserving original resolution and quality.
+    // CRF 18 = visually lossless. scale=iw:ih preserves original dimensions from the camera.
     try {
       await execFileAsync('ffmpeg', [
         '-y',
@@ -211,27 +220,25 @@ export class RecordingsService {
         'libx264',
         '-preset',
         'ultrafast',
+        '-crf',
+        '18',
         '-profile:v',
-        'baseline',
+        'high',
         '-level',
-        '3.1',
+        '4.1',
         '-pix_fmt',
         'yuv420p',
-        '-tune',
-        'zerolatency',
-        '-vf',
-        'scale=min(1280\\,iw):-2',
         '-c:a',
         'aac',
         '-ar',
         '44100',
         '-ac',
-        '1',
+        '2',
         '-movflags',
         '+faststart',
         outputPath,
       ], {
-        timeout: 120000,
+        timeout: 300000,  // 5 min max for large files
         maxBuffer: 8 * 1024 * 1024,
       });
     } catch (error) {

@@ -27,11 +27,16 @@ hls: yes
 hlsAddress: :8888
 hlsAllowOrigins: ['*']
 hlsAlwaysRemux: true
-hlsVariant: fmp4
+hlsVariant: lowLatency
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentCount: 7
 
 webrtc: yes
 webrtcAddress: :8889
 webrtcAllowOrigins: ['*']
+webrtcLocalUDPAddress: :8189
+webrtcAdditionalHosts: ['168.194.13.70']
 
 pathDefaults:
   rtspTransport: tcp

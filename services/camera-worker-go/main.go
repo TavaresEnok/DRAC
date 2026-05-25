@@ -37,6 +37,8 @@ type Camera struct {
 	RtspPath          string `json:"rtspPath"`
 	Channel           int    `json:"channel"`
 	Subtype           int    `json:"subtype"`
+	RecordingChannel  *int   `json:"recordingChannel"`
+	RecordingSubtype  *int   `json:"recordingSubtype"`
 	Status            string `json:"status"`
 	RecordingEnabled  bool   `json:"recordingEnabled"`
 	PreferredRtspTransport string `json:"preferredRtspTransport"`
@@ -340,10 +342,20 @@ func _decryptWithKey(payload, secret string) (string, error) {
 func buildRtspURL(cam Camera, password string) string {
 	// rtsp://username:password@ip:port/path
 	// Simplificado para o exemplo, em produção tratar caracteres especiais
+	recordingChannel := cam.Channel
+	if cam.RecordingChannel != nil && *cam.RecordingChannel > 0 {
+		recordingChannel = *cam.RecordingChannel
+	}
+	recordingSubtype := cam.Subtype
+	if cam.RecordingSubtype != nil && *cam.RecordingSubtype >= 0 {
+		recordingSubtype = *cam.RecordingSubtype
+	}
 	path := cam.RtspPath
 	if path == "" {
-		path = fmt.Sprintf("Streaming/Channels/%d%02d", cam.Channel, cam.Subtype)
+		path = fmt.Sprintf("Streaming/Channels/%d%02d", recordingChannel, recordingSubtype)
 	}
+	path = strings.ReplaceAll(path, fmt.Sprintf("channel=%d", cam.Channel), fmt.Sprintf("channel=%d", recordingChannel))
+	path = strings.ReplaceAll(path, fmt.Sprintf("subtype=%d", cam.Subtype), fmt.Sprintf("subtype=%d", recordingSubtype))
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}

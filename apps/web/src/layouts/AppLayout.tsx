@@ -11,7 +11,6 @@ import { useThemeStore } from '../store/themeStore';
 import { useVmsDataStore } from '../store/vmsDataStore';
 
 const PAGE_TITLES: Record<string, string> = {
-  '/dashboard':    'Central de Comando',
   '/live':         'Ao Vivo',
   '/playback':     'Reprodução',
   '/events':       'Log de Eventos',
@@ -33,20 +32,19 @@ const PAGE_TITLES: Record<string, string> = {
 
 const SHORTCUTS = [
   { key: 'Ctrl + K', description: 'Abrir paleta de comandos' },
-  { key: 'Alt + 1',  description: 'Painel' },
-  { key: 'Alt + 2',  description: 'Ao Vivo' },
-  { key: 'Alt + 3',  description: 'Reprodução' },
-  { key: 'Alt + 4',  description: 'Câmeras' },
-  { key: 'Alt + 5',  description: 'Monitoramento' },
-  { key: 'Alt + 6',  description: 'Usuários' },
-  { key: 'Alt + 7',  description: 'Configurações' },
+  { key: 'Alt + 1',  description: 'Ao Vivo' },
+  { key: 'Alt + 2',  description: 'Reprodução' },
+  { key: 'Alt + 3',  description: 'Câmeras' },
+  { key: 'Alt + 4',  description: 'Monitoramento' },
+  { key: 'Alt + 5',  description: 'Usuários' },
+  { key: 'Alt + 6',  description: 'Configurações' },
   { key: 'G',        description: 'Alternar layout em grade' },
   { key: 'W',        description: 'Alternar modo mural em tela cheia' },
   { key: 'Esc',      description: 'Fechar painel / diálogo' },
   { key: '?',        description: 'Mostrar atalhos' },
 ];
 
-const PAGE_PATHS = ['/dashboard', '/live', '/playback', '/cameras', '/storage', '/users', '/settings'];
+const PAGE_PATHS = ['/live', '/playback', '/cameras', '/storage', '/users', '/settings'];
 
 interface AppLayoutProps { children: React.ReactNode }
 

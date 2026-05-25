@@ -16,12 +16,15 @@ id_rsa.pub
 id_ed25519
 id_ed25519.pub
 *.sql
+!apps/api/prisma/migrations/**/*.sql
 *.dump
 secrets/
 pnpm-debug.log*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+apps/api/probe-*.js
+apps/api/check_ai.ts
 .DS_Store
 *.log
 apps/*/node_modules
@@ -38,3 +41,10 @@ concorrente/
 
 # Local planning/audit notes
 *.md
+!README.md
+!docs/
+!docs/**/*.md
+!apps/mobile/README.md
+!services/ai-service-python/README.md
+!services/camera-worker-go/README.md
+!legacy/README.md

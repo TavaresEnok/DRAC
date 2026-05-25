@@ -1,0 +1,5 @@
+ALTER TABLE "AiSettings"
+  DROP COLUMN IF EXISTS "fps",
+  DROP COLUMN IF EXISTS "faceProfile",
+  DROP COLUMN IF EXISTS "objProfile",
+  DROP COLUMN IF EXISTS "minConf";

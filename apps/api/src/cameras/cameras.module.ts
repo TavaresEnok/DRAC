@@ -7,11 +7,12 @@ import { CamerasController } from './cameras.controller';
 import { CamerasService } from './cameras.service';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { PortCheckerService } from '../common/network/port-checker.service';
+import { OnvifEventsService } from './onvif-events.service';
 
 @Module({
   imports: [AuditModule, AccessControlModule, AlarmsModule, forwardRef(() => RecordingsModule)],
   controllers: [CamerasController],
-  providers: [CamerasService, CryptoService, PortCheckerService],
-  exports: [CamerasService, CryptoService, PortCheckerService],
+  providers: [CamerasService, CryptoService, PortCheckerService, OnvifEventsService],
+  exports: [CamerasService, CryptoService, PortCheckerService, OnvifEventsService],
 })
 export class CamerasModule {}

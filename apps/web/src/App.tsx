@@ -13,7 +13,6 @@ import { useVmsDataStore } from './store/vmsDataStore';
 const queryClient = new QueryClient();
 
 const LoginPage = lazy(() => import('./pages/LoginPage'));
-const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const LiveViewPage = lazy(() => import('./pages/LiveViewPage'));
 const PlaybackPage = lazy(() => import('./pages/PlaybackPage'));
 const EventsPage = lazy(() => import('./pages/EventsPage'));
@@ -48,7 +47,7 @@ function ProtectedRoute({ component: Page, adminOnly = false }: { component: Rea
 
   useEffect(() => {
     if (isBootstrapped && !isAuthenticated) setLocation('/login');
-    if (isBootstrapped && isAuthenticated && adminOnly && user?.role !== 'admin') setLocation('/dashboard');
+    if (isBootstrapped && isAuthenticated && adminOnly && user?.role !== 'admin') setLocation('/live');
   }, [adminOnly, isAuthenticated, isBootstrapped, setLocation, user?.role]);
 
   if (!isBootstrapped || isLoading) {
@@ -67,7 +66,7 @@ function ProtectedRoute({ component: Page, adminOnly = false }: { component: Rea
 
 function RootRedirect() {
   const { isAuthenticated } = useAuthStore();
-  return isAuthenticated ? <Redirect to="/dashboard" /> : <Redirect to="/login" />;
+  return isAuthenticated ? <Redirect to="/live" /> : <Redirect to="/login" />;
 }
 
 function ThemeSync() {
@@ -89,9 +88,6 @@ function AppRoutes() {
   return (
     <Switch>
       <Route path="/login" component={LoginPage} />
-      <Route path="/dashboard">
-        {() => <ProtectedRoute component={DashboardPage} />}
-      </Route>
       <Route path="/live">
         {() => <ProtectedRoute component={LiveViewPage} />}
       </Route>
@@ -159,6 +155,16 @@ function App() {
 
   useEffect(() => {
     void bootstrap();
+  }, [bootstrap]);
+
+  // Periodically validate the session token (every 5 min).
+  // If the token expired while the browser was open, this detects it
+  // and redirects to login automatically — no more silent black screens.
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void bootstrap();
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(interval);
   }, [bootstrap]);
 
   useEffect(() => {

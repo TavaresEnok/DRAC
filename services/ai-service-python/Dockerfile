@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN mkdir -p /app/models
 
+ARG AI_SERVICE_SOURCE_REV=local
 COPY . .
 
 EXPOSE 8000

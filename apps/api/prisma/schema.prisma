@@ -69,6 +69,10 @@ model Camera {
   onvifProfileToken String?
   channel           Int          @default(1)
   subtype           Int          @default(0)
+  liveChannel       Int?
+  liveSubtype       Int?
+  recordingChannel  Int?
+  recordingSubtype  Int?
   status            CameraStatus @default(UNKNOWN)
   lastSeenAt        DateTime?
   siteId            String?
@@ -78,7 +82,7 @@ model Camera {
   recordingMode     String       @default("continuous")
   retentionDays     Int          @default(7)
   preferredRtspTransport String  @default("tcp")
-  preferredLiveProtocol  String  @default("flv")
+  preferredLiveProtocol  String  @default("auto")
   streamVideoCodec       String?
   streamWidth            Int?
   streamHeight           Int?
@@ -91,6 +95,8 @@ model Camera {
   recordingBitrateKbps   Int?
   audioEnabled           Boolean      @default(false)
   aiEnabled              Boolean      @default(true)
+  hasEdgeAi              Boolean      @default(false)
+  motionTrigger          String       @default("SYSTEM")
   detectedVideoCodec     String?
   detectedWidth          Int?
   detectedHeight         Int?
@@ -236,37 +242,10 @@ model User {
 }
 
 model AiSettings {
-  id        String   @id @default("global")
-  enabled   Boolean  @default(true)
-  mode      String   @default("motion")
-  fps       Float    @default(2)
-  updatedAt DateTime @updatedAt
-}
-
-model Person {
-  id         String          @id @default(uuid())
-  name       String
-  externalId String?
-  isActive   Boolean         @default(true)
-  notes      String?
-  createdAt  DateTime        @default(now())
-  updatedAt  DateTime        @updatedAt
-  embeddings FaceEmbedding[]
-
-  @@index([isActive])
-  @@index([name])
-}
-
-model FaceEmbedding {
-  id              String   @id @default(uuid())
-  personId        String
-  person          Person   @relation(fields: [personId], references: [id], onDelete: Cascade)
-  embedding       Json
-  sourceImagePath String?
-  detScore        Float?
-  createdAt       DateTime @default(now())
-
-  @@index([personId])
+  id             String   @id @default("global")
+  enabled        Boolean  @default(true)
+  mode           String   @default("motion")
+  updatedAt      DateTime @updatedAt
 }
 
 model AuditLog {
@@ -406,4 +385,17 @@ model CameraPermission {
   @@index([userId])
   @@index([cameraId])
   @@index([groupId])
+}
+
+model SystemSetting {
+  key             String   @id
+  value           String
+  updatedAt       DateTime @updatedAt @default(now())
+  updatedByUserId String?
+}
+
+model RolePermission {
+  role        UserRole @id
+  permissions Json
+  updatedAt   DateTime @updatedAt @default(now())
 }

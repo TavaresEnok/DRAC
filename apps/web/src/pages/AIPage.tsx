@@ -1,38 +1,27 @@
 import axios from 'axios';
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, Brain, Camera, CarFront, CircleDot, Fingerprint, RefreshCw, Save, UserPlus, Users } from 'lucide-react';
+import { Activity, Brain, Camera, RefreshCw, UserRound, Users } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { getApiBaseUrl } from '@/lib/api-base';
 import { useAuthStore } from '@/store/authStore';
 import { useVmsDataStore } from '@/store/vmsDataStore';
 
-type AiMode = 'motion' | 'face' | 'general' | 'recognition';
+type AiMode = 'motion' | 'face' | 'general';
 
 type AiSettings = {
   id: string;
   enabled: boolean;
   mode: AiMode;
-  fps: number;
   updatedAt: string;
-};
-
-type Person = {
-  id: string;
-  name: string;
-  externalId?: string | null;
-  isActive: boolean;
-  notes?: string | null;
-  embeddings?: Array<{ id: string; createdAt: string }>;
 };
 
 const API_URL = getApiBaseUrl();
 
 const MODES: Array<{ id: AiMode; title: string; description: string; icon: typeof Activity }> = [
-  { id: 'motion', title: 'Movimento', description: 'MOG2 leve para eventos e gravação por movimento.', icon: Activity },
-  { id: 'face', title: 'Rosto', description: 'SCRFD detecta presença de rosto sem rodar YOLO.', icon: Users },
-  { id: 'general', title: 'Geral', description: 'YOLO11n OpenVINO detecta pessoa, carro, moto e bicicleta.', icon: CarFront },
-  { id: 'recognition', title: 'Reconhecimento', description: 'SCRFD + ArcFace identifica pessoas cadastradas.', icon: Fingerprint },
+  { id: 'motion', title: 'Somente movimento', description: 'MOG2 leve no servidor. Pode coexistir como base dos outros módulos.', icon: Activity },
+  { id: 'face', title: 'Movimento + rosto', description: 'SCRFD-500M via ONNX Runtime CPU FP32. Não roda YOLO.', icon: Users },
+  { id: 'general', title: 'Movimento + pessoa', description: 'YOLO26n OpenVINO CPU FP32 restrito a pessoas. Não roda SCRFD.', icon: UserRound },
 ];
 
 function useApi() {
@@ -43,33 +32,34 @@ function useApi() {
   }), [token]);
 }
 
+function modelLabel(info: any) {
+  if (info?.analysis_type === 'face') return 'scrfd_500m';
+  if (info?.analysis_type === 'general') return 'yolo26n';
+  return 'motion';
+}
+
 export default function AIPage() {
   const client = useApi();
   const cameras = useVmsDataStore((state) => state.cameras);
   const loadData = useVmsDataStore((state) => state.load);
   const [settings, setSettings] = useState<AiSettings | null>(null);
   const [health, setHealth] = useState<any>(null);
-  const [people, setPeople] = useState<Person[]>([]);
-  const [personName, setPersonName] = useState('');
-  const [selectedPersonId, setSelectedPersonId] = useState('');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const aiEnabledCameras = cameras.filter((camera) => camera.aiEnabled).length;
 
   const refresh = async () => {
-    const [settingsRes, healthRes, peopleRes] = await Promise.all([
+    const [settingsRes, healthRes] = await Promise.all([
       client.get('/ai/settings'),
       client.get('/ai/health').catch(() => ({ data: null })),
-      client.get('/faces/persons').catch(() => ({ data: [] })),
     ]);
     setSettings(settingsRes.data);
     setHealth(healthRes.data);
-    setPeople(Array.isArray(peopleRes.data) ? peopleRes.data : []);
   };
 
   useEffect(() => {
+    void loadData();
     void refresh();
   }, []);
 
@@ -79,7 +69,7 @@ export default function AIPage() {
     try {
       const { data } = await client.patch('/ai/settings', patch);
       setSettings(data.settings);
-      setMessage('Runtime de IA sincronizado com o novo modo global.');
+      setMessage('Runtime de IA sincronizado.');
       await refresh();
     } finally {
       setSaving(false);
@@ -103,32 +93,7 @@ export default function AIPage() {
     await loadData();
   };
 
-  const createPerson = async () => {
-    if (!personName.trim()) return;
-    setSaving(true);
-    try {
-      await client.post('/faces/persons', { name: personName.trim() });
-      setPersonName('');
-      await refresh();
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const enroll = async () => {
-    if (!selectedPersonId || !selectedFile) return;
-    setSaving(true);
-    const form = new FormData();
-    form.append('file', selectedFile);
-    try {
-      await client.post(`/faces/persons/${selectedPersonId}/enroll`, form);
-      setSelectedFile(null);
-      await refresh();
-      setMessage('Face cadastrada na galeria de reconhecimento.');
-    } finally {
-      setSaving(false);
-    }
-  };
+  const processors = health?.processors ?? {};
 
   return (
     <div className="min-h-full bg-[radial-gradient(circle_at_top_left,hsl(var(--accent))_0,transparent_34rem)] p-4 md:p-6">
@@ -139,9 +104,9 @@ export default function AIPage() {
               <Brain className="h-3.5 w-3.5" />
               IA Central
             </p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight">Módulos de detecção e reconhecimento</h1>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight">Módulos de detecção</h1>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              O DRAC executa um único modo global por vez para proteger CPU/RAM. As câmeras abaixo apenas participam ou não do runtime ativo.
+              O DRAC mantém movimento como base leve. Os perfis de rosto e pessoa são fixos e controlados pelo sistema.
             </p>
           </div>
           <button
@@ -154,15 +119,14 @@ export default function AIPage() {
           </button>
         </header>
 
-        {message && (
-          <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">{message}</div>
-        )}
+        {message && <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">{message}</div>}
+        {health?.model_registry?.lastError && <div className="rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">{health.model_registry.lastError}</div>}
 
         <section className="grid gap-4 lg:grid-cols-[1.4fr_0.9fr]">
           <Card className="border-card-border bg-card/90">
             <CardHeader>
               <CardTitle>Modo global ativo</CardTitle>
-              <CardDescription>Escolha apenas um módulo para o sistema inteiro.</CardDescription>
+              <CardDescription>Escolha o módulo avançado do sistema inteiro. Movimento continua como base.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between rounded-2xl border border-border bg-background/60 p-4">
@@ -179,7 +143,7 @@ export default function AIPage() {
                 </button>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-3">
                 {MODES.map((mode) => {
                   const Icon = mode.icon;
                   const active = settings?.mode === mode.id;
@@ -188,9 +152,7 @@ export default function AIPage() {
                       key={mode.id}
                       onClick={() => saveSettings({ mode: mode.id })}
                       disabled={saving}
-                      className={`rounded-2xl border p-4 text-left transition ${
-                        active ? 'border-cyan-500/40 bg-cyan-500/10' : 'border-border bg-background/60 hover:bg-accent'
-                      }`}
+                      className={`rounded-2xl border p-4 text-left transition ${active ? 'border-cyan-500/40 bg-cyan-500/10' : 'border-border bg-background/60 hover:bg-accent'}`}
                     >
                       <div className="flex items-center justify-between gap-3">
                         <Icon className="h-5 w-5 text-cyan-400" />
@@ -202,110 +164,73 @@ export default function AIPage() {
                   );
                 })}
               </div>
+
             </CardContent>
           </Card>
 
           <Card className="border-card-border bg-card/90">
             <CardHeader>
               <CardTitle>Saúde do runtime</CardTitle>
-              <CardDescription>Modelos carregados e processadores ativos.</CardDescription>
+              <CardDescription>Modelos carregados e câmeras em análise.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3">
               {[
-                { label: 'Modo carregado', value: health?.model_registry?.mode ?? settings?.mode ?? '-' },
-                { label: 'Processadores ativos', value: String(Object.keys(health?.processors ?? {}).length) },
+                { label: 'Modo carregado', value: settings?.mode === 'motion' ? 'motion' : `motion + ${health?.model_registry?.mode ?? settings?.mode ?? '-'}` },
+                { label: 'Câmeras em análise', value: String(Object.keys(processors).length) },
                 { label: 'Câmeras participando', value: `${aiEnabledCameras}/${cameras.length}` },
-                { label: 'FPS global', value: String(settings?.fps ?? health?.process_fps ?? '-') },
+                { label: 'Perfil de execução', value: 'Fixo' },
               ].map((item) => (
                 <div key={item.label} className="rounded-2xl border border-border bg-background/60 p-4">
                   <p className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">{item.label}</p>
                   <p className="mt-1 text-xl font-semibold">{item.value}</p>
                 </div>
               ))}
-              {health?.model_registry?.lastError && (
-                <div className="rounded-2xl border border-red-500/25 bg-red-500/10 p-3 text-xs text-red-200">
-                  {health.model_registry.lastError}
+              <div className="rounded-2xl border border-border bg-background/60 p-4">
+                <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Câmeras processando</p>
+                <div className="space-y-2">
+                  {Object.keys(processors).length === 0 ? <p className="text-xs text-muted-foreground">Nenhuma câmera processando.</p> : null}
+                  {Object.entries(processors).map(([cameraId, info]: [string, any]) => {
+                    const cam = cameras.find((item) => item.id === cameraId);
+                    return (
+                      <div key={cameraId} className="rounded-xl bg-background/40 p-2 text-xs">
+                        <div className="flex items-center justify-between font-medium">
+                          <span className="truncate">{cam?.name || cameraId}</span>
+                          <span className={info.running ? 'text-emerald-400' : 'text-red-400'}>{info.running ? 'rodando' : 'parado'}</span>
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          {info.analysis_type} • modelo: {modelLabel(info)} • gatilho: {info.motion_trigger ?? 'SYSTEM'} • hibernação: {info.hibernating ? 'dormindo' : 'acordado'}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
+              </div>
             </CardContent>
           </Card>
         </section>
 
-        <section className="grid gap-4 lg:grid-cols-2">
-          <Card className="border-card-border bg-card/90">
-            <CardHeader>
-              <CardTitle>Câmeras no runtime</CardTitle>
-              <CardDescription>As câmeras não escolhem modo individual. Elas apenas participam do modo global.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {cameras.map((camera) => (
-                <div key={camera.id} className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-background/60 p-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <Camera className="h-4 w-4 text-muted-foreground" />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{camera.name}</p>
-                      <p className="text-xs text-muted-foreground">{camera.zone} • {camera.isOnline ? 'online' : 'offline'}</p>
-                    </div>
+        <Card className="border-card-border bg-card/90">
+          <CardHeader>
+            <CardTitle>Câmeras no runtime</CardTitle>
+            <CardDescription>As câmeras não escolhem modelo individual. Elas só participam ou ficam fora do runtime global.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {cameras.map((camera) => (
+              <div key={camera.id} className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-background/60 p-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <Camera className="h-4 w-4 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{camera.name}</p>
+                    <p className="text-xs text-muted-foreground">{camera.zone} • {camera.isOnline ? 'online' : 'offline'}</p>
                   </div>
-                  <button
-                    onClick={() => toggleCamera(camera.id, !camera.aiEnabled)}
-                    className={`rounded-xl px-3 py-1.5 text-xs font-semibold ${camera.aiEnabled ? 'bg-emerald-500/15 text-emerald-300' : 'border border-border text-muted-foreground'}`}
-                  >
-                    {camera.aiEnabled ? 'Participa' : 'Fora'}
-                  </button>
                 </div>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card className="border-card-border bg-card/90">
-            <CardHeader>
-              <CardTitle>Pessoas e reconhecimento facial</CardTitle>
-              <CardDescription>Cadastre pessoas e envie fotos para gerar embeddings ArcFace.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex gap-2">
-                <input
-                  value={personName}
-                  onChange={(event) => setPersonName(event.target.value)}
-                  placeholder="Nome da pessoa"
-                  className="h-10 flex-1 rounded-xl border border-border bg-background/70 px-3 text-sm outline-none"
-                />
-                <button onClick={createPerson} disabled={saving || !personName.trim()} className="inline-flex h-10 items-center gap-2 rounded-xl bg-foreground px-3 text-xs font-semibold text-background disabled:opacity-50">
-                  <UserPlus className="h-4 w-4" />
-                  Criar
+                <button onClick={() => toggleCamera(camera.id, !camera.aiEnabled)} className={`rounded-xl px-3 py-1.5 text-xs font-semibold ${camera.aiEnabled ? 'bg-emerald-500/15 text-emerald-300' : 'border border-border text-muted-foreground'}`}>
+                  {camera.aiEnabled ? 'Participa' : 'Fora'}
                 </button>
               </div>
-
-              <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
-                <select value={selectedPersonId} onChange={(event) => setSelectedPersonId(event.target.value)} className="h-10 rounded-xl border border-border bg-background/70 px-3 text-sm">
-                  <option value="">Selecionar pessoa</option>
-                  {people.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
-                </select>
-                <input type="file" accept="image/*" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} className="h-10 rounded-xl border border-border bg-background/70 px-3 py-2 text-xs" />
-                <button onClick={enroll} disabled={saving || !selectedPersonId || !selectedFile} className="inline-flex h-10 items-center gap-2 rounded-xl bg-cyan-500 px-3 text-xs font-semibold text-white disabled:opacity-50">
-                  <Save className="h-4 w-4" />
-                  Enroll
-                </button>
-              </div>
-
-              <div className="space-y-2">
-                {people.map((person) => (
-                  <div key={person.id} className="flex items-center justify-between rounded-2xl border border-border bg-background/60 p-3">
-                    <div>
-                      <p className="text-sm font-medium">{person.name}</p>
-                      <p className="text-xs text-muted-foreground">{person.embeddings?.length ?? 0} embedding(s)</p>
-                    </div>
-                    <span className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold ${person.isActive ? 'bg-emerald-500/10 text-emerald-300' : 'bg-muted text-muted-foreground'}`}>
-                      <CircleDot className="h-3 w-3" />
-                      {person.isActive ? 'Ativa' : 'Inativa'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </section>
+            ))}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

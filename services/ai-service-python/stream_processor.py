@@ -5,8 +5,11 @@ import requests
 import os
 import numpy as np
 from queue import Queue
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from detectors.motion import MotionDetector
 from model_registry import registry
+from runtime_profiles import MOTION_PROFILE, runtime_profile
 
 class StreamProcessor:
     def __init__(self, camera_id, rtsp_url, api_url, service_token, analysis_type="motion"):
@@ -15,18 +18,306 @@ class StreamProcessor:
         self.api_url = api_url
         self.service_token = service_token
         self.analysis_type = (analysis_type or "motion").strip().lower()
+        self.profile = runtime_profile(self.analysis_type)
+        self.motion_trigger = str(self.profile["motion_trigger"]).upper()
+        self.wakeup_until = 0
         self.running = False
         self.thread = None
         self.capture_thread = None
-        self.process_fps = max(0.2, float(os.getenv("AI_PROCESS_FPS", "2")))
-        self.frame_width = max(160, int(os.getenv("AI_FRAME_WIDTH", "320")))
-        self.frame_height = max(90, int(os.getenv("AI_FRAME_HEIGHT", "180")))
-        self.motion_pixels_threshold = max(1, int(os.getenv("AI_MOTION_PIXELS_THRESHOLD", "1800")))
-        self.motion_debounce_seconds = max(5, int(os.getenv("AI_MOTION_DEBOUNCE_SECONDS", "30")))
-        self.detect_debounce_seconds = max(1, int(os.getenv("AI_DETECT_DEBOUNCE_SECONDS", "10")))
+        self.base_process_fps = float(self.profile["detection_fps"])
+        self.base_advanced_process_fps = float(self.profile["detection_fps"])
+        self.base_frame_width = int(self.profile["analysis_width"])
+        self.base_frame_height = int(self.profile["analysis_height"])
+        self.selected_input_size = int(self.profile.get("imgsz", 0))
+        self.grid_process_fps = float(os.getenv("AI_GRID_DETECTION_FPS", "1.0"))
+        self.grid_advanced_process_fps = float(os.getenv("AI_GRID_DETECTION_FPS", str(self.grid_process_fps)))
+        self.grid_frame_width = int(os.getenv("AI_GRID_ANALYSIS_WIDTH", "640"))
+        self.grid_frame_height = int(os.getenv("AI_GRID_ANALYSIS_HEIGHT", "360"))
+        self.grid_input_size = int(os.getenv("AI_GRID_IMGSZ", "512"))
+        self.process_fps = self.base_process_fps
+        self.advanced_process_fps = self.base_advanced_process_fps
+        self.frame_width = self.base_frame_width
+        self.frame_height = self.base_frame_height
+        self.current_qos_mode = "base"
+        self.current_input_size_hint = self.selected_input_size if self.selected_input_size > 0 else None
+        self.qos_live_enabled = str(os.getenv("AI_QOS_LIVE_ENABLED", "true")).strip().lower() in ("1", "true", "yes", "on")
+        self.adaptive_feature_enabled = str(os.getenv("AI_ADAPTIVE_MODE", "true")).strip().lower() in ("1", "true", "yes", "on")
+        pilot_raw = str(os.getenv("AI_ADAPTIVE_PILOT_CAMERA_IDS", "*") or "").strip()
+        self.adaptive_pilot_raw = pilot_raw
+        self.adaptive_pilot_all = pilot_raw in ("", "*", "all", "ALL")
+        self.adaptive_pilot_ids = {
+            token.strip()
+            for token in pilot_raw.split(",")
+            if token.strip()
+        } if not self.adaptive_pilot_all else set()
+        self.adaptive_enabled = self.adaptive_feature_enabled and (
+            self.adaptive_pilot_all or self.camera_id in self.adaptive_pilot_ids
+        )
+        self.adaptive_window_seconds = max(3.0, float(os.getenv("AI_ADAPTIVE_WINDOW_SECONDS", "6")))
+        self.adaptive_degrade_cooldown_seconds = max(
+            2.0,
+            float(os.getenv("AI_ADAPTIVE_DEGRADE_COOLDOWN_SECONDS", "8")),
+        )
+        self.adaptive_recover_cooldown_seconds = max(
+            2.0,
+            float(os.getenv("AI_ADAPTIVE_RECOVER_COOLDOWN_SECONDS", "15")),
+        )
+        self.adaptive_drop_ratio_high = min(
+            0.95,
+            max(0.01, float(os.getenv("AI_ADAPTIVE_DROP_RATIO_HIGH", "0.12"))),
+        )
+        self.adaptive_drop_ratio_low = min(
+            0.5,
+            max(0.0, float(os.getenv("AI_ADAPTIVE_DROP_RATIO_LOW", "0.03"))),
+        )
+        self.adaptive_cpu_high = min(
+            99.0,
+            max(10.0, float(os.getenv("AI_ADAPTIVE_CPU_HIGH", "88"))),
+        )
+        self.adaptive_cpu_low = min(
+            95.0,
+            max(5.0, float(os.getenv("AI_ADAPTIVE_CPU_LOW", "68"))),
+        )
+        self._adaptive_state: dict[str, dict[str, int]] = {
+            "selected": {"fps_idx": 0, "imgsz_idx": 0, "res_idx": 0},
+            "grid": {"fps_idx": 0, "imgsz_idx": 0, "res_idx": 0},
+            "base": {"fps_idx": 0, "imgsz_idx": 0, "res_idx": 0},
+        }
+        self._adaptive_last_eval_at = 0.0
+        self._adaptive_last_change_at = 0.0
+        self._adaptive_last_metrics: dict[str, float | None] = {
+            "drop_ratio": 0.0,
+            "cpu_percent": None,
+            "window_enqueued": 0.0,
+            "window_dropped": 0.0,
+        }
+        self._adaptive_last_capture_enqueued = 0
+        self._adaptive_last_capture_dropped = 0
+        self._cpu_prev_total = None
+        self._cpu_prev_idle = None
+        self._adaptive_profiles = self._build_adaptive_profiles()
+        self.capture_loop_iterations = 0
+        self.process_loop_iterations = 0
+        self.advanced_infer_runs = 0
+        self.advanced_infer_errors = 0
+        self.advanced_infer_sum_ms = 0.0
+        self.advanced_infer_last_ms = 0.0
+        self.overlay_payload_frames = 0
+        self.overlay_empty_frames = 0
+        self.motion_debounce_seconds = int(MOTION_PROFILE["event_debounce_seconds"])
+        self.detect_debounce_seconds = int(self.profile["event_debounce_seconds"])
+        self.live_detection_hold_ms = int(self.profile["overlay_ttl_ms"])
+        self.show_after_hits = int(self.profile["show_after_hits"])
+        self.hide_after_misses = int(self.profile["hide_after_misses"])
+        self.lost_ttl_ms = int(self.profile["lost_ttl_ms"])
         self.frame_queue = Queue(maxsize=1)
-        self.last_event_time = 0
+        self.last_event_by_type = {}
         self.last_seen = 0
+        self.last_advanced_infer_at = 0
+        self.motion_detector = MotionDetector()
+        self.last_error = None
+        self._snapshot_lock = threading.Lock()
+        self._latest_detections = []
+        self._latest_detections_at = 0.0
+        self._pending_hit_count = 0
+        self._miss_count = 0
+        self.capture_frames_enqueued = 0
+        self.capture_frames_dropped = 0
+        self._live_view_lock = threading.Lock()
+        self._live_view_sessions: dict[str, dict[str, Any]] = {}
+        self.force_awake_until = 0.0
+        self._last_applied_qos_signature = None
+
+    @property
+    def advanced_analysis_type(self):
+        return None if self.analysis_type == "motion" else self.analysis_type
+
+    def _normalize_view_mode(self, view_mode: str | None) -> str:
+        normalized = (view_mode or "").strip().lower()
+        return "selected" if normalized == "selected" else "grid"
+
+    def _parse_float_list(self, raw: str, default: list[float]) -> list[float]:
+        values: list[float] = []
+        for part in str(raw or "").split(","):
+            token = part.strip()
+            if not token:
+                continue
+            try:
+                values.append(float(token))
+            except Exception:
+                continue
+        if not values:
+            return default
+        return values
+
+    def _parse_int_list(self, raw: str, default: list[int]) -> list[int]:
+        values: list[int] = []
+        for part in str(raw or "").split(","):
+            token = part.strip()
+            if not token:
+                continue
+            try:
+                values.append(int(token))
+            except Exception:
+                continue
+        if not values:
+            return default
+        return values
+
+    def _read_system_cpu_percent(self) -> float | None:
+        try:
+            with open("/proc/stat", "r", encoding="utf-8") as handle:
+                first = handle.readline().strip()
+            if not first.startswith("cpu "):
+                return None
+            parts = [int(item) for item in first.split()[1:] if item.isdigit()]
+            if len(parts) < 4:
+                return None
+            idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
+            total = sum(parts)
+            if self._cpu_prev_total is None or self._cpu_prev_idle is None:
+                self._cpu_prev_total = total
+                self._cpu_prev_idle = idle
+                return None
+            total_delta = total - self._cpu_prev_total
+            idle_delta = idle - self._cpu_prev_idle
+            self._cpu_prev_total = total
+            self._cpu_prev_idle = idle
+            if total_delta <= 0:
+                return None
+            busy = (total_delta - idle_delta) / total_delta
+            return max(0.0, min(100.0, busy * 100.0))
+        except Exception:
+            return None
+
+    def _build_adaptive_profiles(self) -> dict[str, dict[str, list[float] | list[int]]]:
+        selected_fps_factors = self._parse_float_list(
+            os.getenv("AI_ADAPTIVE_SELECTED_FPS_FACTORS", "1.0,0.85,0.70"),
+            [1.0, 0.85, 0.70],
+        )
+        grid_fps_factors = self._parse_float_list(
+            os.getenv("AI_ADAPTIVE_GRID_FPS_FACTORS", "1.0,0.85"),
+            [1.0, 0.85],
+        )
+        selected_imgsz_steps = self._parse_int_list(
+            os.getenv("AI_ADAPTIVE_SELECTED_IMGSZ_STEPS", "640,576,512,448,416"),
+            [640, 576, 512, 448, 416],
+        )
+        grid_imgsz_steps = self._parse_int_list(
+            os.getenv("AI_ADAPTIVE_GRID_IMGSZ_STEPS", "512,448,416"),
+            [512, 448, 416],
+        )
+        selected_resolution_scales = self._parse_float_list(
+            os.getenv("AI_ADAPTIVE_SELECTED_RESOLUTION_SCALES", "1.0,0.92,0.84,0.76"),
+            [1.0, 0.92, 0.84, 0.76],
+        )
+        grid_resolution_scales = self._parse_float_list(
+            os.getenv("AI_ADAPTIVE_GRID_RESOLUTION_SCALES", "1.0,0.90,0.80"),
+            [1.0, 0.90, 0.80],
+        )
+        return {
+            "selected": {
+                "fps_factors": selected_fps_factors,
+                "imgsz_steps": sorted(set(selected_imgsz_steps), reverse=True),
+                "resolution_scales": sorted(set(selected_resolution_scales), reverse=True),
+            },
+            "grid": {
+                "fps_factors": grid_fps_factors,
+                "imgsz_steps": sorted(set(grid_imgsz_steps), reverse=True),
+                "resolution_scales": sorted(set(grid_resolution_scales), reverse=True),
+            },
+            "base": {
+                "fps_factors": selected_fps_factors,
+                "imgsz_steps": sorted(set(selected_imgsz_steps), reverse=True),
+                "resolution_scales": sorted(set(selected_resolution_scales), reverse=True),
+            },
+        }
+
+    def _adaptive_profile_for_mode(self, qos_mode: str) -> dict[str, list[float] | list[int]]:
+        if qos_mode == "grid":
+            return self._adaptive_profiles["grid"]
+        return self._adaptive_profiles.get(qos_mode, self._adaptive_profiles["selected"])
+
+    def _advance_adaptive_degradation(self, mode_key: str):
+        state = self._adaptive_state.get(mode_key)
+        if state is None:
+            return
+        profile = self._adaptive_profile_for_mode(mode_key)
+        fps_factors = profile["fps_factors"]
+        imgsz_steps = profile["imgsz_steps"]
+        resolution_scales = profile["resolution_scales"]
+        if state["fps_idx"] < len(fps_factors) - 1:
+            state["fps_idx"] += 1
+            return
+        if state["imgsz_idx"] < len(imgsz_steps) - 1:
+            state["imgsz_idx"] += 1
+            return
+        if state["res_idx"] < len(resolution_scales) - 1:
+            state["res_idx"] += 1
+
+    def _relax_adaptive_degradation(self, mode_key: str):
+        state = self._adaptive_state.get(mode_key)
+        if state is None:
+            return
+        if state["res_idx"] > 0:
+            state["res_idx"] -= 1
+            return
+        if state["imgsz_idx"] > 0:
+            state["imgsz_idx"] -= 1
+            return
+        if state["fps_idx"] > 0:
+            state["fps_idx"] -= 1
+
+    def _adaptive_mode_key(self) -> str:
+        if self.current_qos_mode == "grid":
+            return "grid"
+        if self.current_qos_mode == "selected":
+            return "selected"
+        return "base"
+
+    def _evaluate_adaptive_degradation(self):
+        if not self.adaptive_enabled or not self.advanced_analysis_type:
+            return
+        now = time.time()
+        if now - self._adaptive_last_eval_at < self.adaptive_window_seconds:
+            return
+        self._adaptive_last_eval_at = now
+
+        delta_enqueued = max(0, self.capture_frames_enqueued - self._adaptive_last_capture_enqueued)
+        delta_dropped = max(0, self.capture_frames_dropped - self._adaptive_last_capture_dropped)
+        self._adaptive_last_capture_enqueued = self.capture_frames_enqueued
+        self._adaptive_last_capture_dropped = self.capture_frames_dropped
+        drop_ratio = float(delta_dropped) / float(max(1, delta_enqueued))
+        cpu_percent = self._read_system_cpu_percent()
+        mode_key = self._adaptive_mode_key()
+
+        overloaded = drop_ratio >= self.adaptive_drop_ratio_high
+        if cpu_percent is not None and cpu_percent >= self.adaptive_cpu_high:
+            overloaded = True
+        recovered = drop_ratio <= self.adaptive_drop_ratio_low
+        if cpu_percent is not None and cpu_percent > self.adaptive_cpu_low:
+            recovered = False
+
+        self._adaptive_last_metrics = {
+            "drop_ratio": drop_ratio,
+            "cpu_percent": cpu_percent,
+            "window_enqueued": float(delta_enqueued),
+            "window_dropped": float(delta_dropped),
+        }
+
+        elapsed_change = now - self._adaptive_last_change_at
+        if overloaded and elapsed_change >= self.adaptive_degrade_cooldown_seconds:
+            before = dict(self._adaptive_state[mode_key])
+            self._advance_adaptive_degradation(mode_key)
+            after = self._adaptive_state[mode_key]
+            if before != after:
+                self._adaptive_last_change_at = now
+        elif recovered and elapsed_change >= self.adaptive_recover_cooldown_seconds:
+            before = dict(self._adaptive_state[mode_key])
+            self._relax_adaptive_degradation(mode_key)
+            after = self._adaptive_state[mode_key]
+            if before != after:
+                self._adaptive_last_change_at = now
 
     def start(self):
         if self.running:
@@ -60,12 +351,224 @@ class StreamProcessor:
         except Exception:
             return "<rtsp-url-redacted>"
 
+    def _is_awake(self):
+        return self.motion_trigger != "CAMERA" or time.time() < self.wakeup_until or self._has_active_live_view_session()
+
+    def _cleanup_live_view_sessions_locked(self, now: float):
+        expired = [
+            session_id
+            for session_id, payload in self._live_view_sessions.items()
+            if float(payload.get("until", 0.0)) <= now
+        ]
+        for session_id in expired:
+            self._live_view_sessions.pop(session_id, None)
+        self.force_awake_until = max((float(payload.get("until", 0.0)) for payload in self._live_view_sessions.values()), default=0.0)
+
+    def _live_view_mode_counts_locked(self) -> dict[str, int]:
+        selected_count = 0
+        grid_count = 0
+        for payload in self._live_view_sessions.values():
+            mode = self._normalize_view_mode(str(payload.get("view_mode", "grid")))
+            if mode == "selected":
+                selected_count += 1
+            else:
+                grid_count += 1
+        return {"selected": selected_count, "grid": grid_count}
+
+    def _current_live_view_mode_locked(self) -> str | None:
+        counts = self._live_view_mode_counts_locked()
+        if counts["selected"] > 0:
+            return "selected"
+        if counts["grid"] > 0:
+            return "grid"
+        return None
+
+    def _apply_qos_mode(self, qos_mode: str):
+        if self.advanced_analysis_type:
+            if qos_mode == "grid":
+                process_fps = max(0.5, float(self.grid_process_fps))
+                advanced_fps = max(0.5, float(self.grid_advanced_process_fps))
+                frame_width = max(160, int(self.grid_frame_width))
+                frame_height = max(120, int(self.grid_frame_height))
+                input_size_hint = max(0, int(self.grid_input_size))
+            else:
+                process_fps = max(0.5, float(self.base_process_fps))
+                advanced_fps = max(0.5, float(self.base_advanced_process_fps))
+                frame_width = max(160, int(self.base_frame_width))
+                frame_height = max(120, int(self.base_frame_height))
+                input_size_hint = max(0, int(self.selected_input_size))
+            mode_key = "grid" if qos_mode == "grid" else "selected" if qos_mode == "selected" else "base"
+            if self.adaptive_enabled:
+                profile = self._adaptive_profile_for_mode(mode_key)
+                state = self._adaptive_state.get(mode_key, {"fps_idx": 0, "imgsz_idx": 0, "res_idx": 0})
+                fps_factors = profile["fps_factors"]
+                imgsz_steps = profile["imgsz_steps"]
+                resolution_scales = profile["resolution_scales"]
+                fps_index = max(0, min(int(state["fps_idx"]), len(fps_factors) - 1))
+                imgsz_index = max(0, min(int(state["imgsz_idx"]), len(imgsz_steps) - 1))
+                res_index = max(0, min(int(state["res_idx"]), len(resolution_scales) - 1))
+                process_fps = max(0.5, process_fps * float(fps_factors[fps_index]))
+                advanced_fps = max(0.5, advanced_fps * float(fps_factors[fps_index]))
+                input_size_hint = min(input_size_hint, max(128, int(imgsz_steps[imgsz_index])))
+                res_scale = max(0.4, min(1.0, float(resolution_scales[res_index])))
+                frame_width = max(160, int(round(frame_width * res_scale)))
+                frame_height = max(120, int(round(frame_height * res_scale)))
+        else:
+            process_fps = max(0.5, float(self.base_process_fps))
+            advanced_fps = max(0.5, float(self.base_advanced_process_fps))
+            frame_width = max(160, int(self.base_frame_width))
+            frame_height = max(120, int(self.base_frame_height))
+            input_size_hint = 0
+
+        self.process_fps = process_fps
+        self.advanced_process_fps = advanced_fps
+        self.frame_width = frame_width
+        self.frame_height = frame_height
+        self.current_input_size_hint = input_size_hint if input_size_hint > 0 else None
+        self.current_qos_mode = qos_mode
+
+    def _refresh_qos_mode_locked(self):
+        mode = self._current_live_view_mode_locked() if self.qos_live_enabled else None
+        target_qos_mode = "selected" if mode == "selected" else "grid" if mode == "grid" else "base"
+        mode_key = "grid" if target_qos_mode == "grid" else "selected" if target_qos_mode == "selected" else "base"
+        state = self._adaptive_state.get(mode_key, {"fps_idx": 0, "imgsz_idx": 0, "res_idx": 0})
+        signature = (
+            target_qos_mode,
+            int(state.get("fps_idx", 0)),
+            int(state.get("imgsz_idx", 0)),
+            int(state.get("res_idx", 0)),
+            bool(self.adaptive_enabled),
+        )
+        if self.current_qos_mode == target_qos_mode and self._last_applied_qos_signature == signature:
+            return
+        self._apply_qos_mode(target_qos_mode)
+        self._last_applied_qos_signature = signature
+        print(
+            f"[{self.camera_id}] QoS ativo={self.current_qos_mode} "
+            f"fps={self.process_fps:.2f} analysis={self.frame_width}x{self.frame_height} "
+            f"imgsz_hint={self.current_input_size_hint or 'default'}"
+        )
+
+    def _refresh_qos_mode(self):
+        with self._live_view_lock:
+            self._cleanup_live_view_sessions_locked(time.time())
+            self._evaluate_adaptive_degradation()
+            self._refresh_qos_mode_locked()
+
+    def _has_active_live_view_session(self) -> bool:
+        now = time.time()
+        with self._live_view_lock:
+            self._cleanup_live_view_sessions_locked(now)
+            return bool(self._live_view_sessions)
+
+    def touch_live_view_session(self, session_id: str, ttl_seconds: int = 20, view_mode: str = "grid") -> dict:
+        normalized_session = (session_id or "").strip()
+        if not normalized_session:
+            raise ValueError("session_id obrigatório")
+
+        ttl = max(5, min(120, int(ttl_seconds)))
+        normalized_mode = self._normalize_view_mode(view_mode)
+        now = time.time()
+        until = now + ttl
+        with self._live_view_lock:
+            self._cleanup_live_view_sessions_locked(now)
+            was_active = normalized_session in self._live_view_sessions
+            self._live_view_sessions[normalized_session] = {"until": until, "view_mode": normalized_mode}
+            self._cleanup_live_view_sessions_locked(now)
+            self._refresh_qos_mode_locked()
+            count = len(self._live_view_sessions)
+            counts = self._live_view_mode_counts_locked()
+            return {
+                "status": "renewed" if was_active else "started",
+                "session_id": normalized_session,
+                "view_mode": normalized_mode,
+                "active_sessions": count,
+                "forced_awake": count > 0,
+                "force_awake_until": self.force_awake_until,
+                "ttl_seconds": ttl,
+                "active_view_mode": self._current_live_view_mode_locked(),
+                "view_mode_counts": counts,
+                "qos_mode": self.current_qos_mode,
+            }
+
+    def stop_live_view_session(self, session_id: str) -> dict:
+        normalized_session = (session_id or "").strip()
+        if not normalized_session:
+            raise ValueError("session_id obrigatório")
+
+        now = time.time()
+        with self._live_view_lock:
+            self._cleanup_live_view_sessions_locked(now)
+            removed = self._live_view_sessions.pop(normalized_session, None) is not None
+            self._cleanup_live_view_sessions_locked(now)
+            self._refresh_qos_mode_locked()
+            count = len(self._live_view_sessions)
+            counts = self._live_view_mode_counts_locked()
+            return {
+                "status": "stopped" if removed else "not_found",
+                "session_id": normalized_session,
+                "active_sessions": count,
+                "forced_awake": count > 0,
+                "force_awake_until": self.force_awake_until,
+                "active_view_mode": self._current_live_view_mode_locked(),
+                "view_mode_counts": counts,
+                "qos_mode": self.current_qos_mode,
+            }
+
+    def live_view_state(self) -> dict:
+        now = time.time()
+        with self._live_view_lock:
+            self._cleanup_live_view_sessions_locked(now)
+            count = len(self._live_view_sessions)
+            counts = self._live_view_mode_counts_locked()
+            return {
+                "active_sessions": count,
+                "forced_awake": count > 0,
+                "force_awake_until": self.force_awake_until,
+                "active_view_mode": self._current_live_view_mode_locked(),
+                "view_mode_counts": counts,
+                "qos_mode": self.current_qos_mode,
+                "feature_flags": {
+                    "qos_live_enabled": self.qos_live_enabled,
+                    "adaptive_feature_enabled": self.adaptive_feature_enabled,
+                    "adaptive_enabled_for_camera": self.adaptive_enabled,
+                    "adaptive_pilot_raw": self.adaptive_pilot_raw,
+                },
+                "adaptive": {
+                    "enabled": self.adaptive_enabled,
+                    "state": self._adaptive_state,
+                    "metrics": self._adaptive_last_metrics,
+                },
+            }
+
     def _capture_frames(self):
         print(f"[{self.camera_id}] Iniciando captura: {self._sanitize_url(self.rtsp_url)}")
-        cap = self._open_capture()
-        capture_interval = 1.0 / self.process_fps
+        cap = None
+        last_yield_time = 0
         
         while self.running:
+            self.capture_loop_iterations += 1
+            self._refresh_qos_mode()
+            if not self._is_awake():
+                if cap is not None:
+                    cap.release()
+                    cap = None
+                    last_yield_time = 0
+                time.sleep(0.25)
+                continue
+
+            if cap is None:
+                cap = self._open_capture()
+
+            now = time.time()
+            capture_interval = 1.0 / max(0.5, float(self.process_fps))
+            if now - last_yield_time < capture_interval:
+                time.sleep(min(0.05, capture_interval - (now - last_yield_time)))
+                continue
+
+            # A IA não precisa decodificar o FPS inteiro da câmera.
+            # Com buffer baixo/nobuffer, ler no FPS de análise mantém o frame recente
+            # e evita que FFmpeg/OpenCV consuma CPU decodificando frames descartados.
             ret, frame = cap.read()
             if not ret:
                 print(f"[{self.camera_id}] Falha na captura, reconectando em 5s...")
@@ -76,69 +579,264 @@ class StreamProcessor:
             
             self.last_seen = time.time()
             
+            last_yield_time = self.last_seen
             if not self.frame_queue.full():
                 self.frame_queue.put(frame)
+                self.capture_frames_enqueued += 1
             else:
-                # Se a fila estiver cheia, descarta o frame antigo para manter o tempo real
+                # Fila cheia: descarta o antigo e coloca o novo (mantém tempo real)
                 try:
                     self.frame_queue.get_nowait()
                     self.frame_queue.put(frame)
+                    self.capture_frames_dropped += 1
+                    self.capture_frames_enqueued += 1
                 except:
                     pass
-
-            time.sleep(capture_interval)
         
-        cap.release()
+        if cap is not None:
+            cap.release()
 
     def _open_capture(self):
+        # fflags;nobuffer|flags;low_delay instrui o FFMPEG a não fazer cache de vídeo,
+        # garantindo que o primeiro frame lido seja exatamente o momento presente.
+        capture_options = os.getenv("AI_OPENCV_CAPTURE_OPTIONS", "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|stimeout;5000000").strip()
+        if capture_options:
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = capture_options
         cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        # Evita travar indefinidamente no primeiro frame quando a câmera oscila.
+        try:
+            if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+            if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
+                cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
+        except Exception:
+            pass
         return cap
 
-    def _debounce_seconds(self):
-        return self.motion_debounce_seconds if self.analysis_type == "motion" else self.detect_debounce_seconds
+    def _resize_for_advanced(self, frame):
+        height, width = frame.shape[:2]
+        if width <= 0 or height <= 0:
+            return frame
+
+        scale = min(self.frame_width / width, self.frame_height / height)
+        if not np.isfinite(scale) or scale <= 0:
+            return frame
+
+        target_width = max(1, int(round(width * scale)))
+        target_height = max(1, int(round(height * scale)))
+        if target_width == width and target_height == height:
+            return frame
+        return cv2.resize(frame, (target_width, target_height))
+
+    def _debounce_seconds(self, event_type):
+        return self.motion_debounce_seconds if event_type == "MOTION_DETECTED" else self.detect_debounce_seconds
 
     def _process(self):
-        print(f"[{self.camera_id}] Iniciando IA modo global '{self.analysis_type}' ({self.process_fps} fps)...")
-        try:
-            registry.ensure_mode(self.analysis_type)
-        except Exception as exc:
-            registry.last_error = str(exc)
-            print(f"[{self.camera_id}] Falha ao carregar detector '{self.analysis_type}': {exc}")
-            return
-        
+        if self.advanced_analysis_type:
+            print(f"[{self.camera_id}] Iniciando IA global 'motion+{self.advanced_analysis_type}' ({self.process_fps} fps)...")
+            try:
+                # Pré-carrega o detector no registry (serializado, sem duplicatas)
+                registry.ensure_detector(self.advanced_analysis_type)
+            except Exception as exc:
+                self.last_error = str(exc)
+                print(f"[{self.camera_id}] Falha ao carregar detector '{self.advanced_analysis_type}': {exc}")
+                return
+        else:
+            print(f"[{self.camera_id}] Iniciando IA global 'motion' ({self.process_fps} fps)...")
+
         while self.running:
+            self.process_loop_iterations += 1
+            self._refresh_qos_mode()
             if self.frame_queue.empty():
                 time.sleep(0.01)
                 continue
-                
+
             frame = self.frame_queue.get()
 
+            # EDGE AI HIBERNATION LOGIC
+            if not self._is_awake():
+                # O servidor está dormindo aguardando o ONVIF da câmera
+                self.last_advanced_infer_at = time.time()
+                continue
+
             try:
-                detections = registry.infer(self.analysis_type, frame)
+                current_time = time.time()
+                detections = self.motion_detector.infer(frame)
+                advanced_detections = []
+                should_run_advanced = (
+                    self.advanced_analysis_type
+                    and current_time - self.last_advanced_infer_at >= (1.0 / max(0.5, float(self.advanced_process_fps)))
+                )
+                if should_run_advanced:
+                    det = registry.ensure_detector(self.advanced_analysis_type)
+                    advanced_frame = self._resize_for_advanced(frame)
+                    advanced_height, advanced_width = advanced_frame.shape[:2]
+                    # O detector compartilhado gerencia a inferência thread-safe.
+                    infer_started_at = time.time()
+                    try:
+                        advanced_detections = det.infer(
+                            advanced_frame,
+                            context_key=self.camera_id,
+                            input_size_hint=self.current_input_size_hint,
+                        )
+                    except Exception:
+                        self.advanced_infer_errors += 1
+                        raise
+                    infer_elapsed_ms = max(0.0, (time.time() - infer_started_at) * 1000.0)
+                    self.advanced_infer_runs += 1
+                    self.advanced_infer_sum_ms += infer_elapsed_ms
+                    self.advanced_infer_last_ms = infer_elapsed_ms
+                    detector_event_type = getattr(det, "event_type", None)
+                    for detection in advanced_detections:
+                        if not detection.event_type and detector_event_type:
+                            detection.event_type = detector_event_type
+                        detection.extra = {
+                            **(detection.extra or {}),
+                            "frameWidth": int(advanced_width),
+                            "frameHeight": int(advanced_height),
+                        }
+                    detections.extend(advanced_detections)
+                    self.last_advanced_infer_at = current_time
+
+                # Snapshot "ao vivo" para overlays (sem debounce de evento).
+                if self.advanced_analysis_type:
+                    live_overlay = [d for d in detections if (d.event_type or "") != "MOTION_DETECTED"]
+                    if should_run_advanced or live_overlay:
+                        self._store_live_detections(live_overlay, current_time)
+                else:
+                    self._store_live_detections(detections, current_time)
             except Exception as exc:
-                registry.last_error = str(exc)
+                self.last_error = str(exc)
                 print(f"[{self.camera_id}] erro inferência: {exc}")
                 time.sleep(1)
                 continue
 
             if detections:
-                current_time = time.time()
-                if current_time - self.last_event_time > self._debounce_seconds():
-                    self._report_detections(detections)
-                    self.last_event_time = current_time
+                ready = []
+                for detection in detections:
+                    event_type = detection.event_type or "AI_DETECTED"
+                    last_event_time = self.last_event_by_type.get(event_type, 0)
+                    if current_time - last_event_time > self._debounce_seconds(event_type):
+                        ready.append(detection)
+                        self.last_event_by_type[event_type] = current_time
+                if ready:
+                    self._report_detections(ready)
 
-            # Pequena pausa para aliviar CPU em sistemas standalone
+            # Pausa para aliviar CPU entre frames
             time.sleep(0.02)
+
+    def _store_live_detections(self, detections, timestamp):
+        payload = []
+        ts_ms = int(timestamp * 1000)
+        for idx, detection in enumerate(detections[:24]):
+            bbox = getattr(detection, "bbox", None)
+            if not isinstance(bbox, list) or len(bbox) != 4:
+                continue
+            if not all(isinstance(v, (int, float)) for v in bbox):
+                continue
+
+            extra = getattr(detection, "extra", None) or {}
+            label = str(extra.get("name") or detection.label or "detected")
+            similarity_value = None
+            if "similarity" in extra:
+                try:
+                    similarity_value = float(extra["similarity"])
+                except Exception:
+                    similarity_value = None
+
+            payload.append(
+                {
+                    "id": f"{self.camera_id}-{ts_ms}-{idx}",
+                    "cameraId": self.camera_id,
+                    "type": detection.event_type or "AI_DETECTED",
+                    "label": label,
+                    "confidence": round(float(getattr(detection, "confidence", 0.0)), 4),
+                    "similarity": similarity_value,
+                    "bbox": [int(v) for v in bbox],
+                    "frameWidth": int(extra.get("frameWidth") or self.frame_width),
+                    "frameHeight": int(extra.get("frameHeight") or self.frame_height),
+                    "occurredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp)),
+                    "overlayMode": extra.get("overlayMode"),
+                    "trackId": extra.get("trackId"),
+                }
+            )
+
+        with self._snapshot_lock:
+            if payload:
+                self.overlay_payload_frames += 1
+                self._pending_hit_count += 1
+                self._miss_count = 0
+                if self._pending_hit_count >= self.show_after_hits:
+                    self._latest_detections = payload
+                    self._latest_detections_at = timestamp
+                return
+
+            self.overlay_empty_frames += 1
+            self._pending_hit_count = 0
+            self._miss_count += 1
+            if not self._latest_detections:
+                self._latest_detections_at = timestamp
+                return
+
+            age_ms = (timestamp - self._latest_detections_at) * 1000
+            should_hide_by_misses = self._miss_count >= self.hide_after_misses
+            should_hide_by_ttl = self.lost_ttl_ms > 0 and age_ms >= self.lost_ttl_ms
+            should_hold = self.live_detection_hold_ms > 0 and age_ms <= self.live_detection_hold_ms
+
+            if should_hide_by_misses or should_hide_by_ttl or not should_hold:
+                self._latest_detections = []
+                self._latest_detections_at = timestamp
+
+    def get_live_snapshot(self, max_age_ms=5000, limit=12):
+        with self._snapshot_lock:
+            snapshot = list(self._latest_detections)
+            snapshot_at = self._latest_detections_at
+        if snapshot_at <= 0:
+            return []
+        age_ms = (time.time() - snapshot_at) * 1000
+        requested_age_ms = max(200, int(max_age_ms))
+        effective_age_ms = min(requested_age_ms, self.live_detection_hold_ms) if self.live_detection_hold_ms > 0 else requested_age_ms
+        if age_ms > effective_age_ms:
+            return []
+        return snapshot[: max(1, int(limit))]
+
+    def performance_state(self) -> dict:
+        avg_advanced_ms = (
+            self.advanced_infer_sum_ms / self.advanced_infer_runs
+            if self.advanced_infer_runs > 0 else 0.0
+        )
+        overlay_total = self.overlay_payload_frames + self.overlay_empty_frames
+        overlay_payload_ratio = (
+            float(self.overlay_payload_frames) / float(overlay_total)
+            if overlay_total > 0 else 0.0
+        )
+        return {
+            "capture_loop_iterations": self.capture_loop_iterations,
+            "process_loop_iterations": self.process_loop_iterations,
+            "advanced_infer_runs": self.advanced_infer_runs,
+            "advanced_infer_errors": self.advanced_infer_errors,
+            "advanced_infer_last_ms": round(float(self.advanced_infer_last_ms), 3),
+            "advanced_infer_avg_ms": round(float(avg_advanced_ms), 3),
+            "overlay_payload_frames": self.overlay_payload_frames,
+            "overlay_empty_frames": self.overlay_empty_frames,
+            "overlay_payload_ratio": round(float(overlay_payload_ratio), 4),
+        }
 
     def _report_detections(self, detections):
         for detection in detections:
-            event_type = detection.event_type or registry.event_type
+            event_type = detection.event_type or "AI_DETECTED"
             metadata = {
                 "label": detection.label,
                 "confidence": round(float(detection.confidence), 4),
                 "bbox": detection.bbox,
-                "analysisType": self.analysis_type,
+                "frameWidth": (detection.extra or {}).get("frameWidth", self.frame_width),
+                "frameHeight": (detection.extra or {}).get("frameHeight", self.frame_height),
+                "analysisType": "motion" if event_type == "MOTION_DETECTED" else self.analysis_type,
+                "advancedAnalysisType": self.advanced_analysis_type,
                 **(detection.extra or {}),
             }
             if detection.landmarks is not None:

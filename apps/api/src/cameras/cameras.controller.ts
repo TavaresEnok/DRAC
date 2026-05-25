@@ -14,6 +14,7 @@ import { TestCameraConnectionDto } from './dto/test-camera-connection.dto';
 import { UpdateCameraDto } from './dto/update-camera.dto';
 import { Public } from '../auth/decorators/public.decorator';
 import { ServiceTokenGuard } from '../auth/guards/service-token.guard';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { RecordingProcessManagerService } from '../recordings/recording-process-manager.service';
 
 @Controller('cameras')
@@ -40,6 +41,7 @@ export class CamerasController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
   @Post()
   async create(@CurrentUser() user: AuthUser, @Body() dto: CreateCameraDto, @Req() req: Request) {
     const camera = await this.camerasService.create(dto);
@@ -106,6 +108,23 @@ export class CamerasController {
       limit: limit ? parseInt(limit, 10) : 100,
       offset: offset ? parseInt(offset, 10) : 0,
     });
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Throttle({ default: { limit: 600, ttl: 60000 } })
+  @Get(':id/detections/latest')
+  async latestDetections(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query('seconds') seconds?: string,
+    @Query('limit') limit?: string,
+  ) {
+    await this.accessControlService.assertCanViewCamera(user, id);
+    return this.camerasService.listLatestDetections(
+      id,
+      seconds ? parseInt(seconds, 10) : 8,
+      limit ? parseInt(limit, 10) : 12,
+    );
   }
 
   @Roles(UserRole.VIEWER)
@@ -475,6 +494,7 @@ export class CamerasController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
   @Patch(':id')
   async update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: UpdateCameraDto, @Req() req: Request) {
     await this.accessControlService.assertCanAdminCamera(user, id);
@@ -491,6 +511,7 @@ export class CamerasController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
   @Delete(':id')
   async remove(@CurrentUser() user: AuthUser, @Param('id') id: string, @Req() req: Request) {
     await this.accessControlService.assertCanAdminCamera(user, id);

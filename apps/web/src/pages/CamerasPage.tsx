@@ -34,8 +34,9 @@ const STATUS_BADGE: Record<string, string> = {
   maintenance: 'bg-[hsl(var(--chart-2)_/_0.12)] text-[hsl(var(--chart-2))] border-[hsl(var(--chart-2)_/_0.3)]',
 };
 
-type VideoCodec = 'h264' | 'h265' | 'mjpeg';
+type VideoCodec = 'original' | 'h264' | 'h265' | 'mjpeg';
 type RecordingMode = Camera['recordingMode'];
+type PreferredLiveProtocol = 'auto' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
 
 const RECORDING_MODE_COPY: Record<RecordingMode, { label: string; detail: string; className: string }> = {
   manual: {
@@ -66,9 +67,36 @@ function getRecordingModeCopy(mode?: RecordingMode | null) {
 
 function normalizeVideoCodec(codec?: string | null): VideoCodec {
   const value = codec?.trim().toLowerCase();
+  if (!value || value === 'original' || value === 'source' || value === 'passthrough' || value === 'pass-through') return 'original';
   if (value === 'hevc' || value === 'h.265' || value === 'h265') return 'h265';
   if (value === 'mjpeg' || value === 'mjpg' || value === 'jpeg') return 'mjpeg';
   return 'h264';
+}
+
+function formatLiveProtocol(protocol?: string | null) {
+  switch (String(protocol ?? '').toLowerCase()) {
+    case 'auto':
+      return 'Padrão (WebRTC -> LL-HLS -> HLS)';
+    case 'webrtc':
+      return 'WebRTC';
+    case 'hls':
+      return 'HLS';
+    case 'llhls':
+    case 'll-hls':
+      return 'LL-HLS';
+    case 'mjpeg':
+      return 'MJPEG';
+    default:
+      return 'Padrão (WebRTC -> LL-HLS -> HLS)';
+  }
+}
+
+function normalizePreferredLiveProtocol(protocol?: string | null): PreferredLiveProtocol {
+  const value = String(protocol ?? '').trim().toLowerCase();
+  if (value === 'webrtc' || value === 'hls' || value === 'llhls' || value === 'll-hls' || value === 'mjpeg') {
+    return value === 'll-hls' ? 'llhls' : value;
+  }
+  return 'auto';
 }
 
 function WizardModal({
@@ -95,13 +123,13 @@ function WizardModal({
     recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
     retentionDays: number;
     preferredRtspTransport: 'tcp' | 'udp';
-    preferredLiveProtocol: 'flv' | 'hls' | 'webrtc' | 'mjpeg';
+    preferredLiveProtocol: PreferredLiveProtocol;
     streamVideoCodec: VideoCodec;
     streamWidth?: number;
     streamHeight?: number;
     streamFps?: number;
     streamBitrateKbps?: number;
-    recordingVideoCodec: 'h264';
+    recordingVideoCodec: VideoCodec;
     recordingWidth?: number;
     recordingHeight?: number;
     recordingFps?: number;
@@ -172,13 +200,13 @@ function WizardModal({
     recordingMode: 'continuous',
     retentionDays: '90',
     preferredRtspTransport: 'tcp',
-    preferredLiveProtocol: 'flv',
-    streamVideoCodec: 'h264',
+    preferredLiveProtocol: 'auto',
+    streamVideoCodec: 'original',
     streamWidth: '',
     streamHeight: '',
     streamFps: '',
     streamBitrateKbps: '',
-    recordingVideoCodec: 'h264' as const,
+    recordingVideoCodec: 'h264' as VideoCodec,
     recordingWidth: '',
     recordingHeight: '',
     recordingFps: '',
@@ -228,6 +256,11 @@ function WizardModal({
         }
         return value;
       };
+      const parseOptionalPositive = (rawValue: string): number | undefined => {
+        if (!rawValue.trim()) return undefined;
+        const value = Number(rawValue);
+        return Number.isFinite(value) && value > 0 ? value : undefined;
+      };
 
       const adjusted: string[] = [];
       const streamWidth = clampToDetected('Live largura', form.streamWidth, detectedMax?.width, adjusted);
@@ -236,12 +269,10 @@ function WizardModal({
       const streamBitrateKbps = form.streamBitrateKbps.trim()
         ? clampToDetected('Live bitrate', form.streamBitrateKbps, detectedMax?.bitrateKbps, adjusted)
         : (detectedMax?.bitrateKbps ?? undefined);
-      const recordingWidth = clampToDetected('Rec largura', form.recordingWidth, detectedMax?.width, adjusted);
-      const recordingHeight = clampToDetected('Rec altura', form.recordingHeight, detectedMax?.height, adjusted);
-      const recordingFps = clampToDetected('Rec FPS', form.recordingFps, detectedMax?.fps, adjusted);
-      const recordingBitrateKbps = form.recordingBitrateKbps.trim()
-        ? clampToDetected('Rec bitrate', form.recordingBitrateKbps, detectedMax?.bitrateKbps, adjusted)
-        : (detectedMax?.bitrateKbps ?? undefined);
+      const recordingWidth = parseOptionalPositive(form.recordingWidth);
+      const recordingHeight = parseOptionalPositive(form.recordingHeight);
+      const recordingFps = parseOptionalPositive(form.recordingFps);
+      const recordingBitrateKbps = parseOptionalPositive(form.recordingBitrateKbps);
 
       if (adjusted.length) {
         window.alert(
@@ -265,13 +296,13 @@ function WizardModal({
         recordingMode: form.recordingMode as 'continuous' | 'motion' | 'schedule' | 'manual',
         retentionDays: Number(form.retentionDays),
         preferredRtspTransport: form.preferredRtspTransport as 'tcp' | 'udp',
-        preferredLiveProtocol: form.preferredLiveProtocol as 'flv' | 'hls' | 'webrtc' | 'mjpeg',
+        preferredLiveProtocol: normalizePreferredLiveProtocol(form.preferredLiveProtocol),
         streamVideoCodec: normalizeVideoCodec(form.streamVideoCodec),
         streamWidth,
         streamHeight,
         streamFps,
         streamBitrateKbps,
-        recordingVideoCodec: 'h264',
+        recordingVideoCodec: normalizeVideoCodec(form.recordingVideoCodec),
         recordingWidth,
         recordingHeight,
         recordingFps,
@@ -480,6 +511,7 @@ function WizardModal({
                     <Select value={form.streamVideoCodec} onValueChange={(value) => updateField('streamVideoCodec', value)}>
                       <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
+                        <SelectItem value="original" className="text-xs">Original da câmera</SelectItem>
                         <SelectItem value="h264" className="text-xs">H.264</SelectItem>
                         <SelectItem value="h265" className="text-xs">H.265</SelectItem>
                         <SelectItem value="mjpeg" className="text-xs">MJPEG</SelectItem>
@@ -488,12 +520,13 @@ function WizardModal({
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Protocolo ao vivo</label>
-                    <Select value={form.preferredLiveProtocol} onValueChange={(value) => updateField('preferredLiveProtocol', value)}>
+                    <Select value={form.preferredLiveProtocol} onValueChange={(value) => updateField('preferredLiveProtocol', value as PreferredLiveProtocol)}>
                       <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="flv" className="text-xs">FLV</SelectItem>
-                        <SelectItem value="hls" className="text-xs">HLS</SelectItem>
+                        <SelectItem value="auto" className="text-xs">Padrão (WebRTC -&gt; LL-HLS -&gt; HLS)</SelectItem>
                         <SelectItem value="webrtc" className="text-xs">WebRTC</SelectItem>
+                        <SelectItem value="llhls" className="text-xs">LL-HLS</SelectItem>
+                        <SelectItem value="hls" className="text-xs">HLS</SelectItem>
                         <SelectItem value="mjpeg" className="text-xs">MJPEG</SelectItem>
                       </SelectContent>
                     </Select>
@@ -554,11 +587,15 @@ function WizardModal({
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Codec de Gravação</label>
-                    <div className="h-9 flex items-center gap-2 px-3 rounded border border-emerald-500/40 bg-emerald-500/8 text-xs">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                      <span className="font-mono font-semibold text-emerald-300">H.264 (libx264)</span>
-                      <span className="text-[hsl(var(--muted-foreground))] ml-auto">fixo</span>
-                    </div>
+                    <Select value={form.recordingVideoCodec} onValueChange={(value) => updateField('recordingVideoCodec', value as VideoCodec)}>
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="original" className="text-xs">Original da câmera</SelectItem>
+                        <SelectItem value="h264" className="text-xs">H.264</SelectItem>
+                        <SelectItem value="h265" className="text-xs">H.265 / HEVC</SelectItem>
+                        <SelectItem value="mjpeg" className="text-xs">MJPEG</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Bitrate kbps</label>
@@ -600,11 +637,11 @@ function WizardModal({
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Resolução Live</span><span className="font-mono">{form.streamWidth && form.streamHeight ? `${form.streamWidth}x${form.streamHeight}` : '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">FPS Live</span><span className="font-mono">{form.streamFps || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Bitrate Live</span><span className="font-mono">{form.streamBitrateKbps ? `${form.streamBitrateKbps} kbps` : '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Protocolo Live</span><span className="font-mono uppercase">{form.preferredLiveProtocol}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Protocolo Live</span><span className="font-mono">{formatLiveProtocol(form.preferredLiveProtocol)}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">RTSP Transport</span><span className="font-mono uppercase">{form.preferredRtspTransport}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Gravação</span><span className="capitalize">{form.recordingMode}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Retenção</span><span className="font-mono">{form.retentionDays || '-'} dias</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Codec Gravação</span><span className="font-mono text-emerald-400">H.264 (fixo)</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Codec Gravação</span><span className="font-mono uppercase">{form.recordingVideoCodec}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Resolução Gravação</span><span className="font-mono">{form.recordingWidth && form.recordingHeight ? `${form.recordingWidth}x${form.recordingHeight}` : '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">FPS Gravação</span><span className="font-mono">{form.recordingFps || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Áudio</span><span className="font-mono">{form.audioEnabled ? 'Sim' : 'Não'}</span></div>
@@ -747,13 +784,13 @@ export default function CamerasPage() {
     recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
     retentionDays: number;
     preferredRtspTransport: 'tcp' | 'udp';
-    preferredLiveProtocol: 'flv' | 'hls' | 'webrtc' | 'mjpeg';
+    preferredLiveProtocol: PreferredLiveProtocol;
     streamVideoCodec: VideoCodec;
     streamWidth?: number;
     streamHeight?: number;
     streamFps?: number;
     streamBitrateKbps?: number;
-    recordingVideoCodec: 'h264';
+    recordingVideoCodec: VideoCodec;
     recordingWidth?: number;
     recordingHeight?: number;
     recordingFps?: number;

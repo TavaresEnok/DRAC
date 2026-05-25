@@ -64,6 +64,9 @@ importers:
       nodemailer:
         specifier: ^8.0.7
         version: 8.0.7
+      onvif:
+        specifier: ^0.8.1
+        version: 0.8.1
       passport:
         specifier: ^0.7.0
         version: 0.7.0
@@ -4467,6 +4470,10 @@ packages:
     resolution: {integrity: sha512-oyyPpiMaKARvvcgip+JV+7zci5L8D1W9RZIz2l1o08AM3pfspitVWnPt3mzHcBPp12oYMTy0pqrFs/C+m3EwsQ==}
     engines: {node: '>=4'}
 
+  onvif@0.8.1:
+    resolution: {integrity: sha512-D0VSuTQutZWQsaWWvh7acbengYNJew25kXpXc/stJc6/xYx2MwU1tkIZA23bu12hr5MxstSQ55decY7we2/LWw==}
+    engines: {node: '>=14.0'}
+
   open@7.4.2:
     resolution: {integrity: sha512-MVHddDVweXZF3awtlAS+6pgKLlm/JgxZ90+/NBurBoQctVOOB/zDdVjcyPzQ+0laDGbsWgrRkflI65sQeOgT9Q==}
     engines: {node: '>=8'}
@@ -5425,6 +5432,10 @@ packages:
 
   xml2js@0.6.0:
     resolution: {integrity: sha512-eLTh0kA8uHceqesPqSE+VvO1CDDJWMwlQfB6LuN6T8w6MaDJ8Txm8P7s5cHD0miF0V+GGTZrDQfxPZQVsur33w==}
+    engines: {node: '>=4.0.0'}
+
+  xml2js@0.6.2:
+    resolution: {integrity: sha512-T4rieHaC1EXcES0Kxxj4JWgaUQHDk+qwHcYOCFHfiwKz7tOVPLq7Hjq9dM1WCMhylqMEfP7hMcOIChvotiZegA==}
     engines: {node: '>=4.0.0'}
 
   xmlbuilder@11.0.1:
@@ -10159,6 +10170,10 @@ snapshots:
     dependencies:
       mimic-fn: 1.2.0
 
+  onvif@0.8.1:
+    dependencies:
+      xml2js: 0.6.2
+
   open@7.4.2:
     dependencies:
       is-docker: 2.2.1
@@ -11112,6 +11127,11 @@ snapshots:
       uuid: 7.0.3
 
   xml2js@0.6.0:
+    dependencies:
+      sax: 1.6.0
+      xmlbuilder: 11.0.1
+
+  xml2js@0.6.2:
     dependencies:
       sax: 1.6.0
       xmlbuilder: 11.0.1

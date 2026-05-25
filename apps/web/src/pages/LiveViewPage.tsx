@@ -120,8 +120,6 @@ export default function LiveViewPage() {
   while (displayedCams.length < count) displayedCams.push(null);
 
   const onlineCount = cameras.filter(c => c.isOnline).length;
-  const alarmCount = cameras.filter(c => c.status === 'alarm').length;
-  const motionCount = cameras.filter(c => c.status === 'motion').length;
 
   const filteredList = cameras.filter(c => {
     const q = search.toLowerCase();
@@ -315,6 +313,8 @@ export default function LiveViewPage() {
                       : (cam.status === 'recording' ? 'online' : cam.status),
                   }}
                   selected={selectedCam === cam.id}
+                  showDetectionOverlay={selectedCam === cam.id}
+                  liveViewMode={selectedCam === cam.id ? 'selected' : 'grid'}
                   onClick={() => handleCamClick(cam.id)}
                   onDoubleClick={() => handleCamDoubleClick(cam)}
                   onAction={handleCamAction}
@@ -448,14 +448,6 @@ export default function LiveViewPage() {
               <span className="w-1.5 h-1.5 rounded-full status-online" />
               {onlineCount}/{cameras.length} ONLINE
             </span>
-            <span className="ops-chip">
-              <span className="w-1.5 h-1.5 rounded-full status-motion" />
-              {motionCount} MOVIMENTO
-            </span>
-            <span className="ops-chip">
-              <span className="w-1.5 h-1.5 rounded-full status-alarm rec-pulse" />
-              {alarmCount} ALERTA
-            </span>
           </div>
 
           <Tooltip delayDuration={0}>
@@ -504,6 +496,8 @@ export default function LiveViewPage() {
                         : (cam.status === 'recording' ? 'online' : cam.status),
                     }}
                     selected={selectedCam === cam.id}
+                    showDetectionOverlay={true}
+                    liveViewMode={selectedCam === cam.id ? 'selected' : 'grid'}
                     onClick={() => {
                       handleCamClick(cam.id);
                       setSelectedSlotIndex(i);
@@ -556,7 +550,7 @@ export default function LiveViewPage() {
         {panelOpen && (
           <motion.aside
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 324, opacity: 1 }}
+            animate={{ width: 276, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 32 }}
             className="border-l border-border bg-card flex flex-col overflow-hidden shrink-0"

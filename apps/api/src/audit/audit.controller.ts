@@ -2,6 +2,7 @@ import { Controller, Get, Query, Res } from '@nestjs/common';
 import { type Response } from 'express';
 import { UserRole } from '@prisma/client';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { AuditService } from './audit.service';
 
 @Controller('audit-logs')
@@ -9,6 +10,7 @@ export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('auditLogs')
   @Get()
   list(
     @Query('userId') userId?: string,
@@ -35,6 +37,7 @@ export class AuditController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('auditLogs')
   @Get('export')
   async export(
     @Res() res: Response,

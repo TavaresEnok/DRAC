@@ -1,9 +1,10 @@
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 const RECORDING_MODES = ['continuous', 'motion', 'schedule', 'manual'] as const;
-const VIDEO_CODECS = ['h264', 'h265', 'hevc', 'mjpeg'] as const;
+const VIDEO_CODECS = ['original', 'h264', 'h265', 'hevc', 'mjpeg'] as const;
+const STREAM_VIDEO_CODECS = ['original', 'h264', 'h265', 'hevc', 'mjpeg'] as const;
 const RTSP_TRANSPORTS = ['tcp', 'udp'] as const;
-const LIVE_PROTOCOLS = ['flv', 'hls', 'webrtc', 'mjpeg'] as const;
+const LIVE_PROTOCOLS = ['auto', 'flv', 'hls', 'llhls', 'webrtc', 'mjpeg'] as const;
 
 export class CreateCameraDto {
   @IsString()
@@ -50,6 +51,26 @@ export class CreateCameraDto {
   subtype?: number;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  liveChannel?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  liveSubtype?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  recordingChannel?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  recordingSubtype?: number;
+
+  @IsOptional()
   @IsString()
   siteId?: string;
 
@@ -87,7 +108,7 @@ export class CreateCameraDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(VIDEO_CODECS)
+  @IsIn(STREAM_VIDEO_CODECS)
   streamVideoCodec?: string;
 
   @IsOptional()
@@ -142,4 +163,13 @@ export class CreateCameraDto {
   @IsOptional()
   @IsBoolean()
   aiEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  hasEdgeAi?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['SYSTEM', 'CAMERA'])
+  motionTrigger?: string;
 }

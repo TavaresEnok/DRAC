@@ -1,8 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { User, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { AuthService } from '../auth/auth.service';
+import { SettingsService } from '../settings/settings.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AuthUser } from '../common/types/auth-user.type';
@@ -12,7 +13,16 @@ export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly authService: AuthService,
+    private readonly settingsService: SettingsService,
   ) {}
+
+  private async assertPasswordStrength(password: string) {
+    if (!(await this.settingsService.isStrongPasswordRequired().catch(() => false))) return;
+    const strong = password.length >= 12 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password);
+    if (!strong) {
+      throw new BadRequestException('Senha fraca: exige no mínimo 12 caracteres, com maiúscula, minúscula e número.');
+    }
+  }
 
   private sanitize(user: User) {
     const { passwordHash, ...safe } = user;
@@ -37,6 +47,7 @@ export class UsersService {
       throw new ForbiddenException('Sem permissão para criar usuário com esse perfil.');
     }
 
+    await this.assertPasswordStrength(dto.password);
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const user = await this.prisma.user.create({
       data: {
@@ -63,6 +74,10 @@ export class UsersService {
 
     if (existing.role === UserRole.SUPER_ADMIN && actor.role !== UserRole.SUPER_ADMIN) {
       throw new ForbiddenException('Apenas SUPER_ADMIN pode alterar SUPER_ADMIN.');
+    }
+
+    if (dto.password) {
+      await this.assertPasswordStrength(dto.password);
     }
 
     const user = await this.prisma.user.update({

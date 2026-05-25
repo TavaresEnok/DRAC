@@ -1,7 +1,7 @@
 import { Link, useLocation } from 'wouter';
 import { motion } from 'framer-motion';
 import {
-  LayoutDashboard, Monitor, PlaySquare,
+  Monitor, PlaySquare,
   Camera, Settings,
   Gauge, ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
   Server, Users, Radar, Brain
@@ -15,7 +15,6 @@ const NAV_SECTIONS = [
     label: 'Monitoramento',
     icon: Radar,
     items: [
-      { path: '/dashboard', label: 'Painel', icon: LayoutDashboard },
       { path: '/live', label: 'Ao Vivo', icon: Monitor },
       { path: '/playback', label: 'Reprodução', icon: PlaySquare },
       { path: '/ai', label: 'IA Central', icon: Brain },
@@ -105,7 +104,7 @@ export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
             )}
             <div className="space-y-1.5">
               {section.items.map(({ path, label, icon: Icon }) => {
-                const isActive = location === path || (path !== '/dashboard' && location.startsWith(path));
+                const isActive = location === path || (path !== '/live' && location.startsWith(path));
                 return isExpanded ? (
                   <Link key={path} href={path}>
                     <div

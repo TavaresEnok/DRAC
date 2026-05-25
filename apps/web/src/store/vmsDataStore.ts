@@ -27,11 +27,16 @@ export interface Camera {
   recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
   retentionDays: number;
   preferredRtspTransport: 'tcp' | 'udp';
-  preferredLiveProtocol: 'flv' | 'hls' | 'webrtc' | 'mjpeg';
+  preferredLiveProtocol: 'auto' | 'flv' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
   rtspPath?: string;
+  liveChannel?: number | null;
+  liveSubtype?: number | null;
+  recordingChannel?: number | null;
+  recordingSubtype?: number | null;
   streamVideoCodec?: string;
   streamWidth?: number | null;
   streamHeight?: number | null;
+  streamFps?: number | null;
   streamBitrateKbps?: number | null;
   recordingVideoCodec?: string;
   recordingWidth?: number | null;
@@ -334,7 +339,7 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
           floor: camera.group?.name ?? '-',
           ipAddress: camera.ip,
           rtspPort: camera.rtspPort ?? 554,
-          model: `${formatCodec(camera.streamVideoCodec ?? camera.detectedVideoCodec)}${camera.rtspPath ? ' / RTSP' : ''}`,
+          model: `${formatCodec(camera.detectedVideoCodec ?? camera.streamVideoCodec)}${camera.rtspPath ? ' / RTSP' : ''}`,
           status: mapCameraStatus(camera.status, camera.recordingEnabled, runtime),
           fps: effectiveFps ?? 0,
           resolution: formatResolution(detectedStreamWidth, detectedStreamHeight),
@@ -348,11 +353,16 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
           recordingMode: effectiveRecordingMode,
           retentionDays: camera.retentionDays ?? 7,
           preferredRtspTransport: camera.preferredRtspTransport ?? 'tcp',
-          preferredLiveProtocol: camera.preferredLiveProtocol ?? 'flv',
+          preferredLiveProtocol: camera.preferredLiveProtocol ?? 'auto',
           rtspPath: camera.rtspPath ?? undefined,
+          liveChannel: camera.liveChannel ?? null,
+          liveSubtype: camera.liveSubtype ?? null,
+          recordingChannel: camera.recordingChannel ?? null,
+          recordingSubtype: camera.recordingSubtype ?? null,
           streamVideoCodec: camera.streamVideoCodec ?? undefined,
           streamWidth: configuredStreamWidth,
           streamHeight: configuredStreamHeight,
+          streamFps: camera.streamFps ?? null,
           streamBitrateKbps: camera.streamBitrateKbps ?? null,
           recordingVideoCodec: camera.recordingVideoCodec ?? undefined,
           recordingWidth: camera.recordingWidth ?? null,

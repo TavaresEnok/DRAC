@@ -6,11 +6,13 @@ import { CamerasModule } from '../cameras/cameras.module';
 import { AccessControlModule } from '../access-control/access-control.module';
 import { AiManagerService } from './ai-manager.service';
 import { PrismaModule } from '../common/prisma/prisma.module';
+import { CameraStreamModule } from '../camera-stream/camera-stream.module';
 
 @Module({
   imports: [
     HttpModule,
     CamerasModule,
+    CameraStreamModule,
     AccessControlModule,
     PrismaModule,
   ],
