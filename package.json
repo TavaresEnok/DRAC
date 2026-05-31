@@ -1,18 +1,19 @@
 {
-  "name": "vms-platform",
+  "name": "drac-vms",
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "dev": "corepack pnpm -r --parallel dev",
-    "dev:api": "corepack pnpm --filter api dev",
-    "dev:web": "corepack pnpm --filter web dev",
-    "docker:up": "docker compose -f infra/docker-compose.yml up -d",
-    "docker:down": "docker compose -f infra/docker-compose.yml down",
-    "verify": "corepack pnpm test:phase2 && corepack pnpm test:mobile && corepack pnpm --filter api build && corepack pnpm --filter web build && corepack pnpm --filter mobile typecheck",
-    "test:phase2": "corepack pnpm --filter api test:phase2",
-    "test:e2e": "corepack pnpm --filter api test:e2e",
-    "db:migrate": "corepack pnpm --filter api prisma migrate deploy",
-    "db:studio": "corepack pnpm --filter api prisma studio",
-    "test:mobile": "corepack pnpm --filter mobile test:mobile"
+    "dev": "pnpm -r --parallel dev",
+    "dev:api": "pnpm --filter api dev",
+    "dev:web": "pnpm --filter web dev",
+    "docker:dev": "docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build",
+    "docker:prod": "docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d --build",
+    "docker:down": "docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml down",
+    "verify": "pnpm test:phase2 && pnpm test:mobile && pnpm --filter api build && pnpm --filter web build && pnpm --filter mobile typecheck",
+    "test:phase2": "pnpm --filter api test:phase2",
+    "test:e2e": "pnpm --filter api test:e2e",
+    "db:migrate": "pnpm --filter api prisma migrate deploy",
+    "db:studio": "pnpm --filter api prisma studio",
+    "test:mobile": "pnpm --filter mobile test:mobile"
   }
 }

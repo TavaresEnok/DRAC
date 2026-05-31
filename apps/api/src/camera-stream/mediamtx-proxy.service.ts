@@ -50,6 +50,15 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
     return url.replace(/(rtsp:\/\/[^:]+:)([^@]+)(@)/i, '$1***$3');
   }
 
+  private buildInternalPublishRtspUrl(pathName = '$MTX_PATH') {
+    const publishUser = (this.configService.get<string>('mediaMtxApiUser') ?? '').trim();
+    const publishPass = (this.configService.get<string>('mediaMtxApiPass') ?? '').trim();
+    if (!publishUser || !publishPass) {
+      throw new Error('Credenciais de publish do MediaMTX nao configuradas (MEDIAMTX_API_USER/MEDIAMTX_API_PASS).');
+    }
+    return `rtsp://${encodeURIComponent(publishUser)}:${encodeURIComponent(publishPass)}@localhost:$RTSP_PORT/${pathName}`;
+  }
+
   private pathNameFromCameraId(cameraId: string) {
     return `cam_${cameraId.replace(/[^a-zA-Z0-9]/g, '')}`;
   }
@@ -284,7 +293,8 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
       // Sem este limite, libx264 cria automaticamente N threads = nº de núcleos lógicos,
       // causando 3 × 14 = 42 threads encode + 3 × 15 = 45 threads decode competindo,
       // sobrecarregando C0/C1 por efeito de scheduler clustering.
-      desiredPath.runOnDemand = `ffmpeg -hide_banner -loglevel warning -rtsp_transport ${rtspTransport} -i "${sourceUrl}" -map 0:v:0 -map 0:a:0? ${videoArgs} ${audioArgs} -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH`;
+      const publishUrl = this.buildInternalPublishRtspUrl();
+      desiredPath.runOnDemand = `ffmpeg -hide_banner -loglevel warning -rtsp_transport ${rtspTransport} -i "${sourceUrl}" -map 0:v:0 -map 0:a:0? ${videoArgs} ${audioArgs} -f rtsp "${publishUrl}"`;
       desiredPath.runOnDemandRestart = true;
       desiredPath.runOnDemandStartTimeout = '15s'; // Tempo para o ffmpeg começar a republicar.
       // Mantém ffmpeg apenas enquanto há leitor Live ativo.

@@ -1,4 +1,4 @@
-# Plano de Execucao Completo - VMS NexusGuard/DRAC
+# Plano de Execucao Completo - DRAC VMS
 
 Data base: 2026-05-05
 

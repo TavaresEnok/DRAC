@@ -59,7 +59,7 @@ Edite `infra/.env` antes de subir o ambiente. Use segredos fortes para `JWT_SECR
 
 ```bash
 docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build
-docker compose -f infra/docker-compose.yml exec -w /app/apps/api api npx prisma migrate deploy
+docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml exec -w /app/apps/api api npx prisma migrate deploy
 ```
 
 Health checks basicos:
@@ -118,6 +118,7 @@ Recomendacoes minimas para producao:
 
 - `CORS_ALLOWED_ORIGINS`: origens autorizadas do frontend.
 - `MEDIAMTX_API_USER` / `MEDIAMTX_API_PASS`: credenciais da API interna do MediaMTX.
+- `MEDIAMTX_HLS_ALLOW_ORIGIN` / `MEDIAMTX_WEBRTC_ALLOW_ORIGIN`: origem permitida para HLS/WebRTC.
 - `INTERNAL_SERVICE_TOKEN`: autenticacao entre API, IA e servicos internos.
 - `AI_AUTO_START_ENABLED`: sincronizacao automatica da IA ao iniciar API.
 - `AI_USE_MEDIAMTX`: preferencia por MediaMTX como fonte da IA; padrao atual e `false`.
@@ -130,6 +131,9 @@ Recomendacoes minimas para producao:
 ```bash
 pnpm dev:api
 pnpm dev:web
+pnpm docker:dev
+pnpm docker:prod
+pnpm docker:down
 pnpm --filter mobile start:lan
 pnpm verify
 DRAC_E2E=1 DRAC_E2E_BASE_URL=http://127.0.0.1:3000 DRAC_E2E_EMAIL=admin@local.dev DRAC_E2E_PASSWORD=... pnpm test:e2e
@@ -148,7 +152,7 @@ O `test:e2e` e opt-in e pode testar stream token, gravacao e playback quando `DR
 - `POST /cameras`
 - `POST /cameras/:id/test-connection`
 - `POST /camera-stream/:cameraId/token`
-- `GET /camera-stream/:cameraId/bridge`
+- `GET /camera-stream/:cameraId/urls`
 - `POST /cameras/:cameraId/recording/start`
 - `POST /cameras/:cameraId/recording/stop`
 - `GET /recordings`
@@ -179,6 +183,8 @@ Arquivos recomendados:
 - `infra/.env.prod.example`: template de variaveis para producao.
 - `infra/docker-compose.prod.yml`: binds mais restritos e configuraveis.
 - `infra/reverse-proxy.nginx.example`: exemplo de Nginx com HTTPS, `/api` e sinalizacao WebRTC.
+- `docs/security-hardening.md`: guia de hardening, portas, MediaMTX, HTTPS/WebRTC e retencao.
+- `docs/clean-install.md`: roteiro de instalacao limpa do zero.
 
 Exemplo de deploy controlado:
 

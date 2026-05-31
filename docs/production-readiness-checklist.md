@@ -1,4 +1,4 @@
-# Drac VMS - Checklist de Produção
+# DRAC VMS - Checklist de Produção
 
 Data da última validação: 2026-05-31
 
@@ -8,6 +8,8 @@ Itens concluídos:
 - Backup automático local do banco Postgres.
 - Teste real de restore em banco temporário.
 - Política de restart dos containers.
+- Healthchecks de Postgres, Redis, API, Web, AI Service e MediaMTX no Docker Compose.
+- MediaMTX sem permissao de publish para usuario anonimo.
 - Segredos obrigatórios fortes e carregados por `.env`.
 - Menu lateral limpo com módulos essenciais.
 - Página `/storage` renomeada visualmente para `Monitoramento`.
@@ -84,6 +86,7 @@ Observação:
 - O deploy de produção deve usar `infra/docker-compose.prod.yml`, que deixa API e web em loopback por padrão.
 - Use `infra/reverse-proxy.nginx.example` como base para publicar HTTPS e proxy `/api`.
 - MediaMTX/WebRTC deve usar `MEDIAMTX_WEBRTC_ADDITIONAL_HOST` com o IP ou domínio público real da instalação.
+- HLS/WebRTC devem restringir origem com `MEDIAMTX_HLS_ALLOW_ORIGIN` e `MEDIAMTX_WEBRTC_ALLOW_ORIGIN`.
 
 ## Superfície de Segurança
 
@@ -96,6 +99,8 @@ Pendências recomendadas:
 - Colocar API e Web atrás de reverse proxy HTTPS.
 - Restringir portas públicas ao mínimo necessário.
 - Proteger MediaMTX RTSP/HLS/WebRTC por firewall e/ou autenticação apropriada ao cenário.
+- Testar WebRTC em dominio HTTPS real antes de abrir uso externo.
+- Validar retencao de gravacoes com uma camera e janela real de teste.
 - Isolar qualquer automação de container em worker separado, com token interno e permissões mínimas.
 
 ## Menu Essencial
@@ -138,6 +143,10 @@ docker logs --tail=120 vms-api
 docker logs --tail=80 vms-mediamtx
 docker logs --tail=80 vms-postgres-backup
 ```
+
+Runbooks complementares:
+- `docs/security-hardening.md`
+- `docs/clean-install.md`
 
 ## Rollback
 

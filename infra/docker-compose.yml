@@ -9,6 +9,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-vms_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - vms-net
 
@@ -16,6 +22,12 @@ services:
     image: redis:7-alpine
     container_name: vms-redis
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - vms-net
 
@@ -112,6 +124,12 @@ services:
       - postgres
       - redis
       - mediamtx
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     networks:
       - vms-net
 
@@ -125,6 +143,12 @@ services:
     restart: unless-stopped
     depends_on:
       - api
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - vms-net
 
@@ -147,6 +171,12 @@ services:
     depends_on:
       - redis
       - api
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     networks:
       - vms-net
 
@@ -260,15 +290,25 @@ services:
     environment:
       - MEDIAMTX_API_USER=${MEDIAMTX_API_USER:?MEDIAMTX_API_USER is required}
       - MEDIAMTX_API_PASS=${MEDIAMTX_API_PASS:?MEDIAMTX_API_PASS is required}
+      - MEDIAMTX_HLS_ALLOW_ORIGIN=${MEDIAMTX_HLS_ALLOW_ORIGIN:-*}
+      - MEDIAMTX_WEBRTC_ALLOW_ORIGIN=${MEDIAMTX_WEBRTC_ALLOW_ORIGIN:-*}
       - MEDIAMTX_WEBRTC_ADDITIONAL_HOST=${MEDIAMTX_WEBRTC_ADDITIONAL_HOST:-127.0.0.1}
       - MTX_AUTHINTERNALUSERS_0_USER=any
-      - MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_ACTION=publish
-      - MTX_AUTHINTERNALUSERS_0_PERMISSIONS_1_ACTION=read
-      - MTX_AUTHINTERNALUSERS_0_PERMISSIONS_2_ACTION=playback
+      - MTX_AUTHINTERNALUSERS_0_PERMISSIONS_0_ACTION=read
+      - MTX_AUTHINTERNALUSERS_0_PERMISSIONS_1_ACTION=playback
       - MTX_AUTHINTERNALUSERS_1_USER=${MEDIAMTX_API_USER:?MEDIAMTX_API_USER is required}
       - MTX_AUTHINTERNALUSERS_1_PASS=${MEDIAMTX_API_PASS:?MEDIAMTX_API_PASS is required}
-      - MTX_AUTHINTERNALUSERS_1_PERMISSIONS_0_ACTION=api
-      - MTX_AUTHINTERNALUSERS_1_PERMISSIONS_1_ACTION=metrics
+      - MTX_AUTHINTERNALUSERS_1_PERMISSIONS_0_ACTION=publish
+      - MTX_AUTHINTERNALUSERS_1_PERMISSIONS_1_ACTION=read
+      - MTX_AUTHINTERNALUSERS_1_PERMISSIONS_2_ACTION=playback
+      - MTX_AUTHINTERNALUSERS_1_PERMISSIONS_3_ACTION=api
+      - MTX_AUTHINTERNALUSERS_1_PERMISSIONS_4_ACTION=metrics
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8554 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
       - vms-net
 

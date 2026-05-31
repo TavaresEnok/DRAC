@@ -1,4 +1,4 @@
-module vms-platform/camera-worker
+module drac-vms/camera-worker
 
 go 1.22
 

@@ -1,6 +1,6 @@
-# Drac Mobile
+# DRAC Mobile
 
-Aplicativo Android inicial do Drac, construido com Expo/React Native para reaproveitar a mesma API e a mesma separacao interna por grupos do sistema web.
+Aplicativo Android inicial do DRAC, construido com Expo/React Native para reaproveitar a mesma API e a mesma separacao interna por grupos do sistema web.
 
 ## Rodar para teste
 

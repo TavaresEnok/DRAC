@@ -7,12 +7,14 @@ authMethod: internal
 authInternalUsers:
   - user: any
     permissions:
-      - action: publish
       - action: read
       - action: playback
   - user: ${MEDIAMTX_API_USER}
     pass: ${MEDIAMTX_API_PASS}
     permissions:
+      - action: publish
+      - action: read
+      - action: playback
       - action: api
       - action: metrics
 
@@ -25,7 +27,7 @@ rtspTransports: [tcp, udp]
 
 hls: yes
 hlsAddress: :8888
-hlsAllowOrigins: ['*']
+hlsAllowOrigins: ['${MEDIAMTX_HLS_ALLOW_ORIGIN}']
 hlsAlwaysRemux: false
 hlsVariant: lowLatency
 hlsSegmentDuration: 1s
@@ -34,7 +36,7 @@ hlsSegmentCount: 7
 
 webrtc: yes
 webrtcAddress: :8889
-webrtcAllowOrigins: ['*']
+webrtcAllowOrigins: ['${MEDIAMTX_WEBRTC_ALLOW_ORIGIN}']
 webrtcLocalUDPAddress: :8189
 webrtcAdditionalHosts: ['${MEDIAMTX_WEBRTC_ADDITIONAL_HOST}']
 
