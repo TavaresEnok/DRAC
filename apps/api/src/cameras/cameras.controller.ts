@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { UserRole, CameraStatus, AlarmPriority, AlarmSource } from '@prisma/client';
 import { type Request, type Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
@@ -16,6 +17,8 @@ import { Public } from '../auth/decorators/public.decorator';
 import { ServiceTokenGuard } from '../auth/guards/service-token.guard';
 import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { RecordingProcessManagerService } from '../recordings/recording-process-manager.service';
+import { MediamtxProxyService } from '../camera-stream/mediamtx-proxy.service';
+import { AiManagerService } from '../ai/ai-manager.service';
 
 @Controller('cameras')
 export class CamerasController {
@@ -25,7 +28,40 @@ export class CamerasController {
     private readonly accessControlService: AccessControlService,
     private readonly auditService: AuditService,
     private readonly recordingManager: RecordingProcessManagerService,
+    private readonly moduleRef: ModuleRef,
   ) {}
+
+  private schedulePostCreateProvisioning(cameraId: string) {
+    setTimeout(() => void this.postCreateProvisioning(cameraId), 0);
+  }
+
+  private async postCreateProvisioning(cameraId: string) {
+    await this.camerasService.getStatus(cameraId).catch(() => undefined);
+
+    try {
+      const mediamtx = this.moduleRef.get(MediamtxProxyService, { strict: false });
+      await mediamtx.ensurePathForCamera(cameraId);
+    } catch {
+      // Live will retry when the camera page requests stream URLs.
+    }
+
+    try {
+      const camera = await this.camerasService.getCameraOrThrow(cameraId);
+      if (camera.recordingEnabled && camera.recordingMode === 'continuous') {
+        const defaultSegment = Number(process.env.RECORDING_SEGMENT_SECONDS ?? 300);
+        await this.recordingManager.start(cameraId, defaultSegment).catch(() => undefined);
+      }
+    } catch {
+      // Health workers keep recording state reconciled if this immediate start fails.
+    }
+
+    try {
+      const aiManager = this.moduleRef.get(AiManagerService, { strict: false });
+      await aiManager.startCamera(cameraId);
+    } catch {
+      // The live-view endpoint also starts IA on demand.
+    }
+  }
 
   private async withCapabilities(user: AuthUser, camera: Record<string, unknown> & { id: string }) {
     if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
@@ -46,6 +82,7 @@ export class CamerasController {
   async create(@CurrentUser() user: AuthUser, @Body() dto: CreateCameraDto, @Req() req: Request) {
     const camera = await this.camerasService.create(dto);
     await this.auditService.log(user.id, 'camera.create', 'Camera', camera.id, { name: camera.name }, req);
+    this.schedulePostCreateProvisioning(camera.id);
     return camera;
   }
 

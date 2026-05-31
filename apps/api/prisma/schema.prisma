@@ -73,6 +73,8 @@ model Camera {
   liveSubtype       Int?
   recordingChannel  Int?
   recordingSubtype  Int?
+  analyticsChannel  Int?
+  analyticsSubtype  Int?
   status            CameraStatus @default(UNKNOWN)
   lastSeenAt        DateTime?
   siteId            String?

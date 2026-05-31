@@ -506,7 +506,7 @@ export default function LiveViewPage() {
                     onAction={handleCamAction}
                     streamStartDelayMs={Math.min(i * 250, 2000)}
                   />
-                  <div className="absolute right-2 top-2 z-20 flex items-center gap-1 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100">
+                  <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100">
                     <button
                       onClick={(event) => {
                         event.stopPropagation();

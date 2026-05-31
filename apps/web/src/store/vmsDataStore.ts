@@ -33,6 +33,8 @@ export interface Camera {
   liveSubtype?: number | null;
   recordingChannel?: number | null;
   recordingSubtype?: number | null;
+  analyticsChannel?: number | null;
+  analyticsSubtype?: number | null;
   streamVideoCodec?: string;
   streamWidth?: number | null;
   streamHeight?: number | null;
@@ -359,6 +361,8 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
           liveSubtype: camera.liveSubtype ?? null,
           recordingChannel: camera.recordingChannel ?? null,
           recordingSubtype: camera.recordingSubtype ?? null,
+          analyticsChannel: camera.analyticsChannel ?? null,
+          analyticsSubtype: camera.analyticsSubtype ?? null,
           streamVideoCodec: camera.streamVideoCodec ?? undefined,
           streamWidth: configuredStreamWidth,
           streamHeight: configuredStreamHeight,

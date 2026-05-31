@@ -9,7 +9,7 @@ Variáveis de ambiente respeitadas:
 Mapeamento de packs:
   buffalo_s → SCRFD-500M (det leve)
   yolo26n_openvino_model → YOLO26n OpenVINO FP32
-  yolo26n_int8_openvino_model → YOLO26n OpenVINO INT8
+  yolo26n_int8_{640,512,416}_openvino_model → YOLO26n OpenVINO INT8 fixo
 """
 import os
 import shutil
@@ -46,7 +46,7 @@ def ensure_insightface_pack(pack_name: str) -> None:
 # ──────────────────────────────────────────────────────────────
 # YOLO26n -> exportar para OpenVINO FP32 / INT8
 # ──────────────────────────────────────────────────────────────
-def _ensure_yolo_export(*, int8: bool, target_name: str, data: str | None = None) -> None:
+def _ensure_yolo_export(*, int8: bool, target_name: str, model_name: str = "yolo26n", imgsz: int = 640, data: str | None = None) -> None:
     try:
         from ultralytics import YOLO
     except ImportError:
@@ -54,12 +54,12 @@ def _ensure_yolo_export(*, int8: bool, target_name: str, data: str | None = None
         return
 
     target = MODELS_DIR / target_name
-    source_pt = Path("yolo26n.pt")
+    source_pt = Path(f"{model_name}.pt")
     if not target.exists() or not any(target.iterdir()):
         precision_label = "INT8" if int8 else "FP32"
-        print(f"[models] Exportando YOLO26n para OpenVINO {precision_label}...")
+        print(f"[models] Exportando {model_name} para OpenVINO {precision_label} {imgsz}x{imgsz}...")
         model = YOLO(str(source_pt))
-        export_args = {"format": "openvino", "int8": int8}
+        export_args = {"format": "openvino", "int8": int8, "imgsz": imgsz}
         if data:
             export_args["data"] = data
         exported = Path(model.export(**export_args))
@@ -70,21 +70,46 @@ def _ensure_yolo_export(*, int8: bool, target_name: str, data: str | None = None
     if source_pt.exists():
         source_pt.unlink()
     precision_label = "INT8" if int8 else "FP32"
-    print(f"[models] YOLO26n OpenVINO {precision_label} OK.")
+    print(f"[models] {model_name} OpenVINO {precision_label} {imgsz}x{imgsz} OK.")
 
 
 def ensure_yolo_fp32() -> None:
-    _ensure_yolo_export(int8=False, target_name="yolo26n_openvino_model")
+    _ensure_yolo_export(int8=False, target_name="yolo26n_openvino_model", model_name="yolo26n")
 
 
 def ensure_yolo_int8() -> None:
     # Ultralytics usa quantização pós-treino e requer dataset de calibração.
     # coco8.yaml é leve e atende para gerar artefato INT8 inicial em CPU.
+    legacy_640 = MODELS_DIR / "yolo26n_int8_openvino_model"
+    explicit_640 = MODELS_DIR / "yolo26n_int8_640_openvino_model"
+    if legacy_640.exists() and any(legacy_640.iterdir()) and not explicit_640.exists():
+        shutil.copytree(legacy_640, explicit_640)
+    for imgsz in (640, 512, 416):
+        try:
+            _ensure_yolo_export(
+                int8=True,
+                target_name=f"yolo26n_int8_{imgsz}_openvino_model",
+                model_name="yolo26n",
+                imgsz=imgsz,
+                data="coco8.yaml",
+            )
+        except Exception as exc:
+            print(f"[models] Falha ao exportar YOLO26n INT8 {imgsz}x{imgsz}: {exc}")
+            print("[models] Seguindo com variantes já disponíveis.")
+
+
+def ensure_yolo26s_int8_960() -> None:
     try:
-        _ensure_yolo_export(int8=True, target_name="yolo26n_int8_openvino_model", data="coco8.yaml")
+        _ensure_yolo_export(
+            int8=True,
+            target_name="yolo26s_int8_960_openvino_model",
+            model_name="yolo26s",
+            imgsz=960,
+            data="coco8.yaml",
+        )
     except Exception as exc:
-        print(f"[models] Falha ao exportar YOLO26n INT8: {exc}")
-        print("[models] Seguindo com FP32 disponível.")
+        print(f"[models] Falha ao exportar YOLO26s INT8 960x960: {exc}")
+        print("[models] O teste agressivo IB-02 requer /app/models/yolo26s_int8_960_openvino_model/yolo26s.xml.")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -101,5 +126,6 @@ if __name__ == "__main__":
     # YOLO26n OpenVINO INT8 + FP32 (fallback)
     ensure_yolo_int8()
     ensure_yolo_fp32()
+    ensure_yolo26s_int8_960()
 
     print("[models] Todos os modelos verificados.")

@@ -268,60 +268,49 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
     });
   }
 
-  private getSourceCodec(camera: Camera): string {
-    const recording = (camera.recordingVideoCodec ?? '').toLowerCase();
-    if (recording && recording !== 'original' && recording !== 'copy') {
-      return recording;
-    }
-    const configured = (camera.streamVideoCodec ?? '').toLowerCase();
-    const detected = (camera.detectedVideoCodec ?? '').toLowerCase();
-    return (!configured || configured === 'original') ? detected : configured;
+  private async probeSourceCodec(rtspUrl: string, transport: string): Promise<string | null> {
+    return await new Promise((resolve) => {
+      const proc = spawn('ffprobe', [
+        '-v', 'error',
+        '-rtsp_transport', transport,
+        '-i', rtspUrl,
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=codec_name',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+      ]);
+      let stdout = '';
+      let settled = false;
+      const finish = (codec: string | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(codec);
+      };
+      const timeout = setTimeout(() => {
+        proc.kill('SIGKILL');
+        finish(null);
+      }, 12000);
+      timeout.unref();
+      proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+      proc.on('error', () => finish(null));
+      proc.on('close', (code) => {
+        const codec = stdout.trim().split('\n')[0]?.trim().toLowerCase() || null;
+        finish(code === 0 ? codec : null);
+      });
+    });
   }
 
-  private sourceIsHevc(camera: Camera): boolean {
-    const codec = this.getSourceCodec(camera);
-    return codec.includes('h265') || codec.includes('hevc') || codec.includes('265');
+  private sourceIsHevcWithProbe(probedCodec: string | null): boolean {
+    return Boolean(probedCodec && (probedCodec.includes('h265') || probedCodec.includes('hevc')));
   }
 
-  private shouldTranscodeRecording(camera: Camera): boolean {
-    // Always transcode if user set explicit dimensions/fps/bitrate
-    if (
-      camera.recordingWidth ||
-      camera.recordingHeight ||
-      camera.recordingFps ||
-      camera.recordingBitrateKbps ||
-      (camera.recordingVideoCodec && !['copy', 'original'].includes(camera.recordingVideoCodec))
-    ) {
-      return true;
-    }
-    // H.264 cameras: transcode to H.265 for ~50% disk savings
-    // H.265 cameras: copy as-is (no re-encoding needed)
-    if (!this.copyCodec) return true;
-    return !this.sourceIsHevc(camera);
-  }
-
-  private buildArgs(camera: Camera, rtspUrl: string, outputPattern: string, segmentSeconds: number): string[] {
+  private buildArgs(camera: Camera, rtspUrl: string, outputPattern: string, segmentSeconds: number, probedCodec: string | null): string[] {
     const transport = camera.preferredRtspTransport ?? this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp';
     const stimeout = String(this.configService.get<number>('ffmpegStimeoutUs') ?? 8000000);
-    const shouldTranscode = this.shouldTranscodeRecording(camera);
-
-    // Determine target codec for recording:
-    // - Explicit user setting takes priority
-    // - H.264 source → libx265 (saves ~50% disk with same quality)
-    // - H.265 source → copy (already efficient)
-    // - Unknown source → libx265 (safe default for storage efficiency)
-    let videoCodec: string;
-    if (camera.recordingVideoCodec && !['copy', 'original'].includes(camera.recordingVideoCodec)) {
-      const recordingCodec = camera.recordingVideoCodec.toLowerCase();
-      videoCodec =
-        ['h265', 'hevc'].includes(recordingCodec) ? 'libx265' :
-        recordingCodec === 'mjpeg' ? 'mjpeg' :
-        'libx264';
-    } else {
-      // Auto: H.264 → H.265, everything else copy
-      videoCodec = this.sourceIsHevc(camera) ? 'copy' : 'libx265';
-    }
-
+    // A gravação sempre termina em HEVC. Entrada HEVC é preservada bit a bit;
+    // qualquer outra origem é codificada para H.265.
+    const shouldTranscode = !this.copyCodec || !this.sourceIsHevcWithProbe(probedCodec);
+    const videoCodec = shouldTranscode ? 'libx265' : 'copy';
     const isH265Output = videoCodec === 'libx265';
 
     const args = [
@@ -338,11 +327,10 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
       '0:v:0',
       '-map',
       '0:a:0?',
-      ...(shouldTranscode ? ['-c:v', videoCodec] : ['-c:v', 'copy']),
+      '-c:v',
+      videoCodec,
       // H.265: use slower preset (medium) for better compression vs H.264 ultrafast
       ...(shouldTranscode && isH265Output ? ['-preset', 'medium', '-crf', '28'] : []),
-      // H.264 (fallback if explicit): ultrafast
-      ...(shouldTranscode && videoCodec === 'libx264' ? ['-preset', 'ultrafast'] : []),
       // H.265 needs tag for MP4 container compatibility
       ...(isH265Output ? ['-tag:v', 'hvc1'] : []),
       ...(shouldTranscode && camera.recordingWidth && camera.recordingHeight
@@ -487,6 +475,8 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
 
     const password = this.cryptoService.decrypt(camera.passwordEncrypted);
     const rtspUrl = this.buildRtsp(camera, password);
+    const recordingTransport = camera.preferredRtspTransport ?? this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp';
+    const sourceCodec = await this.probeSourceCodec(rtspUrl, recordingTransport);
     const startDate = new Date();
     const outputDir = buildRecordingOutputDir(this.recordingsRoot, cameraId, startDate);
     const cameraRootDir = join(this.recordingsRoot, `camera-${cameraId}`);
@@ -494,8 +484,9 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
 
     mkdirSync(outputDir, { recursive: true });
 
-    const args = this.buildArgs(camera, rtspUrl, outputPattern, segmentSeconds);
-    this.logger.log(`Iniciando gravação camera=${cameraId} rtsp=${this.sanitizeRtspUrl(rtspUrl)}`);
+    const args = this.buildArgs(camera, rtspUrl, outputPattern, segmentSeconds, sourceCodec);
+    const outputVideoCodec = this.copyCodec && this.sourceIsHevcWithProbe(sourceCodec) ? 'copy-hevc' : 'libx265';
+    this.logger.log(`Iniciando gravação camera=${cameraId} sourceCodec=${sourceCodec ?? 'unknown'} output=${outputVideoCodec} rtsp=${this.sanitizeRtspUrl(rtspUrl)}`);
 
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
     proc.stderr.on('data', (chunk) => {

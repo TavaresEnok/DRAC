@@ -3,11 +3,65 @@ import { CamerasService } from '../cameras/cameras.service';
 import { AiService } from './ai.service';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { PrismaService } from '../common/prisma/prisma.service';
+import {
+  buildRtspUrl,
+  isHevcCodec,
+  resolveAnalyticsRtspProfile,
+  resolveLiveRtspProfile,
+  resolveRecordingRtspProfile,
+  sanitizeRtspUrl,
+} from '../cameras/helpers/rtsp-url.helper';
 import { MediamtxProxyService } from '../camera-stream/mediamtx-proxy.service';
-import { buildRtspUrl, isHevcCodec, resolveDeliveryRtspProfile, resolveDeliveryVideoCodec } from '../cameras/helpers/rtsp-url.helper';
 
 const AI_MODES = ['motion', 'face', 'general'] as const;
 type AiMode = typeof AI_MODES[number];
+
+function normalizeAiCameraToken(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/-+/g, '-');
+}
+
+function parseAiCameraSet(raw: string | undefined): Set<string> {
+  return new Set(
+    String(raw ?? '')
+      .split(',')
+      .map((item) => normalizeAiCameraToken(item))
+      .filter(Boolean),
+  );
+}
+
+function cameraMatchesAiToken(cam: any, token: string): boolean {
+  if (!token) return false;
+  return [cam.id, cam.name, cam.slug, cam.displayName]
+    .map((value) => normalizeAiCameraToken(value))
+    .filter(Boolean)
+    .includes(token);
+}
+
+function isCameraAllowedByAiEnv(cam: any): boolean {
+  const forceSingle = String(process.env.AI_FORCE_SINGLE_CAMERA ?? 'false').trim().toLowerCase();
+  const singleEnabled = ['1', 'true', 'yes', 'on'].includes(forceSingle);
+  const singleId = normalizeAiCameraToken(process.env.AI_SINGLE_CAMERA_ID);
+  if (singleEnabled && singleId) {
+    return cameraMatchesAiToken(cam, singleId);
+  }
+
+  const configured = [
+    process.env.AI_ENABLED_CAMERA_IDS,
+    process.env.AI_ACTIVE_CAMERA_IDS,
+    process.env.AI_ANALYTICS_CAMERA_IDS,
+  ].filter((value) => String(value ?? '').trim().length > 0);
+  if (!configured.length) return true;
+
+  const allowed = new Set<string>();
+  for (const raw of configured) {
+    for (const token of parseAiCameraSet(raw)) allowed.add(token);
+  }
+  return Array.from(allowed).some((token) => cameraMatchesAiToken(cam, token));
+}
 
 @Injectable()
 export class AiManagerService implements OnModuleInit {
@@ -19,7 +73,7 @@ export class AiManagerService implements OnModuleInit {
     private readonly aiService: AiService,
     private readonly cryptoService: CryptoService,
     private readonly prisma: PrismaService,
-    private readonly mediamtxProxyService: MediamtxProxyService,
+    private readonly mediamtxProxy: MediamtxProxyService,
   ) {}
 
   async onModuleInit() {
@@ -55,7 +109,7 @@ export class AiManagerService implements OnModuleInit {
       }
 
       const cameras = await this.camerasService.findAllInternal();
-      const enabledCameras = cameras.filter((cam: any) => cam.aiEnabled !== false);
+      const enabledCameras = cameras.filter((cam: any) => cam.aiEnabled !== false && isCameraAllowedByAiEnv(cam));
       const runtimeMode = settings.mode === 'motion' ? 'motion' : `motion+${settings.mode}`;
       this.logger.log(`Iniciando IA modo '${runtimeMode}' para ${enabledCameras.length}/${cameras.length} câmeras...`);
       await this.aiService.stopAll().catch(() => undefined);
@@ -64,8 +118,8 @@ export class AiManagerService implements OnModuleInit {
       
       for (const cam of enabledCameras) {
         try {
-          const rtspUrl = await this.buildAiRtspUrl(cam, settings.mode);
-          await this.aiService.startAnalysisWithConfig(cam.id, rtspUrl, settings.mode);
+          const source = await this.buildAiSource(cam);
+          await this.aiService.startAnalysisWithConfig(cam.id, source.rtspUrl, settings.mode, source.info);
           started += 1;
           this.logger.log(`IA ${runtimeMode} iniciada para câmera: ${cam.name}`);
         } catch (err: any) {
@@ -89,11 +143,11 @@ export class AiManagerService implements OnModuleInit {
       return { status: 'disabled', cameraId };
     }
     const cam = await this.camerasService.getCameraOrThrow(cameraId);
-    if (cam.aiEnabled === false) {
+    if (cam.aiEnabled === false || !isCameraAllowedByAiEnv(cam)) {
       return { status: 'camera_disabled', cameraId };
     }
-    const rtspUrl = await this.buildAiRtspUrl(cam, settings.mode);
-    return this.aiService.startAnalysisWithConfig(cameraId, rtspUrl, settings.mode);
+    const source = await this.buildAiSource(cam);
+    return this.aiService.startAnalysisWithConfig(cameraId, source.rtspUrl, settings.mode, source.info);
   }
 
   async getSettings() {
@@ -126,59 +180,84 @@ export class AiManagerService implements OnModuleInit {
     return { settings, sync };
   }
 
-  private async buildAiRtspUrl(cam: any, mode = 'motion'): Promise<string> {
-    const preferMediaMtx = String(process.env.AI_USE_MEDIAMTX ?? 'false').trim().toLowerCase() === 'true';
-    const browserDeliveryRequiresTranscode = isHevcCodec(resolveDeliveryVideoCodec(cam));
-    if (preferMediaMtx && this.mediamtxProxyService.isEnabled() && !browserDeliveryRequiresTranscode) {
-      try {
-        const ensured = await this.mediamtxProxyService.ensurePathForCamera(cam.id);
-        const internalUrl = this.mediamtxProxyService.buildInternalRtspUrl(ensured.pathName);
-        if (internalUrl) {
-          this.logger.debug(`IA usando restream interno MediaMTX para ${cam.name}: ${internalUrl}`);
-          return internalUrl;
-        }
-      } catch (err: any) {
-        this.logger.warn(`Falha ao preparar MediaMTX para IA em ${cam.name}; usando RTSP direto como fallback: ${err.message}`);
-      }
-    }
-    if (preferMediaMtx && browserDeliveryRequiresTranscode) {
-      this.logger.debug(`IA usando RTSP direto para ${cam.name}: evita transcode H.265 -> H.264 exclusivo do navegador.`);
-    }
-
+  private async buildAiSource(cam: any): Promise<{ rtspUrl: string; info: Record<string, unknown> }> {
     const password = this.cryptoService.decrypt(cam.passwordEncrypted);
-    return this.buildDirectRtspUrl(cam, password, mode);
-  }
-
-  private buildDirectRtspUrl(cam: any, password: string, mode = 'motion'): string {
     const rawSubtype = String(process.env.AI_RTSP_SUBTYPE ?? '').trim().toLowerCase();
     const configuredSubtype = rawSubtype === '' || rawSubtype === 'auto'
       ? Number.NaN
       : Number(rawSubtype);
-    const advancedMode = mode === 'face' || mode === 'general';
-    const streamProfile = String(process.env.AI_RTSP_STREAM_PROFILE ?? 'live').trim().toLowerCase();
-    const useRecordingProfile = advancedMode && ['recording', 'record', 'main'].includes(streamProfile);
-    const profile = useRecordingProfile
-      ? {
-          channel: Number.isFinite(Number(cam.recordingChannel)) ? Number(cam.recordingChannel) : cam.channel,
-          subtype: Number.isFinite(Number(cam.recordingSubtype)) ? Number(cam.recordingSubtype) : cam.subtype,
-        }
-      : resolveDeliveryRtspProfile(cam);
+    const analyticsProfile = resolveAnalyticsRtspProfile(cam);
+    const liveProfile = resolveLiveRtspProfile(cam);
+    const recordingProfile = resolveRecordingRtspProfile(cam);
     const subtype = Number.isFinite(configuredSubtype) && configuredSubtype >= 0
       ? configuredSubtype
-      : profile.subtype;
+      : analyticsProfile.subtype;
+    const channel = analyticsProfile.channel;
 
-    // A IA deve analisar o mesmo perfil de entrega da Live por padrão.
-    // Isso evita decodificar o perfil original HEVC de gravação e mantém
-    // frontend, MediaMTX e Python sincronizados.
-    return buildRtspUrl({
+    const rtspUrl = buildRtspUrl({
       username: cam.username,
       password,
       ip: cam.ip,
       rtspPort: cam.rtspPort || 554,
       rtspPath: cam.rtspPath,
-      channel: profile.channel,
+      channel,
       subtype,
     });
+    const sourceUrlSanitized = sanitizeRtspUrl(rtspUrl);
+    const infoBase = {
+      recordSubtype: recordingProfile.subtype,
+      recordChannel: recordingProfile.channel,
+      liveSubtype: liveProfile.subtype,
+      liveChannel: liveProfile.channel,
+      analyticsSubtype: subtype,
+      analyticsChannel: channel,
+      configuredAnalyticsSubtype: cam.analyticsSubtype ?? null,
+      configuredAnalyticsChannel: cam.analyticsChannel ?? null,
+    };
+
+    const rtspTransport = cam.preferredRtspTransport || process.env.FFMPEG_RTSP_TRANSPORT || 'tcp';
+    const analyticsCodec = await this.mediamtxProxy.probeStreamVideoCodec(rtspUrl, rtspTransport).catch(() => null);
+    const analyticsIsHevc = isHevcCodec(analyticsCodec);
+    const hevcFallbackEnabled = String(process.env.AI_ANALYTICS_HEVC_FALLBACK ?? 'true').toLowerCase() !== 'false';
+
+    if (analyticsIsHevc && hevcFallbackEnabled) {
+      const fallback = await this.mediamtxProxy.ensurePathForCamera(cam.id);
+      const fallbackRtspUrl = this.mediamtxProxy.buildInternalRtspUrl(fallback.pathName);
+      if (fallbackRtspUrl) {
+        this.logger.warn(`IA analytics de ${cam.name} esta em HEVC (${analyticsCodec}); usando path H.264 existente do MediaMTX: ${fallback.pathName}`);
+        return {
+          rtspUrl: fallbackRtspUrl,
+          info: {
+            ...infoBase,
+            sourceKind: 'mediamtx_delivery_h264_fallback',
+            usesMediaMtx: true,
+            audioRequested: false,
+            analyticsRtspUrl: fallbackRtspUrl,
+            analyticsSourceUrlSanitized: sourceUrlSanitized,
+            analyticsOriginalRtspUrl: sourceUrlSanitized,
+            analyticsSourceCodec: analyticsCodec,
+            analyticsTranscodedForAi: Boolean(fallback.transcodedForLive),
+            analyticsMediaMtxPath: fallback.pathName,
+            analyticsFallbackReason: 'hevc_direct_capture_unstable',
+          },
+        };
+      }
+    }
+
+    this.logger.debug(`IA usando RTSP direto analytics para ${cam.name}: ${sourceUrlSanitized}${analyticsCodec ? ` codec=${analyticsCodec}` : ''}`);
+    return {
+      rtspUrl,
+      info: {
+        ...infoBase,
+        sourceKind: 'direct_camera',
+        usesMediaMtx: false,
+        audioRequested: false,
+        analyticsRtspUrl: sourceUrlSanitized,
+        analyticsSourceUrlSanitized: sourceUrlSanitized,
+        analyticsSourceCodec: analyticsCodec,
+        analyticsTranscodedForAi: false,
+      },
+    };
   }
 
 }

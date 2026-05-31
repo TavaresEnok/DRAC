@@ -68,6 +68,8 @@ export class CamerasService {
   async create(dto: CreateCameraDto) {
     await this.validateReferences(dto.siteId, dto.areaId, dto.groupId);
     const normalizedProfile = this.normalizeProfileToDetected(dto, null);
+    const defaultChannel = dto.channel ?? 1;
+    const defaultSubtype = dto.subtype ?? 0;
     const camera = await this.prisma.camera.create({
       data: {
         name: dto.name,
@@ -79,12 +81,14 @@ export class CamerasService {
         rtspPath: dto.rtspPath,
         onvifPath: dto.onvifPath,
         onvifProfileToken: dto.onvifProfileToken,
-        channel: dto.channel ?? 1,
-        subtype: dto.subtype ?? 0,
-        liveChannel: dto.liveChannel ?? null,
-        liveSubtype: dto.liveSubtype ?? null,
-        recordingChannel: dto.recordingChannel ?? null,
-        recordingSubtype: dto.recordingSubtype ?? null,
+        channel: defaultChannel,
+        subtype: defaultSubtype,
+        liveChannel: dto.liveChannel ?? defaultChannel,
+        liveSubtype: dto.liveSubtype ?? defaultSubtype,
+        recordingChannel: dto.recordingChannel ?? defaultChannel,
+        recordingSubtype: dto.recordingSubtype ?? defaultSubtype,
+        analyticsChannel: dto.analyticsChannel ?? defaultChannel,
+        analyticsSubtype: dto.analyticsSubtype ?? 1,
         siteId: dto.siteId,
         areaId: dto.areaId,
         groupId: dto.groupId,
@@ -98,7 +102,7 @@ export class CamerasService {
         streamHeight: normalizedProfile.streamHeight,
         streamFps: normalizedProfile.streamFps,
         streamBitrateKbps: normalizedProfile.streamBitrateKbps,
-        recordingVideoCodec: this.normalizeVideoCodec(dto.recordingVideoCodec, { allowOriginal: true }),
+        recordingVideoCodec: 'h265',
         recordingWidth: normalizedProfile.recordingWidth,
         recordingHeight: normalizedProfile.recordingHeight,
         recordingFps: normalizedProfile.recordingFps,
@@ -107,6 +111,8 @@ export class CamerasService {
         aiEnabled: dto.aiEnabled ?? true,
         hasEdgeAi: dto.hasEdgeAi ?? false,
         motionTrigger: dto.motionTrigger ?? (dto.hasEdgeAi ? 'CAMERA' : 'SYSTEM'),
+        status: CameraStatus.ONLINE,
+        lastSeenAt: new Date(),
       },
     });
 
@@ -156,6 +162,8 @@ export class CamerasService {
         liveSubtype: dto.liveSubtype,
         recordingChannel: dto.recordingChannel,
         recordingSubtype: dto.recordingSubtype,
+        analyticsChannel: dto.analyticsChannel,
+        analyticsSubtype: dto.analyticsSubtype,
         siteId: dto.siteId,
         areaId: dto.areaId,
         groupId: dto.groupId,
@@ -169,7 +177,7 @@ export class CamerasService {
         streamHeight: normalizedProfile.streamHeight,
         streamFps: normalizedProfile.streamFps,
         streamBitrateKbps: normalizedProfile.streamBitrateKbps,
-        recordingVideoCodec: this.normalizeVideoCodec(dto.recordingVideoCodec, { allowOriginal: true }),
+        recordingVideoCodec: 'h265',
         recordingWidth: normalizedProfile.recordingWidth,
         recordingHeight: normalizedProfile.recordingHeight,
         recordingFps: normalizedProfile.recordingFps,
@@ -301,18 +309,24 @@ export class CamerasService {
     const rtspPathCandidates = Array.from(new Set([
       input.rtspPath?.trim().length ? input.rtspPath.trim() : null,
       input.channel != null && input.subtype != null ? `/cam/realmonitor?channel=${input.channel}&subtype=${input.subtype}` : null,
+      '/Streaming/Channels/101',
+      '/Streaming/Channels/102',
+      '/Streaming/Channels/201',
+      '/Streaming/Channels/202',
+      '/Streaming/Channels/101?transportmode=unicast',
+      '/Streaming/Channels/102?transportmode=unicast',
+      '/h264/ch1/main/av_stream',
+      '/h264/ch1/sub/av_stream',
       '/cam/realmonitor?channel=1&subtype=0',
       '/cam/realmonitor?channel=1&subtype=1',
       '/cam/realmonitor?channel=1&subtype=0&unicast=true',
       '/cam/realmonitor?channel=1&subtype=1&unicast=true',
       '/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif',
       '/cam/realmonitor?channel=1&subtype=1&unicast=true&proto=Onvif',
-      '/h264/ch1/main/av_stream',
-      '/h264/ch1/sub/av_stream',
       '/live/ch00_0',
       '/live/ch00_1',
-      '/Streaming/Channels/101',
-      '/Streaming/Channels/102',
+      '/stream1',
+      '/stream2',
     ].filter((v): v is string => Boolean(v))));
 
     let rtspAuthOk = false;
@@ -322,6 +336,7 @@ export class CamerasService {
     let detectedStream: ProbedStreamMetadata | null = null;
     let rtspProbeError: string | null = null;
     if (rtspReachableAny && input.username && input.password) {
+      let probe: Awaited<ReturnType<typeof this.probeRtspPaths>> | null = null;
       if (rtspReachable) {
         const selectedProbe = await this.probeRtspPaths({
           ip: input.ip,
@@ -331,8 +346,11 @@ export class CamerasService {
           paths: rtspPathCandidates,
         });
         selectedRtspPortAuthOk = selectedProbe.ok;
+        if (selectedProbe.ok) {
+          probe = selectedProbe;
+        }
       }
-      const probe = await this.probeRtspPaths({
+      probe ??= await this.probeRtspPaths({
         ip: input.ip,
         rtspPorts: reachableRtspPorts,
         username: input.username,
@@ -537,6 +555,13 @@ export class CamerasService {
     paths: string[];
   }) {
     let lastError: string | null = null;
+    let best: {
+      port: number;
+      path: string;
+      url: string;
+      metadata: ProbedStreamMetadata;
+      score: number;
+    } | null = null;
     for (const port of input.rtspPorts) {
       for (const path of input.paths) {
         const url = `rtsp://${encodeURIComponent(input.username)}:${encodeURIComponent(input.password)}@${input.ip}:${port}${path}`;
@@ -592,18 +617,35 @@ export class CamerasService {
 
         if (result.ok) {
           const metadata = result.metadata ?? {};
-          if (!metadata.bitrateKbps || metadata.bitrateKbps <= 0) {
-            const estimatedBitrate = await this.estimateBitrateWithFfmpeg(url);
-            if (estimatedBitrate && estimatedBitrate > 0) {
-              metadata.bitrateKbps = estimatedBitrate;
-            }
+          const score = this.scoreProbedStream(metadata);
+          if (!best || score > best.score) {
+            best = { port, path, url, metadata, score };
           }
-          return { ok: true, port, path, error: null, metadata };
+          continue;
         }
         lastError = result.error;
       }
     }
+    if (best) {
+      const metadata = best.metadata;
+      if (!metadata.bitrateKbps || metadata.bitrateKbps <= 0) {
+        const estimatedBitrate = await this.estimateBitrateWithFfmpeg(best.url);
+        if (estimatedBitrate && estimatedBitrate > 0) {
+          metadata.bitrateKbps = estimatedBitrate;
+        }
+      }
+      return { ok: true, port: best.port, path: best.path, error: null, metadata };
+    }
     return { ok: false, port: null as number | null, path: null as string | null, error: lastError, metadata: null };
+  }
+
+  private scoreProbedStream(metadata: ProbedStreamMetadata | null) {
+    const width = Number(metadata?.width ?? 0);
+    const height = Number(metadata?.height ?? 0);
+    const fps = Number(metadata?.fps ?? 0);
+    const area = Number.isFinite(width) && Number.isFinite(height) ? width * height : 0;
+    const fpsScore = Number.isFinite(fps) ? Math.min(Math.max(fps, 0), 60) : 0;
+    return area * 100 + fpsScore;
   }
 
   async getStatus(id: string) {
@@ -625,8 +667,14 @@ export class CamerasService {
           const rtspPathCandidates = Array.from(
             new Set(
               [
-                `/cam/realmonitor?channel=${liveProfile.channel}&subtype=${liveProfile.subtype}`,
                 camera.rtspPath?.trim().length ? camera.rtspPath : null,
+                `/Streaming/Channels/${liveProfile.channel}01`,
+                `/Streaming/Channels/${liveProfile.channel}02`,
+                '/Streaming/Channels/101',
+                '/Streaming/Channels/102',
+                '/h264/ch1/main/av_stream',
+                '/h264/ch1/sub/av_stream',
+                `/cam/realmonitor?channel=${liveProfile.channel}&subtype=${liveProfile.subtype}`,
                 `/cam/realmonitor?channel=${liveProfile.channel}&subtype=0`,
                 '/cam/realmonitor?channel=1&subtype=0',
                 '/cam/realmonitor?channel=1&subtype=1',

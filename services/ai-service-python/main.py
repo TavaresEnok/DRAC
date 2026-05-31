@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Header, Query
 import os
 import uvicorn
 from pydantic import BaseModel
-from typing import Optional, Dict
+from typing import Any, Optional, Dict
 import hmac
 from stream_processor import StreamProcessor
 from model_registry import registry
@@ -18,6 +18,7 @@ class AnalysisRequest(BaseModel):
     camera_id: str
     rtsp_url: str
     analysis_type: str  # 'motion' = base only; 'face' and 'general' run with motion too.
+    source_info: Optional[Dict[str, Any]] = None
 
 
 class ModeRequest(BaseModel):
@@ -60,6 +61,8 @@ def health_check():
                 "live_snapshot_count": len(processor.get_live_snapshot(max_age_ms=15000, limit=100)),
                 "capture_frames_enqueued": processor.capture_frames_enqueued,
                 "capture_frames_dropped": processor.capture_frames_dropped,
+                "source": processor.source_state(),
+                "stream": processor.capture_stream_state(),
                 "motion_trigger": processor.motion_trigger,
                 "wakeup_until": processor.wakeup_until,
                 "hibernating": processor.motion_trigger == "CAMERA" and __import__("time").time() >= processor.wakeup_until,
@@ -103,6 +106,7 @@ async def start_analysis(request: AnalysisRequest, x_service_token: Optional[str
         api_url,
         service_token,
         request.analysis_type,
+        request.source_info or {},
     )
     processor.start()
     processors[request.camera_id] = processor

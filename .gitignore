@@ -38,6 +38,9 @@ infra/ai-models/
 .android-sdk/
 infra/backups/
 concorrente/
+concorrentes/
+diagnostics/
+webrtc-implementation-guide/
 
 # Local planning/audit notes
 *.md

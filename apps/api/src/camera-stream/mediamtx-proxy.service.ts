@@ -6,11 +6,7 @@ import { CamerasService } from '../cameras/cameras.service';
 import {
   buildRtspUrl,
   isHevcCodec,
-  isOriginalLiveProfileRequested,
-  resolveDeliveryRtspProfile,
-  resolveDeliveryVideoCodec,
-  resolveOriginalRtspProfile,
-  resolveOriginalVideoCodec,
+  resolveLiveRtspProfile,
 } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
 
@@ -27,8 +23,8 @@ type DeliveryUrls = {
 @Injectable()
 export class MediamtxProxyService implements OnApplicationBootstrap {
   private readonly logger = new Logger(MediamtxProxyService.name);
-  private readonly mainCodecCache = new Map<string, { isHevc: boolean; at: number }>();
-  private static readonly MAIN_CODEC_TTL_MS = 30 * 60 * 1000;
+  private readonly liveCodecCache = new Map<string, { isHevc: boolean; at: number }>();
+  private static readonly LIVE_CODEC_TTL_MS = 30 * 60 * 1000;
 
   constructor(
     private readonly configService: ConfigService,
@@ -59,15 +55,17 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
   }
 
   invalidateMainCodecCache(cameraId: string) {
-    this.mainCodecCache.delete(cameraId);
+    for (const key of this.liveCodecCache.keys()) {
+      if (key.startsWith(`${cameraId}:`)) this.liveCodecCache.delete(key);
+    }
   }
 
-  // Sonda o codec do stream PRINCIPAL via ffprobe (assíncrono, não bloqueia o event loop).
+  // Sonda o codec do stream via ffprobe (assíncrono, não bloqueia o event loop).
   // Retorna null se falhar (câmera offline/instável), para o chamador decidir o fallback.
-  private probeStreamIsHevc(sourceUrl: string, transport: string): Promise<boolean | null> {
+  probeStreamVideoCodec(sourceUrl: string, transport: string): Promise<string | null> {
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (value: boolean | null) => {
+      const finish = (value: string | null) => {
         if (settled) return;
         settled = true;
         resolve(value);
@@ -93,7 +91,7 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
           clearTimeout(killTimer);
           const codec = stdout.trim().split('\n')[0].trim().toLowerCase();
           if (code !== 0 || !codec) return finish(null);
-          finish(isHevcCodec(codec));
+          finish(codec);
         });
       } catch {
         finish(null);
@@ -101,22 +99,46 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
     });
   }
 
-  // Decide se o stream principal é H.265 (precisa transcode). Usa cache curto para
+  private async probeStreamIsHevc(sourceUrl: string, transport: string): Promise<boolean | null> {
+    const codec = await this.probeStreamVideoCodec(sourceUrl, transport);
+    if (!codec) return null;
+    return isHevcCodec(codec);
+  }
+
+  // Decide se o stream de Live é H.265 (precisa transcode). Usa cache curto para
   // não sondar a câmera a cada requisição de URLs. Em falha de probe, assume H.265
   // (transcode sempre entrega vídeo ao navegador; o pior caso é só custo de CPU).
-  private async resolveMainStreamIsHevc(cameraId: string, sourceUrl: string, transport: string, camera: any): Promise<boolean> {
-    const cached = this.mainCodecCache.get(cameraId);
-    if (cached && Date.now() - cached.at < MediamtxProxyService.MAIN_CODEC_TTL_MS) {
+  private async resolveLiveStreamIsHevc(cacheKey: string, sourceUrl: string, transport: string): Promise<boolean> {
+    const cached = this.liveCodecCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < MediamtxProxyService.LIVE_CODEC_TTL_MS) {
       return cached.isHevc;
     }
     const probed = await this.probeStreamIsHevc(sourceUrl, transport);
     if (probed === null) {
-      // Sem cache em falha: tenta dica do banco e, na dúvida, transcodifica.
-      const hint = isHevcCodec(resolveOriginalVideoCodec(camera) ?? '');
-      return hint || true;
+      return true;
     }
-    this.mainCodecCache.set(cameraId, { isHevc: probed, at: Date.now() });
+    this.liveCodecCache.set(cacheKey, { isHevc: probed, at: Date.now() });
     return probed;
+  }
+
+  private async chooseLiveSource(cameraId: string, camera: any, password: string, transport: string) {
+    const configuredProfile = resolveLiveRtspProfile(camera);
+    const updatedAt = camera.updatedAt instanceof Date ? camera.updatedAt.toISOString() : String(camera.updatedAt ?? '');
+    const sourceUrl = buildRtspUrl({
+      username: camera.username,
+      password,
+      ip: camera.ip,
+      rtspPort: camera.rtspPort,
+      rtspPath: camera.rtspPath,
+      channel: configuredProfile.channel,
+      subtype: configuredProfile.subtype,
+    });
+    const cacheKey = `${cameraId}:${configuredProfile.channel}:${configuredProfile.subtype}:${updatedAt}`;
+    const isHevc = await this.resolveLiveStreamIsHevc(cacheKey, sourceUrl, transport);
+
+    // A fonte Live e uma escolha operacional explicita. HEVC e convertido
+    // para o navegador, mas nunca trocado silenciosamente por outro subtype.
+    return { profile: configuredProfile, sourceUrl, isHevc };
   }
 
   private durationToMilliseconds(value: string | undefined | null) {
@@ -210,7 +232,13 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
 
   async ensurePathForCamera(cameraId: string) {
     if (!this.isEnabled()) {
-      return { pathName: null as string | null, sourceUrl: null as string | null };
+      return {
+        pathName: null as string | null,
+        sourceUrl: null as string | null,
+        sourceVideoCodec: null as string | null,
+        transcodedForLive: false,
+        liveProfile: null as { channel: number; subtype: number } | null,
+      };
     }
 
     const camera = await this.camerasService.getCameraOrThrow(cameraId);
@@ -223,27 +251,14 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
     const sourceOnDemandCloseAfter = this.configService.get<string>('mediaMtxSourceOnDemandCloseAfter') ?? '5m';
     const rtspTransport = camera.preferredRtspTransport ?? this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp';
 
-    // Política de entrega Live (alinhada à arquitetura pretendida):
-    //   - "Original" (padrão): entrega o stream PRINCIPAL em resolução cheia.
-    //       * principal H.264 -> MediaMTX faz remux (passthrough), resolução cheia.
-    //       * principal H.265 -> transcodifica para H.264 (navegador não toca H.265),
-    //         mantendo a resolução original do principal.
-    //   - Override explícito de codec/resolução: mantém o perfil de entrega configurado.
-    const wantsOriginal = isOriginalLiveProfileRequested(camera);
-    const liveProfile = wantsOriginal ? resolveOriginalRtspProfile(camera) : resolveDeliveryRtspProfile(camera);
-    const sourceUrl = buildRtspUrl({
-      username: camera.username,
-      password,
-      ip: camera.ip,
-      rtspPort: camera.rtspPort,
-      rtspPath: camera.rtspPath,
-      channel: liveProfile.channel,
-      subtype: liveProfile.subtype,
-    });
-
-    const isHevc = wantsOriginal
-      ? await this.resolveMainStreamIsHevc(cameraId, sourceUrl, rtspTransport, camera)
-      : isHevcCodec(resolveDeliveryVideoCodec(camera));
+    // A Live respeita exatamente o perfil configurado. Se ele for HEVC,
+    // somente o codec de entrega ao navegador e convertido para H.264.
+    const selectedLive = await this.chooseLiveSource(cameraId, camera, password, rtspTransport);
+    const liveProfile = selectedLive.profile;
+    const sourceUrl = selectedLive.sourceUrl;
+    const isHevc = selectedLive.isHevc;
+    const transcodeAudioForWebrtc = Boolean(camera.audioEnabled);
+    const needsPublisher = isHevc || transcodeAudioForWebrtc;
 
     const desiredPath: any = {
       source: sourceUrl,
@@ -253,20 +268,26 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
       rtspTransport,
     };
 
-    if (isHevc) {
-      // Navegadores não reproduzem H.265 via WebRTC/HLS. Transcodificamos para H.264.
-      // O source vira 'publisher' e runOnDemand sobe um ffmpeg que puxa o stream PRINCIPAL
-      // da câmera, transcodifica em resolução cheia e publica de volta neste mesmo path.
+    if (needsPublisher) {
+      // Navegadores não reproduzem H.265 via WebRTC/HLS, e WebRTC não aceita o AAC
+      // vindo dessas câmeras neste pipeline. O source vira 'publisher' e runOnDemand
+      // sobe um ffmpeg que publica H.264 + Opus quando áudio estiver habilitado.
       desiredPath.source = 'publisher';
+      const videoArgs = isHevc
+        ? '-threads 4 -c:v libx264 -preset ultrafast -tune zerolatency -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 30'
+        : '-c:v copy';
+      const audioArgs = transcodeAudioForWebrtc
+        ? '-c:a libopus -ar 48000 -ac 2 -application lowdelay -b:a 96k'
+        : '-an';
       // MediaMTX preenche $MTX_PATH e $RTSP_PORT automaticamente para o script.
       // -threads 4: limita libx264 a 4 threads por câmera (3 câmeras × 4 = 12 threads totais).
       // Sem este limite, libx264 cria automaticamente N threads = nº de núcleos lógicos,
       // causando 3 × 14 = 42 threads encode + 3 × 15 = 45 threads decode competindo,
       // sobrecarregando C0/C1 por efeito de scheduler clustering.
-      desiredPath.runOnDemand = `ffmpeg -hide_banner -loglevel warning -rtsp_transport ${rtspTransport} -i "${sourceUrl}" -threads 4 -c:v libx264 -preset ultrafast -tune zerolatency -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 30 -c:a aac -ar 44100 -ac 2 -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH`;
+      desiredPath.runOnDemand = `ffmpeg -hide_banner -loglevel warning -rtsp_transport ${rtspTransport} -i "${sourceUrl}" -map 0:v:0 -map 0:a:0? ${videoArgs} ${audioArgs} -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH`;
       desiredPath.runOnDemandRestart = true;
-      desiredPath.runOnDemandStartTimeout = '15s'; // Tempo para o ffmpeg começar a transcodificar.
-      // Transcode H.265 -> H.264 é caro; mantenha-o apenas enquanto há leitor Live ativo.
+      desiredPath.runOnDemandStartTimeout = '15s'; // Tempo para o ffmpeg começar a republicar.
+      // Mantém ffmpeg apenas enquanto há leitor Live ativo.
       desiredPath.runOnDemandCloseAfter = '10s';
       // Com runOnDemand como publisher, estes campos 'sourceOnDemand' são inválidos.
       delete desiredPath.sourceOnDemand;
@@ -279,12 +300,12 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
       const hasSameSource =
         current.source === desiredPath.source &&
         current.rtspTransport === desiredPath.rtspTransport;
-      const hasSameCameraSourceSettings = isHevc
+      const hasSameCameraSourceSettings = needsPublisher
         ? true
         : current.sourceOnDemand === desiredPath.sourceOnDemand &&
           this.sameDuration(current.sourceOnDemandStartTimeout, desiredPath.sourceOnDemandStartTimeout) &&
           this.sameDuration(current.sourceOnDemandCloseAfter, desiredPath.sourceOnDemandCloseAfter);
-      const hasSamePublisherSettings = isHevc
+      const hasSamePublisherSettings = needsPublisher
         ? (current.runOnDemand || '') === (desiredPath.runOnDemand || '') &&
           Boolean(current.runOnDemandRestart) === Boolean(desiredPath.runOnDemandRestart) &&
           this.sameDuration(current.runOnDemandStartTimeout, desiredPath.runOnDemandStartTimeout) &&
@@ -293,7 +314,7 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
       const isSamePath = hasSameSource && hasSameCameraSourceSettings && hasSamePublisherSettings;
 
       if (isSamePath) {
-        return { pathName, sourceUrl };
+        return { pathName, sourceUrl, sourceVideoCodec: isHevc ? 'h265' : 'h264', transcodedForLive: isHevc, liveProfile };
       }
     } catch {
       // Se não existe, cria abaixo. Se a API falhar temporariamente, a criação vai expor o erro real.
@@ -309,8 +330,9 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
     await this.apiRequest('POST', `/v3/config/paths/add/${encodedPath}`, desiredPath);
 
     this.logger.log(`Path MediaMTX pronto ${pathName} -> ${this.sanitizeRtspUrl(sourceUrl)}`);
-    return { pathName, sourceUrl };
+    return { pathName, sourceUrl, sourceVideoCodec: isHevc ? 'h265' : 'h264', transcodedForLive: isHevc, liveProfile };
   }
+
 
   buildInternalRtspUrl(pathName: string | null) {
     if (!pathName) return null;

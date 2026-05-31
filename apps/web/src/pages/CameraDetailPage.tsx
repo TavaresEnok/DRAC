@@ -41,6 +41,7 @@ const RESOLUTION_PRESETS = [
 type CommandState = 'idle' | 'sending' | 'ok' | 'error';
 type VideoCodec = 'original' | 'h264' | 'h265' | 'mjpeg';
 type RecordingMode = 'continuous' | 'motion' | 'schedule' | 'manual';
+type LiveSourceMode = 'original' | 'economical' | 'advanced';
 
 const RECORDING_MODE_COPY: Record<RecordingMode, { label: string; detail: string; className: string }> = {
   manual: {
@@ -85,6 +86,8 @@ type CameraConfig = {
   liveSubtype: string;
   recordingChannel: string;
   recordingSubtype: string;
+  analyticsChannel: string;
+  analyticsSubtype: string;
   recordingEnabled: boolean;
   recordingMode: RecordingMode;
   retentionDays: string;
@@ -146,6 +149,8 @@ const emptyConfig: CameraConfig = {
   liveSubtype: '',
   recordingChannel: '',
   recordingSubtype: '',
+  analyticsChannel: '',
+  analyticsSubtype: '',
   recordingEnabled: true,
   recordingMode: 'continuous',
   retentionDays: '7',
@@ -156,7 +161,7 @@ const emptyConfig: CameraConfig = {
   streamHeight: '',
   streamFps: '',
   streamBitrateKbps: '',
-  recordingVideoCodec: 'h264',
+  recordingVideoCodec: 'h265',
   recordingWidth: '',
   recordingHeight: '',
   recordingFps: '',
@@ -200,6 +205,13 @@ function normalizePreferredLiveProtocol(protocol?: string | null): CameraConfig[
     return value === 'll-hls' ? 'llhls' : value;
   }
   return 'auto';
+}
+
+function resolveLiveSourceMode(liveSubtype: string, fallbackSubtype: string): LiveSourceMode {
+  const selectedSubtype = Number(liveSubtype.trim() ? liveSubtype : fallbackSubtype);
+  if (selectedSubtype === 0) return 'original';
+  if (selectedSubtype === 1) return 'economical';
+  return 'advanced';
 }
 
 function SettingsCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
@@ -357,6 +369,7 @@ export default function CameraDetailPage() {
     state: 'loading',
     reason: null,
   });
+  const [liveConfigRevision, setLiveConfigRevision] = useState(0);
   const [discoveringEndpoints, setDiscoveringEndpoints] = useState(false);
   const [diagnosingPtz, setDiagnosingPtz] = useState(false);
   const [triggeringAlarm, setTriggeringAlarm] = useState(false);
@@ -407,6 +420,8 @@ export default function CameraDetailPage() {
           liveSubtype: data.liveSubtype == null ? '' : String(data.liveSubtype),
           recordingChannel: data.recordingChannel == null ? '' : String(data.recordingChannel),
           recordingSubtype: data.recordingSubtype == null ? '' : String(data.recordingSubtype),
+          analyticsChannel: data.analyticsChannel == null ? '' : String(data.analyticsChannel),
+          analyticsSubtype: data.analyticsSubtype == null ? '' : String(data.analyticsSubtype),
           recordingEnabled: Boolean(data.recordingEnabled),
           recordingMode: data.recordingMode ?? (data.recordingEnabled ? 'continuous' : 'manual'),
           retentionDays: String(data.retentionDays ?? 7),
@@ -609,6 +624,19 @@ export default function CameraDetailPage() {
     updateField('recordingHeight', h);
   };
 
+  const applyLiveSourceMode = (value: LiveSourceMode) => {
+    if (value === 'advanced') return;
+    setForm((current) => ({
+      ...current,
+      liveSubtype: value === 'original' ? '0' : '1',
+      streamVideoCodec: 'original',
+      streamWidth: '',
+      streamHeight: '',
+      streamFps: '',
+      streamBitrateKbps: '',
+    }));
+  };
+
   const saveSettings = async () => {
     if (!cam?.id || !accessToken) return;
     setConfigSaving(true);
@@ -657,6 +685,8 @@ export default function CameraDetailPage() {
           liveSubtype: form.liveSubtype.trim() ? Number(form.liveSubtype) : null,
           recordingChannel: form.recordingChannel.trim() ? Number(form.recordingChannel) : null,
           recordingSubtype: form.recordingSubtype.trim() ? Number(form.recordingSubtype) : null,
+          analyticsChannel: form.analyticsChannel.trim() ? Number(form.analyticsChannel) : null,
+          analyticsSubtype: form.analyticsSubtype.trim() ? Number(form.analyticsSubtype) : null,
           recordingEnabled: form.recordingEnabled,
           recordingMode: form.recordingMode,
           retentionDays: Number(form.retentionDays),
@@ -681,8 +711,9 @@ export default function CameraDetailPage() {
 
       setCameraConfigMeta(updatedCamera);
       await loadData();
+      setLiveConfigRevision((current) => current + 1);
       setForm((current) => ({ ...current, password: '' }));
-      const appliedLiveResolution = form.streamWidth && form.streamHeight ? `${form.streamWidth}x${form.streamHeight}` : 'Original';
+      const appliedLiveResolution = form.streamWidth && form.streamHeight ? `${form.streamWidth}x${form.streamHeight}` : 'Sem redimensionamento';
       toast({
         title: 'Configuração salva',
         description: clampedFields.length
@@ -875,42 +906,35 @@ export default function CameraDetailPage() {
   const isMotionRecordingActive = isMotionRecordingMode && isRecordingActive;
   const cameraMeta = cameraConfigMeta ?? cam;
   const resolutionMatch = cam?.resolution?.match(/(\d+)\s*x\s*(\d+)/i) ?? null;
-  const liveCodecSetting = normalizeVideoCodec(form.streamVideoCodec || cameraMeta?.streamVideoCodec);
-  const liveCodecRequestsOriginal = liveCodecSetting === 'original';
-  const liveUsesOriginalResolution = !form.streamWidth.trim() && !form.streamHeight.trim() && cameraMeta?.streamWidth == null && cameraMeta?.streamHeight == null;
-  const liveUsesOriginalProfile = liveCodecSetting === 'original' && liveUsesOriginalResolution;
   const originalWidth = cameraMeta?.recordingWidth ?? cameraMeta?.detectedWidth ?? cameraMeta?.streamWidth ?? (resolutionMatch ? Number(resolutionMatch[1]) : null);
   const originalHeight = cameraMeta?.recordingHeight ?? cameraMeta?.detectedHeight ?? cameraMeta?.streamHeight ?? (resolutionMatch ? Number(resolutionMatch[2]) : null);
   const originalFps = cameraMeta?.recordingFps ?? cameraMeta?.detectedFps ?? cam?.fps ?? null;
   const originalCodecValue = normalizeVideoCodec(cameraMeta?.recordingVideoCodec ?? cameraMeta?.detectedVideoCodec ?? cameraMeta?.streamVideoCodec);
   const originalCodec = originalCodecValue.toUpperCase();
-  const originalCodecIsHevc = originalCodecValue === 'h265';
   const originalBitrate = cameraMeta?.recordingBitrateKbps ?? cameraMeta?.detectedBitrateKbps ?? cameraMeta?.streamBitrateKbps ?? null;
   const originalStreamText = `${originalWidth ?? '--'}x${originalHeight ?? '--'} @ ${originalFps ?? '--'} FPS`;
-  const configuredLiveResolution = form.streamWidth && form.streamHeight ? `${form.streamWidth}x${form.streamHeight}` : 'Original';
-  // Live entrega SEMPRE o stream principal em resolução cheia quando "Original" é solicitado:
-  // H.264 por passthrough; H.265 é transcodificado para H.264 mantendo a resolução original.
-  const deliveryUsesOriginalProfile = liveUsesOriginalProfile;
+  const liveSourceMode = resolveLiveSourceMode(form.liveSubtype, form.subtype);
+  const liveUsesOriginalSource = liveSourceMode === 'original';
   const liveProfileWidth = cameraMeta?.detectedWidth ?? cameraMeta?.streamWidth ?? (resolutionMatch ? Number(resolutionMatch[1]) : null);
   const liveProfileHeight = cameraMeta?.detectedHeight ?? cameraMeta?.streamHeight ?? (resolutionMatch ? Number(resolutionMatch[2]) : null);
   const liveProfileFps = cameraMeta?.detectedFps ?? cameraMeta?.streamFps ?? cam?.fps ?? null;
   const liveProfileCodecValue = normalizeVideoCodec(cameraMeta?.detectedVideoCodec ?? cameraMeta?.streamVideoCodec);
-  const effectiveLiveWidth = deliveryUsesOriginalProfile ? originalWidth : (form.streamWidth.trim() ? Number(form.streamWidth) : liveProfileWidth);
-  const effectiveLiveHeight = deliveryUsesOriginalProfile ? originalHeight : (form.streamHeight.trim() ? Number(form.streamHeight) : liveProfileHeight);
-  const effectiveLiveFps = deliveryUsesOriginalProfile ? originalFps : (form.streamFps.trim() ? Number(form.streamFps) : liveProfileFps);
-  // O navegador sempre recebe H.264; quando o principal é H.265 ele é transcodificado.
-  const liveTranscodedFromHevc = deliveryUsesOriginalProfile && originalCodecIsHevc;
-  const effectiveLiveCodecValue = liveCodecRequestsOriginal
-    ? (deliveryUsesOriginalProfile ? (originalCodecIsHevc ? 'h264' : originalCodecValue) : liveProfileCodecValue)
-    : liveCodecSetting;
+  const selectedSourceCodecValue = liveUsesOriginalSource ? originalCodecValue : liveProfileCodecValue;
+  const effectiveLiveWidth = liveUsesOriginalSource ? originalWidth : liveProfileWidth;
+  const effectiveLiveHeight = liveUsesOriginalSource ? originalHeight : liveProfileHeight;
+  const effectiveLiveFps = liveUsesOriginalSource ? originalFps : liveProfileFps;
+  // Live sempre entrega H.264; HEVC no perfil Live é transcodificado sob demanda.
+  const liveTranscodedFromHevc = selectedSourceCodecValue === 'h265';
+  const effectiveLiveCodecValue = liveTranscodedFromHevc ? 'h264' : selectedSourceCodecValue;
   const effectiveLiveCodec = effectiveLiveCodecValue.toUpperCase();
   const effectiveLiveText = `${effectiveLiveWidth ?? '--'}x${effectiveLiveHeight ?? '--'} @ ${effectiveLiveFps ?? '--'} FPS · ${effectiveLiveCodec}${liveTranscodedFromHevc ? ' (transcod. de H265)' : ''}`;
-  const deliverySubtype = deliveryUsesOriginalProfile
-    ? (cameraMeta?.recordingSubtype ?? cam?.recordingSubtype ?? cameraMeta?.subtype ?? null)
-    : (cameraMeta?.liveSubtype ?? cam?.liveSubtype ?? cameraMeta?.subtype ?? null);
-  const configuredLiveText = liveUsesOriginalProfile
-    ? `Original/principal: ${originalStreamText}${originalCodecIsHevc ? ' · H265→H264' : ''} · subtype ${deliverySubtype ?? '--'}`
-    : `${configuredLiveResolution} @ ${form.streamFps || 'auto'} FPS · subtype ${deliverySubtype ?? '--'}`;
+  const deliverySubtype = cameraMeta?.liveSubtype ?? cam?.liveSubtype ?? cameraMeta?.subtype ?? null;
+  const liveSourceLabel = liveSourceMode === 'original'
+      ? 'Original da câmera'
+      : liveSourceMode === 'economical'
+      ? 'Substream econômico'
+      : `Subtype ${form.liveSubtype || form.subtype || '--'}`;
+  const configuredLiveText = `${liveSourceLabel}: ${effectiveLiveText} · subtype ${liveUsesOriginalSource ? '0' : (deliverySubtype ?? '--')}`;
   const recordingModeCopy = getRecordingModeCopy(form.recordingMode);
 
   const startManualRecording = async () => {
@@ -1167,6 +1191,7 @@ export default function CameraDetailPage() {
                   style={{ transform: `translate(${videoPan.x}px, ${videoPan.y}px) scale(${videoZoom})`, transformOrigin: 'center center' }}
                 >
                   <LiveStreamPlayer
+                    key={`${cam.id}-${liveConfigRevision}`}
                     cameraId={cam.id}
                     cameraName={cam.name}
                     className="absolute inset-0 h-full w-full"
@@ -1273,9 +1298,9 @@ export default function CameraDetailPage() {
                       {livePlayerStatus.reason}
                     </div>
                   ) : null}
-                  {liveUsesOriginalProfile && originalCodecIsHevc ? (
+                  {liveTranscodedFromHevc ? (
                     <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[10px] leading-relaxed text-amber-700 dark:text-amber-200">
-                      O perfil original é HEVC. Para estabilidade no navegador, a live usa o perfil H.264 compatível; a gravação mantém o perfil original.
+                      O perfil Live recebido é HEVC e está sendo convertido para H.264. A gravação usa seu perfil H.265 dedicado sem esta conversão.
                     </div>
                   ) : null}
                   <div className="flex justify-between"><span className="text-muted-foreground">RTSP</span><span className="font-mono uppercase">{cam.preferredRtspTransport}</span></div>
@@ -1496,47 +1521,35 @@ export default function CameraDetailPage() {
                         </div>
                       </SettingsCard>
 
-                      <SettingsCard title="Rotas técnicas" description="Caminhos avançados usados pelo RTSP e ONVIF. Normalmente só mude após detectar automaticamente.">
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <SettingsField label="Caminho RTSP" wide>
-                            <SettingsInput value={form.rtspPath} onChange={(event) => updateField('rtspPath', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <SettingsField label="Caminho ONVIF">
-                            <SettingsInput value={form.onvifPath} onChange={(event) => updateField('onvifPath', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <SettingsField label="Token ONVIF">
-                            <SettingsInput value={form.onvifProfileToken} onChange={(event) => updateField('onvifProfileToken', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <SettingsField label="Canal">
-                            <SettingsInput type="number" min={1} value={form.channel} onChange={(event) => updateField('channel', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <SettingsField label="Perfil de stream">
-                            <SettingsSelect value={form.subtype} onChange={(event) => updateField('subtype', event.target.value)}>
-                              <option value="0">Principal (0)</option>
-                              <option value="1">Substream (1)</option>
-                              <option value="2">Substream 2 (2)</option>
-                            </SettingsSelect>
-                          </SettingsField>
-                          <SettingsField label="Canal Live" hint="Vazio = usa Canal legado">
-                            <SettingsInput type="number" min={1} value={form.liveChannel} onChange={(event) => updateField('liveChannel', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <SettingsField label="Subtype Live" hint="Vazio = usa Perfil legado">
-                            <SettingsInput type="number" min={0} value={form.liveSubtype} onChange={(event) => updateField('liveSubtype', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <SettingsField label="Canal Gravação" hint="Vazio = usa Canal legado">
-                            <SettingsInput type="number" min={1} value={form.recordingChannel} onChange={(event) => updateField('recordingChannel', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <SettingsField label="Subtype Gravação" hint="Vazio = usa Perfil legado">
-                            <SettingsInput type="number" min={0} value={form.recordingSubtype} onChange={(event) => updateField('recordingSubtype', event.target.value)} className="font-mono" />
-                          </SettingsField>
+                      <SettingsCard title="Perfis automáticos" description="O DRAC escolhe os caminhos técnicos internamente a partir das portas, credenciais e canal.">
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Live</div>
+                            <div className="mt-1 text-sm font-medium text-foreground">Original da câmera</div>
+                          </div>
+                          <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Gravação</div>
+                            <div className="mt-1 text-sm font-medium text-foreground">Principal H.265</div>
+                          </div>
+                          <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">IA</div>
+                            <div className="mt-1 text-sm font-medium text-foreground">Substream leve</div>
+                          </div>
                         </div>
                       </SettingsCard>
 
-                      <SettingsCard title="Live" description="Como o sistema deve entregar a imagem ao operador. A opção Original preserva o que chega da câmera.">
+                      <SettingsCard title="Live" description="O navegador recebe H.264. Um perfil Live H.264 passa direto; HEVC é convertido sob demanda.">
                         <div className="grid gap-3 md:grid-cols-3">
-                          <SettingsField label="Codec">
+                          <SettingsField label="Fonte da imagem">
+                            <SettingsSelect value={liveSourceMode} onChange={(event) => applyLiveSourceMode(event.target.value as LiveSourceMode)}>
+                              <option value="original">Original da câmera (principal)</option>
+                              <option value="economical">Substream econômico</option>
+                              {liveSourceMode === 'advanced' ? <option value="advanced">Subtype personalizado</option> : null}
+                            </SettingsSelect>
+                          </SettingsField>
+                          <SettingsField label="Codec da origem Live">
                             <SettingsSelect value={form.streamVideoCodec} onChange={(event) => updateField('streamVideoCodec', event.target.value as CameraConfig['streamVideoCodec'])}>
-                              <option value="original">Original da câmera</option>
+                              <option value="original">Detectar no perfil Live</option>
                               <option value="h264">H.264</option>
                               <option value="h265">H.265</option>
                               <option value="mjpeg">MJPEG</option>
@@ -1557,13 +1570,13 @@ export default function CameraDetailPage() {
                               <option value="udp">UDP</option>
                             </SettingsSelect>
                           </SettingsField>
-                          <SettingsField label="Resolução">
+                          <SettingsField label="Fallback FLV: escala">
                             <SettingsSelect
                               value={getResolutionPresetValue(form.streamWidth, form.streamHeight) || 'custom'}
                               onChange={(event) => applyResolutionPreset('stream', event.target.value)}
                             >
                               <option value="custom" disabled>Personalizada</option>
-                              <option value="original">Original da câmera</option>
+                              <option value="original">Sem redimensionamento</option>
                               {RESOLUTION_PRESETS.map((preset) => (
                                 <option key={`stream-${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
                                   {preset.label}
@@ -1571,10 +1584,10 @@ export default function CameraDetailPage() {
                               ))}
                             </SettingsSelect>
                           </SettingsField>
-                          <SettingsField label="FPS">
+                          <SettingsField label="Fallback FLV: FPS">
                             <SettingsInput type="number" min={1} value={form.streamFps} onChange={(event) => updateField('streamFps', event.target.value)} className="font-mono" />
                           </SettingsField>
-                          <SettingsField label="Bitrate">
+                          <SettingsField label="Fallback FLV: bitrate">
                             <SettingsInput type="number" min={1} value={form.streamBitrateKbps} onChange={(event) => updateField('streamBitrateKbps', event.target.value)} className="font-mono" />
                           </SettingsField>
                         </div>
@@ -1597,7 +1610,7 @@ export default function CameraDetailPage() {
                         />
                       </SettingsCard>
 
-                      <SettingsCard title="Gravação" description="Perfil salvo para playback e exportação. Use Original/H.265 quando quiser preservar o stream da câmera; H.264 mantém maior compatibilidade web.">
+                      <SettingsCard title="Gravação" description="O arquivo é sempre H.265: entrada H.265 é gravada direto; outros codecs são convertidos.">
                         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
                           <SettingsField label="Modo">
                             <SettingsSelect value={form.recordingMode} onChange={(event) => updateField('recordingMode', event.target.value as CameraConfig['recordingMode'])}>
@@ -1610,12 +1623,9 @@ export default function CameraDetailPage() {
                           <SettingsField label="Retenção">
                             <SettingsInput type="number" min={1} value={form.retentionDays} onChange={(event) => updateField('retentionDays', event.target.value)} className="font-mono" />
                           </SettingsField>
-                          <SettingsField label="Codec">
-                            <SettingsSelect value={form.recordingVideoCodec} onChange={(event) => updateField('recordingVideoCodec', event.target.value as CameraConfig['recordingVideoCodec'])}>
-                              <option value="original">Original da câmera</option>
-                              <option value="h264">H.264</option>
+                          <SettingsField label="Codec de arquivo">
+                            <SettingsSelect value="h265" disabled>
                               <option value="h265">H.265 / HEVC</option>
-                              <option value="mjpeg">MJPEG</option>
                             </SettingsSelect>
                           </SettingsField>
                           <SettingsField label="Resolução">

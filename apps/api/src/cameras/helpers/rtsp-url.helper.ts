@@ -15,6 +15,8 @@ type CameraRtspProfileInput = {
   liveSubtype?: number | null;
   recordingChannel?: number | null;
   recordingSubtype?: number | null;
+  analyticsChannel?: number | null;
+  analyticsSubtype?: number | null;
   streamVideoCodec?: string | null;
   recordingVideoCodec?: string | null;
   detectedVideoCodec?: string | null;
@@ -39,10 +41,11 @@ function applyChannelSubtypeToPath(path: string, channel: number, subtype: numbe
   // Dahua-style query parameters
   result = result.replace(/([?&]channel=)\d+/i, `$1${channel}`);
   result = result.replace(/([?&]subtype=)\d+/i, `$1${subtype}`);
-  // Hikvision-style /Streaming/Channels/101
+  // Hikvision-style /Streaming/Channels/101: channel 1, main stream 01.
+  // Our internal subtype is zero-based, so subtype 0 maps to 01, 1 to 02, etc.
   result = result.replace(
     /(\/Streaming\/Channels\/)(\d+)(\d{2})(\b|\/|$)/i,
-    (_match, prefix, _ch, _sub, suffix) => `${prefix}${channel}${subtype.toString().padStart(2, '0')}${suffix}`,
+    (_match, prefix, _ch, _sub, suffix) => `${prefix}${channel}${(subtype + 1).toString().padStart(2, '0')}${suffix}`,
   );
   return result;
 }
@@ -59,6 +62,17 @@ export function resolveRecordingRtspProfile(camera: CameraRtspProfileInput) {
     channel: normalizeChannel(camera.recordingChannel, normalizeChannel(camera.channel, 1)),
     subtype: normalizeSubtype(camera.recordingSubtype, normalizeSubtype(camera.subtype, 0)),
   };
+}
+
+export function resolveAnalyticsRtspProfile(camera: CameraRtspProfileInput) {
+  return {
+    channel: normalizeChannel(camera.analyticsChannel, normalizeChannel(camera.channel, 1)),
+    subtype: normalizeSubtype(camera.analyticsSubtype, 1),
+  };
+}
+
+export function sanitizeRtspUrl(url: string) {
+  return url.replace(/(rtsp:\/\/)([^:@/]+):([^@/]+)@/i, '$1$2:<redacted>@');
 }
 
 export function isHevcCodec(codec?: string | null) {
@@ -96,13 +110,8 @@ export function resolveDeliveryVideoCodec(camera: CameraRtspProfileInput) {
 }
 
 export function resolveDeliveryRtspProfile(camera: CameraRtspProfileInput) {
-  if (isOriginalLiveProfileRequested(camera)) {
-    const originalCodec = resolveOriginalVideoCodec(camera);
-    if (originalCodec && !isHevcCodec(originalCodec)) {
-      return resolveOriginalRtspProfile(camera);
-    }
-  }
-
+  // Live and recording are independent pipelines. Live must start from the
+  // configured live profile, while the recording profile keeps the archive source.
   return resolveLiveRtspProfile(camera);
 }
 
@@ -121,5 +130,7 @@ export function buildRtspUrl(camera: CameraRtspUrlInput): string {
     rtspPath = '/' + rtspPath;
   }
 
-  return `rtsp://${camera.username}:${camera.password}@${camera.ip}:${camera.rtspPort}${rtspPath}`;
+  const username = encodeURIComponent(camera.username);
+  const password = encodeURIComponent(camera.password);
+  return `rtsp://${username}:${password}@${camera.ip}:${camera.rtspPort}${rtspPath}`;
 }

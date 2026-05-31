@@ -129,9 +129,9 @@ export function CameraTile({
             )}
           </div>
 
-          {/* Top-right: recording dot + fps */}
+          {/* Recording control: stays away from the swap/remove controls in the live grid. */}
           {!isOffline && (
-            <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-1.5">
+            <div className="absolute bottom-16 right-1.5 z-20 flex items-center gap-1.5">
               {isGravação && (
                 <span className="w-1.5 h-1.5 rounded-full rec-pulse" style={{ background: 'hsl(354 50% 50%)' }} />
               )}
@@ -149,9 +149,6 @@ export function CameraTile({
               >
                 <Circle className={`h-2.5 w-2.5 ${isManualRecordingActive ? 'fill-current' : ''}`} />
               </button>
-              {!compact && (
-                <span className="font-mono text-[9px] text-white/35">{camera.fps}fps</span>
-              )}
             </div>
           )}
 

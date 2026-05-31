@@ -13,7 +13,6 @@ import { MediamtxProxyService } from './mediamtx-proxy.service';
 import { CamerasService } from '../cameras/cameras.service';
 import {
   isHevcCodec,
-  isOriginalLiveProfileRequested,
   resolveDeliveryRtspProfile,
   resolveDeliveryVideoCodec,
   resolveLiveRtspProfile,
@@ -104,10 +103,16 @@ export class CameraStreamController {
     }
 
     let mediaBridge = this.mediamtxProxyService.buildPublicUrls(req, null, null);
+    let measuredLiveCodec: string | null = null;
+    let liveTranscodedForBrowser = false;
+    let effectiveDeliveryProfile = resolveDeliveryRtspProfile(camera);
     if (this.mediamtxProxyService.isEnabled()) {
       try {
         const ensured = await this.mediamtxProxyService.ensurePathForCamera(cameraId);
         mediaBridge = this.mediamtxProxyService.buildPublicUrls(req, ensured.pathName, ensured.sourceUrl);
+        measuredLiveCodec = ensured.sourceVideoCodec;
+        liveTranscodedForBrowser = ensured.transcodedForLive;
+        effectiveDeliveryProfile = ensured.liveProfile ?? effectiveDeliveryProfile;
       } catch {
         mediaBridge = this.mediamtxProxyService.buildPublicUrls(req, null, null);
       }
@@ -124,12 +129,11 @@ export class CameraStreamController {
     const configuredPreferred = (camera.preferredLiveProtocol ?? 'auto').toLowerCase();
     const configuredCodec = camera.streamVideoCodec ?? null;
     const originalCodec = resolveOriginalVideoCodec(camera);
-    const sourceCodec = resolveDeliveryVideoCodec(camera);
+    const sourceCodec = measuredLiveCodec ?? resolveDeliveryVideoCodec(camera);
     const liveProfile = resolveLiveRtspProfile(camera);
     const originalProfile = resolveOriginalRtspProfile(camera);
-    const deliveryProfile = resolveDeliveryRtspProfile(camera);
-    const originalProfileRequested = isOriginalLiveProfileRequested(camera);
-    const smartOriginalEnabled = originalProfileRequested && isHevcCodec(originalCodec);
+    const deliveryProfile = effectiveDeliveryProfile;
+    const smartOriginalEnabled = liveTranscodedForBrowser || isHevcCodec(sourceCodec);
     const supportsOriginalOnClient = this.supportsHevcWebPlayback(req);
 
     const { sourceUrl: _sourceUrl, ...safeMediaBridge } = mediaBridge;
@@ -170,12 +174,10 @@ export class CameraStreamController {
       smartLive: {
         enabled: smartOriginalEnabled,
         supportsOriginalOnClient,
-        recommendedProtocol: smartOriginalEnabled
-          ? 'webrtc'
-          : fallbackManualOrder[0],
+        recommendedProtocol: protocolOrder[0],
         protocolOrder,
         reason: smartOriginalEnabled
-          ? 'Original da câmera é HEVC; live web usa perfil H.264 compatível e mantém HEVC para gravação.'
+          ? 'Perfil Live recebido em HEVC; navegador recebe H.264, enquanto gravação permanece no perfil H.265 dedicado.'
           : configuredPreferred === 'auto'
             ? 'Modo automático: valida vídeo renderizado e faz fallback WebRTC -> LL-HLS -> HLS.'
             : 'Ordem de fallback baseada no protocolo configurado.',

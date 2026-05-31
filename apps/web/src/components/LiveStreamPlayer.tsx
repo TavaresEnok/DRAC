@@ -29,7 +29,7 @@ const LIVE_EDGE_OFFSET_SECONDS = 0.35;
 const LIVE_RENDER_STALL_RECONNECT_MS = 10000;
 const LIVE_VISUAL_FREEZE_RECONNECT_MS = 45000;
 const LIVE_BLACK_FRAME_FAILOVER_MS = 6000;
-const AI_OVERLAY_MAX_AGE_MS = 1000;
+const AI_OVERLAY_MAX_AGE_MS = 700;
 const AI_OVERLAY_POLL_MS = 500;
 const LIVE_VIEW_LEASE_TTL_SECONDS = 20;
 const LIVE_VIEW_HEARTBEAT_MS = 7000;
@@ -95,6 +95,39 @@ function storeProtocol(cameraId: string, protocol: ActiveLiveProtocol) {
     window.localStorage.setItem(`${LIVE_PROTOCOL_STORAGE_PREFIX}:${cameraId}`, normalized);
   } catch {
   }
+}
+
+function getRenderedVideoRect(
+  video: HTMLVideoElement | null,
+  containerWidth: number,
+  containerHeight: number,
+) {
+  if (!video || containerWidth <= 0 || containerHeight <= 0) {
+    return { left: 0, top: 0, width: containerWidth, height: containerHeight };
+  }
+
+  const videoWidth = video.videoWidth || 0;
+  const videoHeight = video.videoHeight || 0;
+  if (videoWidth <= 0 || videoHeight <= 0) {
+    return { left: 0, top: 0, width: containerWidth, height: containerHeight };
+  }
+
+  const objectFit = window.getComputedStyle(video).objectFit || 'contain';
+  if (objectFit === 'fill') {
+    return { left: 0, top: 0, width: containerWidth, height: containerHeight };
+  }
+
+  const scale = objectFit === 'cover'
+    ? Math.max(containerWidth / videoWidth, containerHeight / videoHeight)
+    : Math.min(containerWidth / videoWidth, containerHeight / videoHeight);
+  const width = videoWidth * scale;
+  const height = videoHeight * scale;
+  return {
+    left: (containerWidth - width) / 2,
+    top: (containerHeight - height) / 2,
+    width,
+    height,
+  };
 }
 
 function normalizeActiveProtocol(protocol: ActiveLiveProtocol): LiveProtocol {
@@ -220,6 +253,7 @@ export function LiveStreamPlayer({
   const [detections, setDetections] = useState<LiveDetection[]>([]);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [protocolReason, setProtocolReason] = useState<string | null>(null);
+  const [displayFps, setDisplayFps] = useState<number | null>(null);
 
   const tokenHeaders = useMemo(
     () => (accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined),
@@ -868,6 +902,8 @@ export function LiveStreamPlayer({
 
     let callbackId: number | null = null;
     let cancelled = false;
+    let fpsWindowStartedAt = performance.now();
+    let fpsWindowFrames = 0;
     const onFrame = (_now: number, metadata: { mediaTime?: number; presentedFrames?: number }) => {
       if (cancelled) return;
       lastRenderedFrameRef.current = {
@@ -875,12 +911,20 @@ export function LiveStreamPlayer({
         mediaTime: Number.isFinite(metadata.mediaTime) ? metadata.mediaTime : element.currentTime,
         presentedFrames: metadata.presentedFrames ?? lastRenderedFrameRef.current.presentedFrames + 1,
       };
+      fpsWindowFrames += 1;
+      const elapsedMs = performance.now() - fpsWindowStartedAt;
+      if (elapsedMs >= 1200) {
+        setDisplayFps(Math.max(0, Math.round((fpsWindowFrames * 1000) / elapsedMs)));
+        fpsWindowStartedAt = performance.now();
+        fpsWindowFrames = 0;
+      }
       callbackId = element.requestVideoFrameCallback(onFrame);
     };
 
     callbackId = element.requestVideoFrameCallback(onFrame);
     return () => {
       cancelled = true;
+      setDisplayFps(null);
       if (callbackId != null && typeof element.cancelVideoFrameCallback === 'function') {
         element.cancelVideoFrameCallback(callbackId);
       }
@@ -1164,14 +1208,14 @@ export function LiveStreamPlayer({
         <img
           src={posterUrl}
           alt=""
-          className="absolute inset-0 h-full w-full object-cover opacity-80"
+          className="absolute inset-0 h-full w-full object-contain opacity-80"
           draggable={false}
         />
       )}
 
       <video
         ref={videoRef}
-        className={`relative z-10 h-full w-full object-cover pointer-events-none transition-opacity duration-300 ${
+        className={`relative z-10 h-full w-full object-contain pointer-events-none transition-opacity duration-300 ${
           posterUrl && !hasLiveFrame ? 'opacity-0' : 'opacity-100'
         }`}
         muted={isMuted}
@@ -1181,22 +1225,19 @@ export function LiveStreamPlayer({
 
       {showOverlay && detections.map((detection) => {
         const [x1, y1, x2, y2] = detection.bbox;
-        const frameWidth = detection.frameWidth && detection.frameWidth > 0 ? detection.frameWidth : 320;
-        const frameHeight = detection.frameHeight && detection.frameHeight > 0 ? detection.frameHeight : 180;
+        const fallbackVideoWidth = videoRef.current?.videoWidth || 320;
+        const fallbackVideoHeight = videoRef.current?.videoHeight || 180;
+        const frameWidth = detection.frameWidth && detection.frameWidth > 0 ? detection.frameWidth : fallbackVideoWidth;
+        const frameHeight = detection.frameHeight && detection.frameHeight > 0 ? detection.frameHeight : fallbackVideoHeight;
         const containerWidth = containerRef.current?.clientWidth ?? 0;
         const containerHeight = containerRef.current?.clientHeight ?? 0;
         let style: CSSProperties;
         if (containerWidth > 0 && containerHeight > 0) {
-          const frameAspect = frameWidth / frameHeight;
-          const containerAspect = containerWidth / containerHeight;
-          const renderedWidth = frameAspect > containerAspect ? containerHeight * frameAspect : containerWidth;
-          const renderedHeight = frameAspect > containerAspect ? containerHeight : containerWidth / frameAspect;
-          const offsetX = (containerWidth - renderedWidth) / 2;
-          const offsetY = (containerHeight - renderedHeight) / 2;
-          const leftPx = offsetX + (x1 / frameWidth) * renderedWidth;
-          const topPx = offsetY + (y1 / frameHeight) * renderedHeight;
-          const rightPx = offsetX + (x2 / frameWidth) * renderedWidth;
-          const bottomPx = offsetY + (y2 / frameHeight) * renderedHeight;
+          const videoRect = getRenderedVideoRect(videoRef.current, containerWidth, containerHeight);
+          const leftPx = videoRect.left + (x1 / frameWidth) * videoRect.width;
+          const topPx = videoRect.top + (y1 / frameHeight) * videoRect.height;
+          const rightPx = videoRect.left + (x2 / frameWidth) * videoRect.width;
+          const bottomPx = videoRect.top + (y2 / frameHeight) * videoRect.height;
           const visibleLeft = Math.max(0, Math.min(containerWidth, leftPx));
           const visibleTop = Math.max(0, Math.min(containerHeight, topPx));
           const visibleRight = Math.max(visibleLeft + 1, Math.min(containerWidth, rightPx));
@@ -1225,7 +1266,7 @@ export function LiveStreamPlayer({
           return (
             <div key={detection.id} className="pointer-events-none absolute z-30" style={style}>
               <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-full">
-                <span className="mx-auto block h-0 w-0 border-x-[8px] border-t-[11px] border-x-transparent border-t-amber-400" />
+                <span className="mx-auto block h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-amber-300/90 drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)]" />
               </div>
             </div>
           );
@@ -1281,8 +1322,14 @@ export function LiveStreamPlayer({
         </div>
       )}
 
-      {activeProtocol && (
-        <div className="absolute bottom-11 right-2 z-30 opacity-60 hover:opacity-100 transition-opacity">
+      {(activeProtocol || displayFps != null) && (
+        <div className="absolute bottom-11 right-2 z-30 flex items-center gap-1.5 opacity-70 transition-opacity hover:opacity-100">
+          {displayFps != null && (
+            <span className="inline-flex h-4 items-center rounded border border-white/10 bg-black/45 px-1.5 text-[8px] font-bold tracking-wider text-white/70">
+              {displayFps} FPS
+            </span>
+          )}
+          {activeProtocol && (
           <span
             className={`inline-flex h-4 items-center rounded border px-1.5 text-[8px] font-bold tracking-wider ${
               activeProtocol === 'WEBRTC'
@@ -1298,6 +1345,7 @@ export function LiveStreamPlayer({
                 ? 'LL-HLS'
                 : 'HLS'}
           </span>
+          )}
         </div>
       )}
 

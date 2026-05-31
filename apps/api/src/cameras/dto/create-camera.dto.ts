@@ -71,6 +71,16 @@ export class CreateCameraDto {
   recordingSubtype?: number;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  analyticsChannel?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  analyticsSubtype?: number;
+
+  @IsOptional()
   @IsString()
   siteId?: string;
 

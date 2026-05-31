@@ -60,6 +60,7 @@ export class AiService {
     cameraId: string,
     rtspUrl: string,
     analysisType = 'motion',
+    sourceInfo?: Record<string, unknown>,
   ) {
     try {
       const response: any = await firstValueFrom(this.httpService.post(
@@ -68,6 +69,7 @@ export class AiService {
           camera_id: cameraId,
           rtsp_url: rtspUrl,
           analysis_type: analysisType,
+          source_info: sourceInfo ?? {},
         },
         { headers: this.internalHeaders() },
       ));

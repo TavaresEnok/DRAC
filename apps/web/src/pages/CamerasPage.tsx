@@ -34,9 +34,24 @@ const STATUS_BADGE: Record<string, string> = {
   maintenance: 'bg-[hsl(var(--chart-2)_/_0.12)] text-[hsl(var(--chart-2))] border-[hsl(var(--chart-2)_/_0.3)]',
 };
 
+function getRequestErrorMessage(error: unknown, fallback: string) {
+  if (axios.isAxiosError(error)) {
+    const message = error.response?.data?.message;
+    if (Array.isArray(message)) return message.join('\n');
+    if (typeof message === 'string' && message.trim()) return message;
+    if (typeof error.response?.data?.error === 'string') return error.response.data.error;
+    return error.message || fallback;
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
 type VideoCodec = 'original' | 'h264' | 'h265' | 'mjpeg';
 type RecordingMode = Camera['recordingMode'];
 type PreferredLiveProtocol = 'auto' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
+
+const DEFAULT_CAMERA_CHANNEL = 1;
+const MAIN_STREAM_SUBTYPE = 0;
+const ANALYTICS_STREAM_SUBTYPE = 1;
 
 const RECORDING_MODE_COPY: Record<RecordingMode, { label: string; detail: string; className: string }> = {
   manual: {
@@ -119,6 +134,12 @@ function WizardModal({
     onvifProfileToken?: string;
     channel?: number;
     subtype?: number;
+    liveChannel?: number;
+    liveSubtype?: number;
+    recordingChannel?: number;
+    recordingSubtype?: number;
+    analyticsChannel?: number;
+    analyticsSubtype?: number;
     recordingEnabled: boolean;
     recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
     retentionDays: number;
@@ -206,7 +227,7 @@ function WizardModal({
     streamHeight: '',
     streamFps: '',
     streamBitrateKbps: '',
-    recordingVideoCodec: 'h264' as VideoCodec,
+    recordingVideoCodec: 'h265' as VideoCodec,
     recordingWidth: '',
     recordingHeight: '',
     recordingFps: '',
@@ -235,6 +256,10 @@ function WizardModal({
 
   const handlePrimary = async () => {
     if (step < steps.length - 1) {
+      if (step === 0 && !detectedMax) {
+        const detected = await handleTestConnection(false);
+        if (!detected) return;
+      }
       setStep((current) => current + 1);
       return;
     }
@@ -268,7 +293,7 @@ function WizardModal({
       const streamFps = clampToDetected('Live FPS', form.streamFps, detectedMax?.fps, adjusted);
       const streamBitrateKbps = form.streamBitrateKbps.trim()
         ? clampToDetected('Live bitrate', form.streamBitrateKbps, detectedMax?.bitrateKbps, adjusted)
-        : (detectedMax?.bitrateKbps ?? undefined);
+        : undefined;
       const recordingWidth = parseOptionalPositive(form.recordingWidth);
       const recordingHeight = parseOptionalPositive(form.recordingHeight);
       const recordingFps = parseOptionalPositive(form.recordingFps);
@@ -290,8 +315,14 @@ function WizardModal({
         rtspPath: form.rtspPath.trim() || undefined,
         onvifPath: form.onvifPath.trim() || undefined,
         onvifProfileToken: form.onvifProfileToken.trim() || undefined,
-        channel: Number(form.channel),
-        subtype: Number(form.subtype),
+        channel: Number(form.channel || DEFAULT_CAMERA_CHANNEL),
+        subtype: MAIN_STREAM_SUBTYPE,
+        liveChannel: Number(form.channel || DEFAULT_CAMERA_CHANNEL),
+        liveSubtype: MAIN_STREAM_SUBTYPE,
+        recordingChannel: Number(form.channel || DEFAULT_CAMERA_CHANNEL),
+        recordingSubtype: MAIN_STREAM_SUBTYPE,
+        analyticsChannel: Number(form.channel || DEFAULT_CAMERA_CHANNEL),
+        analyticsSubtype: ANALYTICS_STREAM_SUBTYPE,
         recordingEnabled: form.recordingMode !== 'manual',
         recordingMode: form.recordingMode as 'continuous' | 'motion' | 'schedule' | 'manual',
         retentionDays: Number(form.retentionDays),
@@ -311,16 +342,16 @@ function WizardModal({
       });
       onClose();
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Não foi possível adicionar a câmera.');
+      window.alert(getRequestErrorMessage(error, 'Não foi possível adicionar a câmera.'));
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleTestConnection = async () => {
+  const handleTestConnection = async (showResult = true): Promise<boolean> => {
     if (!form.ip.trim() || !form.port.trim()) {
       window.alert('Preencha IP e porta RTSP antes de testar conexão.');
-      return;
+      return false;
     }
     setIsTesting(true);
     try {
@@ -330,21 +361,14 @@ function WizardModal({
         onvifPort: form.onvifPort.trim() ? Number(form.onvifPort) : undefined,
         username: form.username.trim(),
         password: form.password,
-        rtspPath: form.rtspPath.trim(),
-        onvifPath: form.onvifPath.trim(),
-        onvifProfileToken: form.onvifProfileToken.trim(),
-        channel: Number(form.channel),
-        subtype: Number(form.subtype),
+        rtspPath: form.rtspPath.trim() || undefined,
+        onvifPath: form.onvifPath.trim() || undefined,
+        onvifProfileToken: form.onvifProfileToken.trim() || undefined,
+        channel: Number(form.channel || DEFAULT_CAMERA_CHANNEL),
+        subtype: MAIN_STREAM_SUBTYPE,
       });
       if (result.suggestedRtspPath && !form.rtspPath.trim()) updateField('rtspPath', result.suggestedRtspPath);
       if (result.detectedStream?.codec) updateField('streamVideoCodec', normalizeVideoCodec(result.detectedStream.codec));
-      if (typeof result.detectedStream?.width === 'number') updateField('streamWidth', String(result.detectedStream.width));
-      if (typeof result.detectedStream?.height === 'number') updateField('streamHeight', String(result.detectedStream.height));
-      if (typeof result.detectedStream?.fps === 'number') updateField('streamFps', String(result.detectedStream.fps));
-      if (typeof result.detectedStream?.bitrateKbps === 'number') updateField('streamBitrateKbps', String(result.detectedStream.bitrateKbps));
-      if (typeof result.detectedStream?.bitrateKbps === 'number' && !form.recordingBitrateKbps.trim()) {
-        updateField('recordingBitrateKbps', String(result.detectedStream.bitrateKbps));
-      }
       setDetectedMax({
         width: typeof result.detectedStream?.width === 'number' ? result.detectedStream.width : null,
         height: typeof result.detectedStream?.height === 'number' ? result.detectedStream.height : null,
@@ -362,20 +386,18 @@ function WizardModal({
       if (typeof result.detectedOnvifPort === 'number') updateField('onvifPort', String(result.detectedOnvifPort));
       if (result.detectedOnvifPath) updateField('onvifPath', result.detectedOnvifPath);
       if (result.detectedOnvifProfileToken) updateField('onvifProfileToken', result.detectedOnvifProfileToken);
-      window.alert(
-        `Teste concluído\nRTSP porta informada: ${result.rtspReachable ? 'ok' : 'falhou'}\nRTSP auth na porta informada: ${result.selectedRtspPortAuthOk ? 'ok' : 'falhou'}\nRTSP válido (qualquer porta): ${result.rtspAuthOk ? 'ok' : 'falhou'}\nPortas RTSP detectadas: ${(result.reachableRtspPorts ?? []).join(', ') || '-'}\nPorta RTSP sugerida: ${result.detectedRtspPort ?? '-'}\nCaminho RTSP sugerido: ${result.detectedRtspPath ?? result.suggestedRtspPath ?? '-'}\nCodec detectado: ${result.detectedStream?.codec?.toUpperCase() ?? '-'}\nResolução detectada: ${result.detectedStream?.width && result.detectedStream?.height ? `${result.detectedStream.width}x${result.detectedStream.height}` : '-'}\nFPS detectado: ${result.detectedStream?.fps ?? '-'}\nBitrate detectado: ${result.detectedStream?.bitrateKbps ? `${result.detectedStream.bitrateKbps} kbps` : '-'}\nONVIF: ${result.onvifReachable ? 'ok' : 'falhou'}\nPTZ digest: ${result.ptzDigestOk ? 'ok' : 'falhou'}\nStatus: ${result.status}${result.rtspProbeError ? `\nErro RTSP: ${result.rtspProbeError}` : ''}`,
-      );
+      if (showResult) {
+        window.alert(
+          `Teste concluído\nRTSP: ${result.rtspAuthOk ? 'ok' : 'falhou'}\nONVIF: ${result.onvifReachable ? 'ok' : 'falhou'}\nPTZ/controle: ${result.ptzDigestOk ? 'ok' : 'não confirmado'}\nCodec detectado: ${result.detectedStream?.codec?.toUpperCase() ?? '-'}\nResolução detectada: ${result.detectedStream?.width && result.detectedStream?.height ? `${result.detectedStream.width}x${result.detectedStream.height}` : '-'}\nFPS detectado: ${result.detectedStream?.fps ?? '-'}\nBitrate detectado: ${result.detectedStream?.bitrateKbps ? `${result.detectedStream.bitrateKbps} kbps` : '-'}\nPerfis técnicos: configurados automaticamente\nStatus: ${result.status}${result.rtspProbeError ? `\nErro RTSP: ${result.rtspProbeError}` : ''}`,
+        );
+      }
+      return true;
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Falha ao testar conexão.');
+      window.alert(getRequestErrorMessage(error, 'Falha ao testar conexão.'));
+      return false;
     } finally {
       setIsTesting(false);
     }
-  };
-
-  const handleAutoPath = () => {
-    const channel = Number(form.channel || '1');
-    const subtype = Number(form.subtype || '0');
-    updateField('rtspPath', `/cam/realmonitor?channel=${Number.isFinite(channel) ? channel : 1}&subtype=${Number.isFinite(subtype) ? subtype : 0}`);
   };
 
   return (
@@ -439,29 +461,13 @@ function WizardModal({
                   <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Canal</label>
                   <input value={form.channel} onChange={(e) => updateField('channel', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="1" />
                 </div>
-                <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Subtipo</label>
-                  <input value={form.subtype} onChange={(e) => updateField('subtype', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="0" />
-                </div>
-                <div className="space-y-1 col-span-2">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Caminho RTSP</label>
-                  <div className="flex gap-2">
-                    <input value={form.rtspPath} onChange={(e) => updateField('rtspPath', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="/cam/realmonitor?channel=1&subtype=0" />
-                    <button type="button" onClick={handleAutoPath} className="h-9 px-3 rounded border border-border text-xs hover:bg-[hsl(var(--accent))]">Auto</button>
-                  </div>
-                </div>
-                <div className="space-y-1 col-span-2">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Caminho ONVIF</label>
-                  <input value={form.onvifPath} onChange={(e) => updateField('onvifPath', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="/onvif/ptz_service" />
-                </div>
-                <div className="space-y-1 col-span-2">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Token de Perfil ONVIF</label>
-                  <input value={form.onvifProfileToken} onChange={(e) => updateField('onvifProfileToken', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="Profile000" />
+                <div className="col-span-2 rounded border border-border bg-background px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+                  Rotas RTSP, endpoint ONVIF, token de perfil e perfis de live/gravação/IA serão detectados e salvos internamente.
                 </div>
               </div>
               <button onClick={() => void handleTestConnection()} disabled={isTesting} className="flex items-center gap-2 px-3 py-1.5 rounded border border-border text-xs hover:bg-[hsl(var(--accent))] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                 <Wifi className="w-3.5 h-3.5" />
-                {isTesting ? 'Testando...' : 'Testar Conexão'}
+                {isTesting ? 'Detectando...' : 'Detectar câmera'}
               </button>
               {detectedMax && (
                 <div className="rounded border border-border bg-background px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
@@ -507,11 +513,11 @@ function WizardModal({
                 <div className="text-[11px] font-semibold">Perfil de Live</div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Codec</label>
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Codec da origem Live</label>
                     <Select value={form.streamVideoCodec} onValueChange={(value) => updateField('streamVideoCodec', value)}>
                       <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="original" className="text-xs">Original da câmera</SelectItem>
+                        <SelectItem value="original" className="text-xs">Detectar no perfil Live</SelectItem>
                         <SelectItem value="h264" className="text-xs">H.264</SelectItem>
                         <SelectItem value="h265" className="text-xs">H.265</SelectItem>
                         <SelectItem value="mjpeg" className="text-xs">MJPEG</SelectItem>
@@ -541,27 +547,8 @@ function WizardModal({
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-1 flex items-end">
-                    <label className="flex items-center gap-2 text-xs font-medium">
-                      <input type="checkbox" checked={form.audioEnabled} onChange={(e) => updateField('audioEnabled', e.target.checked)} />
-                      Áudio habilitado
-                    </label>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Largura</label>
-                    <input value={form.streamWidth} onChange={(e) => updateField('streamWidth', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Altura</label>
-                    <input value={form.streamHeight} onChange={(e) => updateField('streamHeight', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">FPS</label>
-                    <input value={form.streamFps} onChange={(e) => updateField('streamFps', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Bitrate kbps</label>
-                    <input value={form.streamBitrateKbps} onChange={(e) => updateField('streamBitrateKbps', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  <div className="col-span-2 rounded border border-border bg-card px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+                    Live usa o perfil principal em alta qualidade. Se a origem for H.265, o sistema entrega H.264/WebRTC ao navegador.
                   </div>
                 </div>
               </div>
@@ -586,32 +573,25 @@ function WizardModal({
                     <input value={form.retentionDays} onChange={(e) => updateField('retentionDays', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Codec de Gravação</label>
-                    <Select value={form.recordingVideoCodec} onValueChange={(value) => updateField('recordingVideoCodec', value as VideoCodec)}>
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Perfil de Gravação</label>
+                    <Select value="main" disabled>
                       <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="original" className="text-xs">Original da câmera</SelectItem>
-                        <SelectItem value="h264" className="text-xs">H.264</SelectItem>
-                        <SelectItem value="h265" className="text-xs">H.265 / HEVC</SelectItem>
-                        <SelectItem value="mjpeg" className="text-xs">MJPEG</SelectItem>
+                        <SelectItem value="main" className="text-xs">Principal da câmera</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Bitrate kbps</label>
-                    <input value={form.recordingBitrateKbps} onChange={(e) => updateField('recordingBitrateKbps', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Codec de Arquivo</label>
+                    <Select value="h265" disabled>
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="h265" className="text-xs">H.265 / HEVC</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Largura</label>
-                    <input value={form.recordingWidth} onChange={(e) => updateField('recordingWidth', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Altura</label>
-                    <input value={form.recordingHeight} onChange={(e) => updateField('recordingHeight', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">FPS</label>
-                    <input value={form.recordingFps} onChange={(e) => updateField('recordingFps', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  <div className="col-span-2 rounded border border-border bg-card px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+                    A IA será configurada automaticamente para o substream leve direto da câmera.
                   </div>
                 </div>
               </div>
@@ -627,24 +607,25 @@ function WizardModal({
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Nome</span><span>{form.name || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Usuário</span><span>{form.username || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Canal</span><span className="font-mono">{form.channel || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Subtype</span><span className="font-mono">{form.subtype || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">RTSP Path</span><span className="font-mono break-all text-right">{form.rtspPath || '(padrão automático)'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">ONVIF Path</span><span className="font-mono break-all text-right">{form.onvifPath || '/onvif/ptz_service'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">ONVIF Token</span><span className="font-mono">{form.onvifProfileToken || 'Profile000'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Zona</span><span>{form.zone || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Unidade</span><span>{form.building || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Codec Live</span><span className="font-mono uppercase">{form.streamVideoCodec}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Resolução Live</span><span className="font-mono">{form.streamWidth && form.streamHeight ? `${form.streamWidth}x${form.streamHeight}` : '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">FPS Live</span><span className="font-mono">{form.streamFps || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Bitrate Live</span><span className="font-mono">{form.streamBitrateKbps ? `${form.streamBitrateKbps} kbps` : '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Protocolo Live</span><span className="font-mono">{formatLiveProtocol(form.preferredLiveProtocol)}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">RTSP Transport</span><span className="font-mono uppercase">{form.preferredRtspTransport}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Perfil Live</span><span>Principal da câmera</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Perfil IA</span><span>Substream leve automático</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Gravação</span><span className="capitalize">{form.recordingMode}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Retenção</span><span className="font-mono">{form.retentionDays || '-'} dias</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Codec Gravação</span><span className="font-mono uppercase">{form.recordingVideoCodec}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Resolução Gravação</span><span className="font-mono">{form.recordingWidth && form.recordingHeight ? `${form.recordingWidth}x${form.recordingHeight}` : '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">FPS Gravação</span><span className="font-mono">{form.recordingFps || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Áudio</span><span className="font-mono">{form.audioEnabled ? 'Sim' : 'Não'}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Codec Gravação</span><span className="font-mono uppercase">H.265</span></div>
+                {detectedMax && (
+                  <div className="mt-2 rounded border border-border bg-card px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+                    Detectado no perfil principal: <span className="font-mono text-foreground">{detectedMax.width && detectedMax.height ? `${detectedMax.width}x${detectedMax.height}` : '-'}</span>
+                    <span className="mx-2">|</span>
+                    <span className="font-mono text-foreground">{detectedMax.fps ?? '-'} FPS</span>
+                    <span className="mx-2">|</span>
+                    <span className="font-mono text-foreground">{detectedMax.bitrateKbps ? `${detectedMax.bitrateKbps} kbps` : '-'}</span>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -780,6 +761,12 @@ export default function CamerasPage() {
     onvifProfileToken?: string;
     channel?: number;
     subtype?: number;
+    liveChannel?: number;
+    liveSubtype?: number;
+    recordingChannel?: number;
+    recordingSubtype?: number;
+    analyticsChannel?: number;
+    analyticsSubtype?: number;
     recordingEnabled: boolean;
     recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
     retentionDays: number;

@@ -4,6 +4,7 @@ import threading
 import requests
 import os
 import numpy as np
+from collections import deque
 from queue import Queue
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -12,12 +13,13 @@ from model_registry import registry
 from runtime_profiles import MOTION_PROFILE, runtime_profile
 
 class StreamProcessor:
-    def __init__(self, camera_id, rtsp_url, api_url, service_token, analysis_type="motion"):
+    def __init__(self, camera_id, rtsp_url, api_url, service_token, analysis_type="motion", source_info=None):
         self.camera_id = camera_id
         self.rtsp_url = rtsp_url
         self.api_url = api_url
         self.service_token = service_token
         self.analysis_type = (analysis_type or "motion").strip().lower()
+        self.source_info = source_info or {}
         self.profile = runtime_profile(self.analysis_type)
         self.motion_trigger = str(self.profile["motion_trigger"]).upper()
         self.wakeup_until = 0
@@ -28,7 +30,12 @@ class StreamProcessor:
         self.base_advanced_process_fps = float(self.profile["detection_fps"])
         self.base_frame_width = int(self.profile["analysis_width"])
         self.base_frame_height = int(self.profile["analysis_height"])
-        self.selected_input_size = int(self.profile.get("imgsz", 0))
+        self.base_input_size = int(self.profile.get("imgsz", 0))
+        self.selected_process_fps = float(os.getenv("AI_SELECTED_DETECTION_FPS", "3.0"))
+        self.selected_advanced_process_fps = float(os.getenv("AI_SELECTED_DETECTION_FPS", str(self.selected_process_fps)))
+        self.selected_frame_width = int(os.getenv("AI_SELECTED_ANALYSIS_WIDTH", "960"))
+        self.selected_frame_height = int(os.getenv("AI_SELECTED_ANALYSIS_HEIGHT", "540"))
+        self.selected_input_size = int(os.getenv("AI_SELECTED_IMGSZ", str(self.base_input_size)))
         self.grid_process_fps = float(os.getenv("AI_GRID_DETECTION_FPS", "1.0"))
         self.grid_advanced_process_fps = float(os.getenv("AI_GRID_DETECTION_FPS", str(self.grid_process_fps)))
         self.grid_frame_width = int(os.getenv("AI_GRID_ANALYSIS_WIDTH", "640"))
@@ -39,7 +46,7 @@ class StreamProcessor:
         self.frame_width = self.base_frame_width
         self.frame_height = self.base_frame_height
         self.current_qos_mode = "base"
-        self.current_input_size_hint = self.selected_input_size if self.selected_input_size > 0 else None
+        self.current_input_size_hint = self.base_input_size if self.base_input_size > 0 else None
         self.qos_live_enabled = str(os.getenv("AI_QOS_LIVE_ENABLED", "true")).strip().lower() in ("1", "true", "yes", "on")
         self.adaptive_feature_enabled = str(os.getenv("AI_ADAPTIVE_MODE", "true")).strip().lower() in ("1", "true", "yes", "on")
         pilot_raw = str(os.getenv("AI_ADAPTIVE_PILOT_CAMERA_IDS", "*") or "").strip()
@@ -106,6 +113,7 @@ class StreamProcessor:
         self.overlay_empty_frames = 0
         self.motion_debounce_seconds = int(MOTION_PROFILE["event_debounce_seconds"])
         self.detect_debounce_seconds = int(self.profile["event_debounce_seconds"])
+        self.emit_events = bool(self.profile.get("emit_events", True))
         self.live_detection_hold_ms = int(self.profile["overlay_ttl_ms"])
         self.show_after_hits = int(self.profile["show_after_hits"])
         self.hide_after_misses = int(self.profile["hide_after_misses"])
@@ -123,6 +131,20 @@ class StreamProcessor:
         self._miss_count = 0
         self.capture_frames_enqueued = 0
         self.capture_frames_dropped = 0
+        self.processed_frames = 0
+        self._started_at = time.time()
+        self._capture_timestamps = deque(maxlen=120)
+        self._inference_timestamps = deque(maxlen=120)
+        self._advanced_infer_latencies_ms = deque(maxlen=240)
+        self._frame_age_sum_ms = 0.0
+        self._frame_age_samples = 0
+        self._frame_age_last_ms = 0.0
+        self._capture_stream_info = {
+            "codec": None,
+            "width": None,
+            "height": None,
+            "fps": None,
+        }
         self._live_view_lock = threading.Lock()
         self._live_view_sessions: dict[str, dict[str, Any]] = {}
         self.force_awake_until = 0.0
@@ -200,12 +222,12 @@ class StreamProcessor:
             [1.0, 0.85],
         )
         selected_imgsz_steps = self._parse_int_list(
-            os.getenv("AI_ADAPTIVE_SELECTED_IMGSZ_STEPS", "640,576,512,448,416"),
-            [640, 576, 512, 448, 416],
+            os.getenv("AI_ADAPTIVE_SELECTED_IMGSZ_STEPS", "640,512,416"),
+            [640, 512, 416],
         )
         grid_imgsz_steps = self._parse_int_list(
-            os.getenv("AI_ADAPTIVE_GRID_IMGSZ_STEPS", "512,448,416"),
-            [512, 448, 416],
+            os.getenv("AI_ADAPTIVE_GRID_IMGSZ_STEPS", "512,416"),
+            [512, 416],
         )
         selected_resolution_scales = self._parse_float_list(
             os.getenv("AI_ADAPTIVE_SELECTED_RESOLUTION_SCALES", "1.0,0.92,0.84,0.76"),
@@ -351,6 +373,106 @@ class StreamProcessor:
         except Exception:
             return "<rtsp-url-redacted>"
 
+    def _fourcc_to_codec(self, fourcc):
+        try:
+            value = int(fourcc or 0)
+            if value <= 0:
+                return None
+            text = "".join(chr((value >> 8 * i) & 0xFF) for i in range(4)).strip("\x00 ").lower()
+            if not text:
+                return None
+            aliases = {
+                "h264": "h264",
+                "avc1": "h264",
+                "x264": "h264",
+                "hev1": "hevc",
+                "hvc1": "hevc",
+                "hevc": "hevc",
+                "h265": "hevc",
+                "mjpg": "mjpeg",
+            }
+            return aliases.get(text, text)
+        except Exception:
+            return None
+
+    def _rate_from_timestamps(self, timestamps):
+        if len(timestamps) < 2:
+            return 0.0
+        elapsed = max(0.001, timestamps[-1] - timestamps[0])
+        return (len(timestamps) - 1) / elapsed
+
+    def _update_capture_stream_info(self, cap, frame=None):
+        info = dict(self._capture_stream_info)
+        try:
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            codec = self._fourcc_to_codec(cap.get(cv2.CAP_PROP_FOURCC))
+            if frame is not None:
+                frame_height, frame_width = frame.shape[:2]
+                width = int(frame_width or width)
+                height = int(frame_height or height)
+            info.update({
+                "codec": codec or info.get("codec"),
+                "width": width if width > 0 else info.get("width"),
+                "height": height if height > 0 else info.get("height"),
+                "fps": round(fps, 3) if fps > 0 else info.get("fps"),
+            })
+            self._capture_stream_info = info
+        except Exception:
+            pass
+
+    def source_state(self) -> dict:
+        record_subtype = self.source_info.get("recordSubtype")
+        record_channel = self.source_info.get("recordChannel")
+        live_subtype = self.source_info.get("liveSubtype")
+        live_channel = self.source_info.get("liveChannel")
+        analytics_subtype = self.source_info.get("analyticsSubtype")
+        analytics_channel = self.source_info.get("analyticsChannel")
+        analytics_url = self.source_info.get("analyticsRtspUrl") or self.source_info.get("analyticsSourceUrlSanitized") or self._sanitize_url(self.rtsp_url)
+        return {
+            "kind": self.source_info.get("sourceKind") or self.source_info.get("kind") or "direct_camera",
+            "uses_mediamtx": bool(self.source_info.get("usesMediaMtx", False)),
+            "usesMediaMtx": bool(self.source_info.get("usesMediaMtx", False)),
+            "audio_requested": bool(self.source_info.get("audioRequested", False)),
+            "audioRequested": bool(self.source_info.get("audioRequested", False)),
+            "audio_processed": False,
+            "audioProcessed": False,
+            "analytics_rtsp_url": analytics_url,
+            "analyticsRtspUrl": analytics_url,
+            "analytics_source_url_sanitized": self.source_info.get("analyticsSourceUrlSanitized") or self._sanitize_url(self.rtsp_url),
+            "analyticsSourceUrlSanitized": self.source_info.get("analyticsSourceUrlSanitized") or self._sanitize_url(self.rtsp_url),
+            "record_subtype": record_subtype,
+            "recordSubtype": record_subtype,
+            "record_channel": record_channel,
+            "recordChannel": record_channel,
+            "live_subtype": live_subtype,
+            "liveSubtype": live_subtype,
+            "live_channel": live_channel,
+            "liveChannel": live_channel,
+            "analytics_subtype": analytics_subtype,
+            "analyticsSubtype": analytics_subtype,
+            "analytics_channel": analytics_channel,
+            "analyticsChannel": analytics_channel,
+        }
+
+    def capture_stream_state(self) -> dict:
+        avg_frame_age_ms = (
+            self._frame_age_sum_ms / self._frame_age_samples
+            if self._frame_age_samples > 0 else 0.0
+        )
+        return {
+            **self._capture_stream_info,
+            "capture_fps": round(float(self._rate_from_timestamps(self._capture_timestamps)), 3),
+            "inference_fps": round(float(self._rate_from_timestamps(self._inference_timestamps)), 3),
+            "frame_age_last_ms": round(float(self._frame_age_last_ms), 3),
+            "frame_age_avg_ms": round(float(avg_frame_age_ms), 3),
+            "latest_frame_only": True,
+            "buffer_size": 1,
+            "queue_size": self.frame_queue.qsize(),
+            "dropped_frames": self.capture_frames_dropped,
+        }
+
     def _is_awake(self):
         return self.motion_trigger != "CAMERA" or time.time() < self.wakeup_until or self._has_active_live_view_session()
 
@@ -391,12 +513,18 @@ class StreamProcessor:
                 frame_width = max(160, int(self.grid_frame_width))
                 frame_height = max(120, int(self.grid_frame_height))
                 input_size_hint = max(0, int(self.grid_input_size))
+            elif qos_mode == "selected":
+                process_fps = max(0.5, float(self.selected_process_fps))
+                advanced_fps = max(0.5, float(self.selected_advanced_process_fps))
+                frame_width = max(160, int(self.selected_frame_width))
+                frame_height = max(120, int(self.selected_frame_height))
+                input_size_hint = max(0, int(self.selected_input_size))
             else:
                 process_fps = max(0.5, float(self.base_process_fps))
                 advanced_fps = max(0.5, float(self.base_advanced_process_fps))
                 frame_width = max(160, int(self.base_frame_width))
                 frame_height = max(120, int(self.base_frame_height))
-                input_size_hint = max(0, int(self.selected_input_size))
+                input_size_hint = max(0, int(self.base_input_size))
             mode_key = "grid" if qos_mode == "grid" else "selected" if qos_mode == "selected" else "base"
             if self.adaptive_enabled:
                 profile = self._adaptive_profile_for_mode(mode_key)
@@ -559,6 +687,7 @@ class StreamProcessor:
 
             if cap is None:
                 cap = self._open_capture()
+                self._update_capture_stream_info(cap)
 
             now = time.time()
             capture_interval = 1.0 / max(0.5, float(self.process_fps))
@@ -577,17 +706,20 @@ class StreamProcessor:
                 cap = self._open_capture()
                 continue
             
-            self.last_seen = time.time()
+            capture_timestamp = time.time()
+            self.last_seen = capture_timestamp
+            self._capture_timestamps.append(capture_timestamp)
+            self._update_capture_stream_info(cap, frame)
             
             last_yield_time = self.last_seen
             if not self.frame_queue.full():
-                self.frame_queue.put(frame)
+                self.frame_queue.put((frame, capture_timestamp))
                 self.capture_frames_enqueued += 1
             else:
                 # Fila cheia: descarta o antigo e coloca o novo (mantém tempo real)
                 try:
                     self.frame_queue.get_nowait()
-                    self.frame_queue.put(frame)
+                    self.frame_queue.put((frame, capture_timestamp))
                     self.capture_frames_dropped += 1
                     self.capture_frames_enqueued += 1
                 except:
@@ -655,7 +787,12 @@ class StreamProcessor:
                 time.sleep(0.01)
                 continue
 
-            frame = self.frame_queue.get()
+            queued = self.frame_queue.get()
+            if isinstance(queued, tuple) and len(queued) == 2:
+                frame, capture_timestamp = queued
+            else:
+                frame = queued
+                capture_timestamp = time.time()
 
             # EDGE AI HIBERNATION LOGIC
             if not self._is_awake():
@@ -665,6 +802,11 @@ class StreamProcessor:
 
             try:
                 current_time = time.time()
+                frame_age_ms = max(0.0, (current_time - float(capture_timestamp)) * 1000.0)
+                self._frame_age_last_ms = frame_age_ms
+                self._frame_age_sum_ms += frame_age_ms
+                self._frame_age_samples += 1
+                self.processed_frames += 1
                 detections = self.motion_detector.infer(frame)
                 advanced_detections = []
                 should_run_advanced = (
@@ -688,8 +830,10 @@ class StreamProcessor:
                         raise
                     infer_elapsed_ms = max(0.0, (time.time() - infer_started_at) * 1000.0)
                     self.advanced_infer_runs += 1
+                    self._inference_timestamps.append(time.time())
                     self.advanced_infer_sum_ms += infer_elapsed_ms
                     self.advanced_infer_last_ms = infer_elapsed_ms
+                    self._advanced_infer_latencies_ms.append(infer_elapsed_ms)
                     detector_event_type = getattr(det, "event_type", None)
                     for detection in advanced_detections:
                         if not detection.event_type and detector_event_type:
@@ -715,7 +859,7 @@ class StreamProcessor:
                 time.sleep(1)
                 continue
 
-            if detections:
+            if detections and self.emit_events:
                 ready = []
                 for detection in detections:
                     event_type = detection.event_type or "AI_DETECTED"
@@ -809,18 +953,32 @@ class StreamProcessor:
             self.advanced_infer_sum_ms / self.advanced_infer_runs
             if self.advanced_infer_runs > 0 else 0.0
         )
+        latencies = sorted(float(value) for value in self._advanced_infer_latencies_ms)
+        advanced_p95_ms = latencies[min(len(latencies) - 1, int(round((len(latencies) - 1) * 0.95)))] if latencies else 0.0
         overlay_total = self.overlay_payload_frames + self.overlay_empty_frames
         overlay_payload_ratio = (
             float(self.overlay_payload_frames) / float(overlay_total)
             if overlay_total > 0 else 0.0
         )
+        pool_busy_drops = 0
+        if self.advanced_analysis_type:
+            try:
+                detector_state = registry.status().get("detectors", {}).get(self.advanced_analysis_type, {})
+                pool_busy_drops = int(detector_state.get("pool_busy_drops") or 0)
+            except Exception:
+                pool_busy_drops = 0
+        elapsed = max(0.001, time.time() - self._started_at)
         return {
             "capture_loop_iterations": self.capture_loop_iterations,
             "process_loop_iterations": self.process_loop_iterations,
+            "processed_frames": self.processed_frames,
+            "process_fps_real": round(float(self.processed_frames) / elapsed, 3),
             "advanced_infer_runs": self.advanced_infer_runs,
             "advanced_infer_errors": self.advanced_infer_errors,
             "advanced_infer_last_ms": round(float(self.advanced_infer_last_ms), 3),
             "advanced_infer_avg_ms": round(float(avg_advanced_ms), 3),
+            "advanced_infer_p95_ms": round(float(advanced_p95_ms), 3),
+            "pool_busy_drops": pool_busy_drops,
             "overlay_payload_frames": self.overlay_payload_frames,
             "overlay_empty_frames": self.overlay_empty_frames,
             "overlay_payload_ratio": round(float(overlay_payload_ratio), 4),
