@@ -7,8 +7,6 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-vms}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_postgres_password}
       POSTGRES_DB: ${POSTGRES_DB:-vms_db}
-    ports:
-      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -18,8 +16,6 @@ services:
     image: redis:7-alpine
     container_name: vms-redis
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:6379:6379"
     networks:
       - vms-net
 
@@ -56,8 +52,6 @@ services:
     profiles:
       - admin-tools
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8090:8080"
     networks:
       - vms-net
 
@@ -67,8 +61,6 @@ services:
       dockerfile: apps/api/Dockerfile
     container_name: vms-api
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-vms}:${POSTGRES_PASSWORD:-change_me_postgres_password}@postgres:5432/${POSTGRES_DB:-vms_db}
       - REDIS_HOST=redis
@@ -127,11 +119,10 @@ services:
     build:
       context: ..
       dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
     container_name: vms-web
     restart: unless-stopped
-    ports:
-      - "5173:80"
-      - "3002:80"
     depends_on:
       - api
     networks:
@@ -264,13 +255,6 @@ services:
     image: bluenviron/mediamtx:1-ffmpeg
     container_name: vms-mediamtx
     restart: unless-stopped
-    ports:
-      - "8554:8554"
-      - "8888:8888"
-      - "8889:8889"
-      - "8189:8189/udp"
-      - "127.0.0.1:9997:9997"
-      - "127.0.0.1:9998:9998"
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     environment:

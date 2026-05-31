@@ -1,0 +1,25 @@
+services:
+  postgres:
+    ports:
+      - "${DRAC_POSTGRES_BIND:-127.0.0.1}:5432:5432"
+
+  redis:
+    ports:
+      - "${DRAC_REDIS_BIND:-127.0.0.1}:6379:6379"
+
+  api:
+    ports:
+      - "${DRAC_API_BIND:-127.0.0.1}:3000:3000"
+
+  web:
+    ports:
+      - "${DRAC_WEB_BIND:-127.0.0.1}:5173:80"
+
+  mediamtx:
+    ports:
+      - "${DRAC_MEDIAMTX_RTSP_BIND:-127.0.0.1}:8554:8554"
+      - "${DRAC_MEDIAMTX_HLS_BIND:-127.0.0.1}:8888:8888"
+      - "${DRAC_MEDIAMTX_WEBRTC_HTTP_BIND:-0.0.0.0}:8889:8889"
+      - "${DRAC_MEDIAMTX_WEBRTC_UDP_BIND:-0.0.0.0}:8189:8189/udp"
+      - "127.0.0.1:9997:9997"
+      - "127.0.0.1:9998:9998"

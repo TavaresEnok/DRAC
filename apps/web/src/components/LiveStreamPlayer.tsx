@@ -1203,7 +1203,7 @@ export function LiveStreamPlayer({
   }, [accessToken, cameraId, error, showOverlay, tokenHeaders]);
 
   return (
-    <div ref={containerRef} className={`relative overflow-hidden bg-black ${className ?? ''}`}>
+    <div ref={containerRef} className={`relative overflow-hidden bg-black ${className ?? ''}`} aria-label={`Live ${cameraName}`}>
       {posterUrl && !hasLiveFrame && (
         <img
           src={posterUrl}
@@ -1292,9 +1292,9 @@ export function LiveStreamPlayer({
 
       {showOverlay && isLoading && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
-          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/50 px-3 py-2 text-xs text-white/80">
+          <div className="flex items-center gap-2 rounded-md border border-white/10 bg-black/45 px-3 py-2 text-xs text-white/75">
             <LoaderCircle className="h-4 w-4 animate-spin" />
-            {retryMessage ?? `Carregando stream de ${cameraName}`}
+            {retryMessage ?? 'Carregando stream'}
           </div>
         </div>
       )}
@@ -1323,20 +1323,20 @@ export function LiveStreamPlayer({
       )}
 
       {(activeProtocol || displayFps != null) && (
-        <div className="absolute bottom-11 right-2 z-30 flex items-center gap-1.5 opacity-70 transition-opacity hover:opacity-100">
+        <div className="absolute bottom-2 left-2 z-30 flex items-center gap-1.5 opacity-55 transition-opacity hover:opacity-90">
           {displayFps != null && (
-            <span className="inline-flex h-4 items-center rounded border border-white/10 bg-black/45 px-1.5 text-[8px] font-bold tracking-wider text-white/70">
+            <span className="inline-flex h-4 items-center rounded-sm border border-white/10 bg-black/40 px-1.5 text-[8px] font-medium tracking-wider text-white/65">
               {displayFps} FPS
             </span>
           )}
           {activeProtocol && (
           <span
-            className={`inline-flex h-4 items-center rounded border px-1.5 text-[8px] font-bold tracking-wider ${
+            className={`inline-flex h-4 items-center rounded-sm border px-1.5 text-[8px] font-medium tracking-wider ${
               activeProtocol === 'WEBRTC'
-                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                ? 'border-emerald-500/25 bg-black/40 text-emerald-300/85'
                 : activeProtocol === 'HLS'
-                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
-                  : 'border-sky-500/30 bg-sky-500/10 text-sky-400'
+                  ? 'border-amber-500/25 bg-black/40 text-amber-300/85'
+                  : 'border-sky-500/25 bg-black/40 text-sky-300/85'
             }`}
           >
             {activeProtocol === 'WEBRTC'

@@ -81,8 +81,8 @@ Serviços protegidos em loopback/rede interna:
 - Adminer: profile `admin-tools` e loopback
 
 Observação:
-- A API `3000` continua pública porque o frontend atual chama `http(s)://host:3000` diretamente.
-- Para fechar a API em produção, antes é necessário colocar proxy `/api` no Nginx/web e ajustar `VITE_API_URL`.
+- O deploy de produção deve usar `infra/docker-compose.prod.yml`, que deixa API e web em loopback por padrão.
+- Use `infra/reverse-proxy.nginx.example` como base para publicar HTTPS e proxy `/api`.
 - MediaMTX/WebRTC deve usar `MEDIAMTX_WEBRTC_ADDITIONAL_HOST` com o IP ou domínio público real da instalação.
 
 ## Superfície de Segurança
@@ -119,7 +119,13 @@ Itens em standby:
 Comando padrão:
 
 ```bash
-docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build api web mediamtx postgres-backup
+docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d --build
+```
+
+Desenvolvimento/operação local com portas abertas:
+
+```bash
+docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build
 ```
 
 Validações pós-deploy:

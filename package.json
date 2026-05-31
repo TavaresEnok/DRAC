@@ -10,6 +10,7 @@
     "docker:down": "docker compose -f infra/docker-compose.yml down",
     "verify": "corepack pnpm test:phase2 && corepack pnpm test:mobile && corepack pnpm --filter api build && corepack pnpm --filter web build && corepack pnpm --filter mobile typecheck",
     "test:phase2": "corepack pnpm --filter api test:phase2",
+    "test:e2e": "corepack pnpm --filter api test:e2e",
     "db:migrate": "corepack pnpm --filter api prisma migrate deploy",
     "db:studio": "corepack pnpm --filter api prisma studio",
     "test:mobile": "corepack pnpm --filter mobile test:mobile"

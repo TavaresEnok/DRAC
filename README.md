@@ -52,13 +52,13 @@ legacy/
 corepack enable
 corepack prepare pnpm@9.15.0 --activate
 pnpm install
-cp infra/.env.example infra/.env
+cp infra/.env.dev.example infra/.env
 ```
 
 Edite `infra/.env` antes de subir o ambiente. Use segredos fortes para `JWT_SECRET`, `CAMERA_SECRET_KEY`, `INTERNAL_SERVICE_TOKEN`, `EVIDENCE_HMAC_SECRET`, senhas do banco e credenciais do MediaMTX.
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d --build
+docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --build
 docker compose -f infra/docker-compose.yml exec -w /app/apps/api api npx prisma migrate deploy
 ```
 
@@ -132,10 +132,12 @@ pnpm dev:api
 pnpm dev:web
 pnpm --filter mobile start:lan
 pnpm verify
+DRAC_E2E=1 DRAC_E2E_BASE_URL=http://127.0.0.1:3000 DRAC_E2E_EMAIL=admin@local.dev DRAC_E2E_PASSWORD=... pnpm test:e2e
 pnpm db:migrate
 ```
 
 `pnpm verify` roda testes criticos, testes mobile e builds/typechecks definidos no monorepo.
+O `test:e2e` e opt-in e pode testar stream token, gravacao e playback quando `DRAC_E2E_CAMERA_ID`, `DRAC_E2E_RECORDING_MUTATION=1` e `DRAC_E2E_RECORDING_ID` forem definidos.
 
 ## Endpoints Principais
 
@@ -171,6 +173,22 @@ Antes de colocar em operacao real, siga um checklist de producao:
 8. MediaMTX protegido.
 9. Health checks e alertas.
 10. Teste e2e: login, cadastro de camera, RTSP, live, gravacao, playback e IA.
+
+Arquivos recomendados:
+
+- `infra/.env.prod.example`: template de variaveis para producao.
+- `infra/docker-compose.prod.yml`: binds mais restritos e configuraveis.
+- `infra/reverse-proxy.nginx.example`: exemplo de Nginx com HTTPS, `/api` e sinalizacao WebRTC.
+
+Exemplo de deploy controlado:
+
+```bash
+cp infra/.env.prod.example infra/.env
+# edite dominios, IPs, segredos e MEDIAMTX_WEBRTC_ADDITIONAL_HOST
+# para proxy HTTPS no mesmo dominio, construa o web com VITE_API_URL=/api
+docker compose --env-file infra/.env -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d --build
+docker compose --env-file infra/.env -f infra/docker-compose.yml exec -w /app/apps/api api npx prisma migrate deploy
+```
 
 ## Referencias Internas
 

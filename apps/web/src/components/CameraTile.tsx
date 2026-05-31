@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Camera as CameraIcon, PlaySquare, Crosshair, Maximize2, Info, AlertTriangle, Circle } from 'lucide-react';
+import { PlaySquare, Crosshair, Maximize2, Info, AlertTriangle, Circle } from 'lucide-react';
 import { Camera } from '../store/vmsDataStore';
 import { LiveStreamPlayer } from './LiveStreamPlayer';
 
@@ -29,15 +29,6 @@ const STATUS_DOT: Record<string, string> = {
   maintenance: 'hsl(38 58% 54%)',    /* amber */
 };
 
-/* Subtle dark backgrounds — gives each tile a unique depth */
-const TILE_BG = [
-  'linear-gradient(145deg, hsl(222 22% 9%), hsl(220 20% 12%))',
-  'linear-gradient(145deg, hsl(218 20% 8%), hsl(220 18% 11%))',
-  'linear-gradient(145deg, hsl(225 18% 9%), hsl(218 20% 12%))',
-  'linear-gradient(145deg, hsl(215 22% 8%), hsl(218 18% 11%))',
-  'linear-gradient(145deg, hsl(220 20% 9%), hsl(222 18% 12%))',
-];
-
 export function CameraTile({
   camera,
   selected,
@@ -54,11 +45,8 @@ export function CameraTile({
 
   const isOffline  = camera.status === 'offline' || camera.status === 'no_signal';
   const isAlarm    = camera.status === 'alarm';
-  const isGravação = camera.status === 'recording';
   const isMotion   = camera.status === 'motion';
   const isManualRecordingActive = camera.status === 'recording';
-
-  const bgIdx = camera.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % TILE_BG.length;
 
   return (
     <motion.div
@@ -66,13 +54,12 @@ export function CameraTile({
         ${selected ? 'ring-1 ring-[hsl(var(--primary)_/_0.7)]' : ''}
         ${isAlarm   ? 'alarm-glow ring-1 ring-[hsl(354_50%_50%_/_0.5)]' : ''}
       `}
-      style={{ background: TILE_BG[bgIdx], minHeight: compact ? 80 : 120 }}
+      style={{ background: 'hsl(222 18% 9%)', minHeight: compact ? 80 : 120 }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onHoverStart={() => setHovered(true)}
       onHoverEnd={() => setHovered(false)}
-      whileHover={{ scale: 1.003 }}
-      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+      transition={{ duration: 0.12 }}
     >
       {!isOffline && (
         <div className="absolute inset-0">
@@ -89,14 +76,6 @@ export function CameraTile({
       )}
 
       <div className="absolute inset-0 bg-gradient-to-b from-black/10 via-transparent to-black/10" />
-
-      {/* Subtle scanline — only on live feeds */}
-      {!isOffline && <div className="camera-scanline absolute inset-0 overflow-hidden pointer-events-none" />}
-
-      {/* Static noise for lost signal */}
-      {camera.status === 'no_signal' && (
-        <div className="absolute inset-0 camera-noise opacity-15" />
-      )}
 
       {/* Offline overlay */}
       {isOffline && (
@@ -128,29 +107,6 @@ export function CameraTile({
               </span>
             )}
           </div>
-
-          {/* Recording control: stays away from the swap/remove controls in the live grid. */}
-          {!isOffline && (
-            <div className="absolute bottom-16 right-1.5 z-20 flex items-center gap-1.5">
-              {isGravação && (
-                <span className="w-1.5 h-1.5 rounded-full rec-pulse" style={{ background: 'hsl(354 50% 50%)' }} />
-              )}
-              <button
-                className={`h-5 w-5 flex items-center justify-center rounded border bg-black/55 transition-colors ${
-                  isManualRecordingActive
-                    ? 'border-red-500/60 text-red-300 hover:bg-red-500/20'
-                    : 'border-emerald-500/60 text-emerald-300 hover:bg-emerald-500/20'
-                }`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onAction?.(isManualRecordingActive ? 'record-stop' : 'record-start', camera);
-                }}
-                title={isManualRecordingActive ? 'Parar gravação manual' : 'Iniciar gravação manual'}
-              >
-                <Circle className={`h-2.5 w-2.5 ${isManualRecordingActive ? 'fill-current' : ''}`} />
-              </button>
-            </div>
-          )}
 
           {/* Bottom gradient + info */}
           <div className="absolute bottom-0 left-0 right-0 z-10 px-2 py-1.5 bg-gradient-to-t from-black/65 to-transparent">
