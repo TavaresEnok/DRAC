@@ -36,7 +36,7 @@ webrtc: yes
 webrtcAddress: :8889
 webrtcAllowOrigins: ['*']
 webrtcLocalUDPAddress: :8189
-webrtcAdditionalHosts: ['168.194.13.70']
+webrtcAdditionalHosts: ['${MEDIAMTX_WEBRTC_ADDITIONAL_HOST}']
 
 pathDefaults:
   rtspTransport: tcp

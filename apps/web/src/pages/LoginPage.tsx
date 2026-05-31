@@ -84,7 +84,7 @@ export default function LoginPage() {
             <Shield className="w-3 h-3 text-[hsl(var(--primary))]" />
           </div>
           <span className="font-mono text-[10px] text-[hsl(var(--muted-foreground)_/_0.7)] tracking-[0.15em] uppercase">
-            NexusGuard Sistemas de Segurança
+            DRAC Sistemas de Segurança
           </span>
         </div>
         <div className="font-mono text-[10px] text-[hsl(var(--muted-foreground)_/_0.55)] tabular-nums">
@@ -105,7 +105,7 @@ export default function LoginPage() {
             <div className="w-12 h-12 mx-auto mb-4 rounded-xl bg-[hsl(var(--primary)_/_0.08)] border border-[hsl(var(--primary)_/_0.18)] flex items-center justify-center">
               <Shield className="w-6 h-6 text-[hsl(var(--primary))]" />
             </div>
-            <h1 className="text-xl font-semibold tracking-tight text-foreground">NexusGuard VMS</h1>
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">DRAC VMS</h1>
             <p className="text-[10px] text-[hsl(var(--muted-foreground)_/_0.7)] mt-1.5 tracking-[0.15em] font-mono uppercase">
               Gestão de Segurança Local
             </p>
@@ -201,7 +201,7 @@ export default function LoginPage() {
 
           <div className="mt-4 text-center">
             <span className="font-mono text-[9px] text-[hsl(var(--muted-foreground)_/_0.3)]">
-              NexusGuard VMS v4.2.1 · Instalação Local · Todos os direitos reservados
+              DRAC VMS v4.2.1 · Instalação Local · Todos os direitos reservados
             </span>
           </div>
         </motion.div>

@@ -57,7 +57,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const cameras = useVmsDataStore((state) => state.cameras);
   const isDark = theme === 'dark' || theme === 'dim';
 
-  const pageTitle = PAGE_TITLES[location] ?? 'NexusGuard VMS';
+  const pageTitle = PAGE_TITLES[location] ?? 'DRAC VMS';
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -89,7 +89,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           <div className="flex-1 min-w-0">
             <h1 className="text-[13px] font-semibold text-foreground leading-none">{pageTitle}</h1>
             <div className="text-[9px] font-mono text-[hsl(var(--muted-foreground)_/_0.6)] mt-0.5 tracking-wide">
-              {(system?.server.hostname ?? 'NexusGuard Host')} / {pageTitle} / {cameras.length} CAM
+              {(system?.server.hostname ?? 'DRAC Host')} / {pageTitle} / {cameras.length} CAM
             </div>
           </div>
           <div className="flex items-center gap-2">

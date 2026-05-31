@@ -123,7 +123,7 @@ export function CommandPalette({ open, onClose }: Props) {
               <span className="font-mono text-[hsl(var(--muted-foreground))]">↵ selecionar</span>
               <span className="font-mono text-[hsl(var(--muted-foreground))]">esc fechar</span>
               <span className="ml-auto font-mono text-[hsl(var(--muted-foreground))]">
-                <Shield className="w-3 h-3 inline mr-1" />NexusGuard VMS
+                <Shield className="w-3 h-3 inline mr-1" />DRAC VMS
               </span>
             </div>
           </Command>

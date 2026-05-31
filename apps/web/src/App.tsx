@@ -36,7 +36,7 @@ const NotFound = lazy(() => import('./pages/not-found'));
 function AppFallback() {
   return (
     <div className="flex h-screen items-center justify-center bg-background text-sm text-muted-foreground">
-      Carregando NexusGuard...
+      Carregando DRAC VMS...
     </div>
   );
 }

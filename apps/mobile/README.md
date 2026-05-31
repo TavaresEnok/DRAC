@@ -8,7 +8,7 @@ Aplicativo Android inicial do Drac, construido com Expo/React Native para reapro
 corepack pnpm --filter mobile start:lan
 ```
 
-Abra o link/QR no Expo Go no Android. A URL padrao da API vem como `http://168.194.13.70:3000`, mas pode ser alterada na tela de login.
+Abra o link/QR no Expo Go no Android. A URL padrao da API pode ser alterada na tela de login para o IP ou dominio da instalacao.
 
 ## Funcionalidades iniciais
 

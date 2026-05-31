@@ -1,6 +1,6 @@
 # Drac VMS - Checklist de Produção
 
-Data da última validação: 2026-05-19
+Data da última validação: 2026-05-31
 
 ## Escopo desta rodada
 
@@ -83,6 +83,20 @@ Serviços protegidos em loopback/rede interna:
 Observação:
 - A API `3000` continua pública porque o frontend atual chama `http(s)://host:3000` diretamente.
 - Para fechar a API em produção, antes é necessário colocar proxy `/api` no Nginx/web e ajustar `VITE_API_URL`.
+- MediaMTX/WebRTC deve usar `MEDIAMTX_WEBRTC_ADDITIONAL_HOST` com o IP ou domínio público real da instalação.
+
+## Superfície de Segurança
+
+Decisões aplicadas:
+- A API não deve montar `/var/run/docker.sock`.
+- Teste de conexão para IP público segue bloqueado por padrão com `CAMERA_TEST_ALLOW_PUBLIC_IP=false`.
+- Exemplos de CORS ficam genéricos; domínios públicos devem ser definidos apenas no `.env` de produção.
+
+Pendências recomendadas:
+- Colocar API e Web atrás de reverse proxy HTTPS.
+- Restringir portas públicas ao mínimo necessário.
+- Proteger MediaMTX RTSP/HLS/WebRTC por firewall e/ou autenticação apropriada ao cenário.
+- Isolar qualquer automação de container em worker separado, com token interno e permissões mínimas.
 
 ## Menu Essencial
 

@@ -29,7 +29,7 @@ export function StatusStrip() {
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${systemOk ? 'status-online' : 'status-alarm rec-pulse'}`} />
         <span className="text-[hsl(var(--muted-foreground))] font-mono truncate tracking-wide">
-          NexusGuard VMS — {system?.server.hostname ?? 'Servidor local'}
+          DRAC VMS — {system?.server.hostname ?? 'Servidor local'}
         </span>
         <span className="text-[hsl(var(--border))] hidden sm:block">│</span>
         <span className="text-[hsl(var(--muted-foreground))] hidden sm:block font-mono">

@@ -78,7 +78,7 @@ export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
               transition={{ delay: 0.08 }}
               className="min-w-0"
             >
-              <div className="text-[13px] font-semibold text-sidebar-foreground leading-tight tracking-tight">NexusGuard</div>
+              <div className="text-[13px] font-semibold text-sidebar-foreground leading-tight tracking-tight">DRAC</div>
               <div className="text-[9px] font-mono text-[hsl(var(--muted-foreground))] tracking-[0.18em] uppercase">Central de Comando VMS</div>
             </motion.div>
           )}
