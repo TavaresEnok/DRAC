@@ -18,7 +18,6 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
@@ -214,12 +213,12 @@ function resolveLiveSourceMode(liveSubtype: string, fallbackSubtype: string): Li
   return 'advanced';
 }
 
-function SettingsCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+function SettingsCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
-    <section className="rounded-xl border border-border/80 bg-background/70 p-5 shadow-sm">
-      <div className="mb-5 border-b border-border/70 pb-4">
-        <h3 className="text-base font-semibold tracking-tight text-foreground">{title}</h3>
-        <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{description}</p>
+    <section className="rounded-lg border border-border/80 bg-background/65 p-4 shadow-sm">
+      <div className="mb-4 border-b border-border/60 pb-3">
+        <h3 className="text-sm font-semibold tracking-tight text-foreground">{title}</h3>
+        {description ? <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p> : null}
       </div>
       <div className="grid gap-3">{children}</div>
     </section>
@@ -281,9 +280,44 @@ function SettingsSwitch({ checked, onChange, label, description }: { checked: bo
 
 function CapabilityTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-border/80 bg-background px-4 py-4">
-      <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-muted-foreground">{label}</p>
-      <p className="mt-1.5 text-lg font-semibold text-foreground">{value}</p>
+    <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-3">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'neutral' | 'good' | 'warn' | 'bad' }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex h-7 items-center rounded-md border px-2.5 text-[11px] font-medium',
+        tone === 'good' && 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+        tone === 'warn' && 'border-amber-500/30 bg-amber-500/10 text-amber-300',
+        tone === 'bad' && 'border-red-500/30 bg-red-500/10 text-red-300',
+        tone === 'neutral' && 'border-border bg-card text-muted-foreground',
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md px-1 py-1.5 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right font-medium text-foreground">{value}</span>
+    </div>
+  );
+}
+
+function StreamCard({ title, primary, secondary }: { title: string; primary: string; secondary?: string }) {
+  return (
+    <div className="rounded-lg border border-border/70 bg-background/55 px-3 py-3">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>
+      <p className="mt-1 text-sm font-semibold text-foreground">{primary}</p>
+      {secondary ? <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{secondary}</p> : null}
     </div>
   );
 }
@@ -1098,72 +1132,24 @@ export default function CameraDetailPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-3 border-b border-border px-6 py-3">
+      <div className="flex shrink-0 items-center gap-3 border-b border-border bg-background/95 px-6 py-3">
         <button
           onClick={() => setLocation('/cameras')}
-          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          className="inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <ChevronLeft className="h-3.5 w-3.5" />
-          Lista de Câmeras
+          Câmeras
         </button>
-        <span className="text-muted-foreground">/</span>
-        <span className="text-sm font-semibold">{cam.name}</span>
-        <button
-          type="button"
-          onClick={() => void runConnectionTest()}
-          disabled={testingConnection}
-          className={cn(
-            'ml-1 inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-[10px] font-medium uppercase tracking-wide transition-colors',
-            'border-border bg-card text-muted-foreground hover:bg-[hsl(var(--accent))] hover:text-foreground',
-            testingConnection && 'cursor-wait opacity-70',
-          )}
-          title="Reconectar câmera"
-        >
-          {testingConnection ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-          Reconectar
-        </button>
-        <div className="inline-flex h-7 items-center gap-2 rounded-md border border-border px-2">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Gravação por movimento</span>
-          <Switch
-            checked={isMotionRecordingMode}
-            disabled={motionRecordingLoading}
-            onCheckedChange={(checked) => void handleMotionRecording(checked)}
-            aria-label="Alternar gravação por movimento"
-          />
-          {motionRecordingLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : null}
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-semibold">{cam.name}</span>
+            <span className="hidden text-xs text-muted-foreground md:inline">{cam.ipAddress}</span>
+          </div>
         </div>
-        <span className={cn('inline-flex h-7 items-center rounded-md border px-2 text-[10px] font-mono', recordingModeCopy.className)}>
-          {recordingModeCopy.label}
-        </span>
-        <button
-          type="button"
-          onClick={() => void (isRecordingActive ? stopManualRecording() : startManualRecording())}
-          disabled={recordingActionLoading !== null}
-          className={cn(
-            'inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors',
-            isRecordingActive
-              ? 'border-red-500/45 bg-red-500/10 text-red-300 hover:bg-red-500/20'
-              : 'border-emerald-500/45 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20',
-            recordingActionLoading !== null && 'cursor-not-allowed opacity-60',
-          )}
-          title={isRecordingActive ? 'Parar gravação manual' : 'Iniciar gravação manual'}
-        >
-          {recordingActionLoading ? (
-            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Circle className={cn('h-3.5 w-3.5', isRecordingActive && 'fill-current')} />
-          )}
-        </button>
-        <div className="flex flex-col leading-tight">
-          <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-            Original/gravação: {originalStreamText} · {originalCodec} · {originalBitrate ?? '--'} kbps
-          </span>
-          <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground/80">
-            Entrega live: {effectiveLiveText} · protocolo {formatLiveProtocol(form.preferredLiveProtocol)}
-          </span>
-          <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            Configuração live: {configuredLiveText}
-          </span>
+        <div className="hidden items-center gap-2 md:flex">
+          <StatusPill label={cam.isOnline ? 'Online' : 'Offline'} tone={cam.isOnline ? 'good' : 'bad'} />
+          <StatusPill label={isRecordingActive ? 'Gravando' : 'Sem gravação'} tone={isRecordingActive ? 'warn' : 'neutral'} />
+          <StatusPill label={livePlayerStatus.activeProtocol ?? 'Live'} />
         </div>
       </div>
 
@@ -1205,7 +1191,7 @@ export default function CameraDetailPage() {
               <div className="scan-line-overlay absolute inset-0" />
               {!cam.isOnline && <Camera className="h-12 w-12 text-slate-700" />}
               <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
-                <div className="rec-pulse h-2 w-2 rounded-full bg-red-500" />
+                <div className={cn('h-2 w-2 rounded-full', isRecordingActive ? 'rec-pulse bg-red-500' : 'bg-emerald-400')} />
                 <span className="rounded bg-black/60 px-1.5 text-xs font-mono text-white/80">{cam.code}</span>
               </div>
               <div className="absolute bottom-2 left-2 right-2 z-10 flex justify-between">
@@ -1217,13 +1203,13 @@ export default function CameraDetailPage() {
             </div>
           </div>
 
-          <div className="flex max-h-[calc(100vh-220px)] flex-col overflow-hidden rounded-lg border border-border bg-card">
-            <div className="grid grid-cols-3 gap-2">
+          <div className="flex max-h-[calc(100vh-220px)] flex-col overflow-hidden rounded-lg border border-border bg-card/80">
+            <div className="grid grid-cols-2 gap-2 p-3">
               <button
                 type="button"
                 onClick={() => void reconnectRecording()}
                 disabled={reconnectingRecording || cam.recordingStatusDetail === 'auto_reconnecting'}
-                className="m-4 mb-0 inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-border text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-border bg-background/55 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
               >
                 {reconnectingRecording ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
                 {reconnectingRecording || cam.recordingStatusDetail === 'auto_reconnecting' ? 'Reconectando...' : 'Reconectar'}
@@ -1233,7 +1219,7 @@ export default function CameraDetailPage() {
                 onClick={() => void (isRecordingActive ? stopManualRecording() : startManualRecording())}
                 disabled={recordingActionLoading !== null}
                 className={cn(
-                  'm-4 mb-0 inline-flex h-9 items-center justify-center rounded-lg border bg-background/55 disabled:opacity-50',
+                  'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border bg-background/55 text-xs disabled:opacity-50',
                   isRecordingActive
                     ? 'border-red-500/45 text-red-300 hover:bg-red-500/10'
                     : 'border-emerald-500/45 text-emerald-300 hover:bg-emerald-500/10',
@@ -1245,13 +1231,11 @@ export default function CameraDetailPage() {
                 ) : (
                   <Circle className={cn('h-3.5 w-3.5', isRecordingActive && 'fill-current')} />
                 )}
+                {isRecordingActive ? 'Parar' : 'Gravar'}
               </button>
-              <div className="m-4 mb-0 rounded-lg border border-border bg-background/55 px-2 py-2 text-center text-[11px] text-muted-foreground">
-                {isRecordingActive ? 'Gravando' : 'Parado'}
-              </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 border-y border-border bg-background/35">
+            <div className="grid grid-cols-2 border-y border-border bg-background/35">
               <button
                 type="button"
                 onClick={() => setSidePanelTab('info')}
@@ -1260,7 +1244,7 @@ export default function CameraDetailPage() {
                   sidePanelTab === 'info' ? 'bg-background text-foreground' : 'text-muted-foreground hover:bg-[hsl(var(--accent))]',
                 )}
               >
-                Info Stream
+                Status
               </button>
               <button
                 type="button"
@@ -1270,42 +1254,43 @@ export default function CameraDetailPage() {
                   sidePanelTab === 'ptz' ? 'bg-background text-foreground' : 'text-muted-foreground hover:bg-[hsl(var(--accent))]',
                 )}
               >
-                Controle PTZ
+                PTZ
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
               {sidePanelTab === 'info' ? (
-                <div className="space-y-2 text-xs">
-                  <div className="flex justify-between"><span className="text-muted-foreground">URL RTSP</span></div>
-                  <p className="break-all rounded bg-background px-2 py-1 font-mono text-[10px] text-primary">
-                    rtsp://{cam.ipAddress}:{cam.rtspPort}{cam.rtspPath ?? '/stream'}
-                  </p>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Localização</span><span>{cam.location}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Modelo</span><span className="font-mono">{cam.model}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Original/gravação</span><span className="font-mono">{originalStreamText}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Codec original</span><span className="font-mono uppercase">{originalCodec}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Configuração Live</span><span className="max-w-[58%] text-right font-mono">{configuredLiveText}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Entrega Live</span><span className="font-mono">{effectiveLiveText}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Protocolo configurado</span><span className="font-mono">{formatLiveProtocol(form.preferredLiveProtocol || cam.preferredLiveProtocol)}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Protocolo ativo</span><span className="font-mono">{livePlayerStatus.activeProtocol ?? '--'}</span></div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Status do player</span>
-                    <span className="font-mono uppercase">{livePlayerStatus.state}</span>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <StreamCard title="Live" primary={liveSourceLabel} secondary={effectiveLiveText} />
+                    <StreamCard title="Gravação" primary={isRecordingActive ? 'Ativa' : recordingModeCopy.label} secondary={`${originalStreamText} · ${originalCodec}`} />
+                    <StreamCard title="Player" primary={livePlayerStatus.activeProtocol ?? 'Aguardando'} secondary={livePlayerStatus.state} />
+                    <StreamCard title="Retenção" primary={`${cam.retentionDays} dias`} secondary={cam.storage} />
                   </div>
                   {livePlayerStatus.reason ? (
-                    <div className="rounded-md border border-sky-500/25 bg-sky-500/10 px-2 py-1 text-[10px] leading-relaxed text-sky-700 dark:text-sky-200">
+                    <div className="rounded-md border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-[11px] leading-relaxed text-sky-700 dark:text-sky-200">
                       {livePlayerStatus.reason}
                     </div>
                   ) : null}
                   {liveTranscodedFromHevc ? (
-                    <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[10px] leading-relaxed text-amber-700 dark:text-amber-200">
-                      O perfil Live recebido é HEVC e está sendo convertido para H.264. A gravação usa seu perfil H.265 dedicado sem esta conversão.
+                    <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-200">
+                      Live convertendo HEVC para H.264. A gravação continua usando o perfil dedicado.
                     </div>
                   ) : null}
-                  <div className="flex justify-between"><span className="text-muted-foreground">RTSP</span><span className="font-mono uppercase">{cam.preferredRtspTransport}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Áudio</span><span className="font-mono">{cam.hasAudio ? 'Sim' : 'Não'}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Retenção</span><span className="font-mono">{cam.retentionDays}d</span></div>
+                  <details className="rounded-lg border border-border/70 bg-background/45 px-3 py-2">
+                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Detalhes técnicos</summary>
+                    <div className="mt-2 border-t border-border/70 pt-2">
+                      <InfoRow label="Localização" value={cam.location} />
+                      <InfoRow label="Modelo" value={<span className="font-mono">{cam.model}</span>} />
+                      <InfoRow label="Live" value={<span className="font-mono">{configuredLiveText}</span>} />
+                      <InfoRow label="Protocolo" value={<span className="font-mono">{formatLiveProtocol(form.preferredLiveProtocol || cam.preferredLiveProtocol)}</span>} />
+                      <InfoRow label="RTSP" value={<span className="font-mono uppercase">{cam.preferredRtspTransport}</span>} />
+                      <InfoRow label="Áudio" value={cam.hasAudio ? 'Sim' : 'Não'} />
+                      <p className="mt-2 break-all rounded bg-background px-2 py-1.5 font-mono text-[10px] text-muted-foreground">
+                        rtsp://{cam.ipAddress}:{cam.rtspPort}{cam.rtspPath ?? '/stream'}
+                      </p>
+                    </div>
+                  </details>
                 </div>
               ) : cam.ptzCapable ? (
                 <div className="space-y-3">
@@ -1387,9 +1372,13 @@ export default function CameraDetailPage() {
 
         <Tabs defaultValue={initialTabs.main} className="w-full">
           <TabsList className="h-8 border border-border bg-card">
-            {['playback', 'events', 'settings'].map((tab) => (
+            {[
+              ['playback', 'Reprodução'],
+              ['events', 'Eventos'],
+              ['settings', 'Configurações'],
+            ].map(([tab, label]) => (
               <TabsTrigger key={tab} value={tab} className="h-6 px-3 text-xs capitalize">
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                {label}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -1448,15 +1437,12 @@ export default function CameraDetailPage() {
           </TabsContent>
 
           <TabsContent value="settings" className="mt-4">
-            <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-              <div className="border-b border-border bg-card px-6 py-6 xl:px-8">
+            <div className="overflow-hidden rounded-lg border border-border bg-card/80 shadow-sm">
+              <div className="border-b border-border bg-card px-5 py-4 xl:px-6">
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-muted-foreground">Configuração da câmera</p>
-                    <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground xl:text-3xl">{cam.name}</h2>
-                    <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-                      Ajustes organizados por intenção: conexão, live, gravação e comportamento operacional.
-                    </p>
+                    <h2 className="text-base font-semibold tracking-tight text-foreground">Configurações</h2>
+                    <p className="mt-1 text-xs text-muted-foreground">Ajustes principais da câmera. Detalhes técnicos ficam recolhidos.</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -1487,7 +1473,7 @@ export default function CameraDetailPage() {
                     event.preventDefault();
                     void saveSettings();
                   }}
-                  className="space-y-6 px-4 py-5 md:px-6 md:py-6 xl:px-8"
+                  className="space-y-5 px-4 py-5 md:px-5 xl:px-6"
                 >
                   <div className="grid gap-4 md:grid-cols-4">
                     <CapabilityTile label="Codec original" value={originalCodec} />
@@ -1498,7 +1484,7 @@ export default function CameraDetailPage() {
 
                   <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
                     <div className="space-y-4">
-                      <SettingsCard title="Identidade e acesso" description="Somente o essencial para autenticar e localizar a câmera na rede.">
+                      <SettingsCard title="Acesso">
                         <div className="grid gap-3 md:grid-cols-2">
                           <SettingsField label="Nome da câmera">
                             <SettingsInput value={form.name} onChange={(event) => updateField('name', event.target.value)} />
@@ -1521,7 +1507,7 @@ export default function CameraDetailPage() {
                         </div>
                       </SettingsCard>
 
-                      <SettingsCard title="Perfis automáticos" description="O DRAC escolhe os caminhos técnicos internamente a partir das portas, credenciais e canal.">
+                      <SettingsCard title="Perfis">
                         <div className="grid gap-3 md:grid-cols-3">
                           <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
                             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Live</div>
@@ -1538,8 +1524,8 @@ export default function CameraDetailPage() {
                         </div>
                       </SettingsCard>
 
-                      <SettingsCard title="Live" description="O navegador recebe H.264. Um perfil Live H.264 passa direto; HEVC é convertido sob demanda.">
-                        <div className="grid gap-3 md:grid-cols-3">
+                      <SettingsCard title="Live">
+                        <div className="grid gap-3 md:grid-cols-2">
                           <SettingsField label="Fonte da imagem">
                             <SettingsSelect value={liveSourceMode} onChange={(event) => applyLiveSourceMode(event.target.value as LiveSourceMode)}>
                               <option value="original">Original da câmera (principal)</option>
@@ -1564,38 +1550,43 @@ export default function CameraDetailPage() {
                               <option value="mjpeg">MJPEG</option>
                             </SettingsSelect>
                           </SettingsField>
-                          <SettingsField label="Transporte RTSP">
-                            <SettingsSelect value={form.preferredRtspTransport} onChange={(event) => updateField('preferredRtspTransport', event.target.value as CameraConfig['preferredRtspTransport'])}>
-                              <option value="tcp">TCP</option>
-                              <option value="udp">UDP</option>
-                            </SettingsSelect>
-                          </SettingsField>
-                          <SettingsField label="Fallback FLV: escala">
-                            <SettingsSelect
-                              value={getResolutionPresetValue(form.streamWidth, form.streamHeight) || 'custom'}
-                              onChange={(event) => applyResolutionPreset('stream', event.target.value)}
-                            >
-                              <option value="custom" disabled>Personalizada</option>
-                              <option value="original">Sem redimensionamento</option>
-                              {RESOLUTION_PRESETS.map((preset) => (
-                                <option key={`stream-${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
-                                  {preset.label}
-                                </option>
-                              ))}
-                            </SettingsSelect>
-                          </SettingsField>
-                          <SettingsField label="Fallback FLV: FPS">
-                            <SettingsInput type="number" min={1} value={form.streamFps} onChange={(event) => updateField('streamFps', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <SettingsField label="Fallback FLV: bitrate">
-                            <SettingsInput type="number" min={1} value={form.streamBitrateKbps} onChange={(event) => updateField('streamBitrateKbps', event.target.value)} className="font-mono" />
-                          </SettingsField>
+                          <details className="md:col-span-2 rounded-lg border border-border/70 bg-card/60 px-3 py-2">
+                            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Avançado</summary>
+                            <div className="mt-3 grid gap-3 border-t border-border/70 pt-3 md:grid-cols-2">
+                              <SettingsField label="Transporte RTSP">
+                                <SettingsSelect value={form.preferredRtspTransport} onChange={(event) => updateField('preferredRtspTransport', event.target.value as CameraConfig['preferredRtspTransport'])}>
+                                  <option value="tcp">TCP</option>
+                                  <option value="udp">UDP</option>
+                                </SettingsSelect>
+                              </SettingsField>
+                              <SettingsField label="Fallback FLV: escala">
+                                <SettingsSelect
+                                  value={getResolutionPresetValue(form.streamWidth, form.streamHeight) || 'custom'}
+                                  onChange={(event) => applyResolutionPreset('stream', event.target.value)}
+                                >
+                                  <option value="custom" disabled>Personalizada</option>
+                                  <option value="original">Sem redimensionamento</option>
+                                  {RESOLUTION_PRESETS.map((preset) => (
+                                    <option key={`stream-${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
+                                      {preset.label}
+                                    </option>
+                                  ))}
+                                </SettingsSelect>
+                              </SettingsField>
+                              <SettingsField label="Fallback FLV: FPS">
+                                <SettingsInput type="number" min={1} value={form.streamFps} onChange={(event) => updateField('streamFps', event.target.value)} className="font-mono" />
+                              </SettingsField>
+                              <SettingsField label="Fallback FLV: bitrate">
+                                <SettingsInput type="number" min={1} value={form.streamBitrateKbps} onChange={(event) => updateField('streamBitrateKbps', event.target.value)} className="font-mono" />
+                              </SettingsField>
+                            </div>
+                          </details>
                         </div>
                       </SettingsCard>
                     </div>
 
                     <div className="space-y-4">
-                      <SettingsCard title="Operação" description="Estados principais sem checkbox pequeno perdido no meio do formulário.">
+                      <SettingsCard title="Operação">
                         <SettingsSwitch
                           checked={form.recordingEnabled}
                           onChange={(value) => updateField('recordingEnabled', value)}
@@ -1610,7 +1601,7 @@ export default function CameraDetailPage() {
                         />
                       </SettingsCard>
 
-                      <SettingsCard title="Gravação" description="O arquivo é sempre H.265: entrada H.265 é gravada direto; outros codecs são convertidos.">
+                      <SettingsCard title="Gravação">
                         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
                           <SettingsField label="Modo">
                             <SettingsSelect value={form.recordingMode} onChange={(event) => updateField('recordingMode', event.target.value as CameraConfig['recordingMode'])}>
@@ -1651,7 +1642,7 @@ export default function CameraDetailPage() {
                         </div>
                       </SettingsCard>
 
-                      <SettingsCard title="Inteligência Artificial Híbrida" description="Gerencie como o servidor desperta para processar imagens.">
+                      <SettingsCard title="IA">
                         <div className="space-y-4">
                           <label className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50 cursor-pointer">
                             <input
