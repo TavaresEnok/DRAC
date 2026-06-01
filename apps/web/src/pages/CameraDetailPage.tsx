@@ -180,24 +180,6 @@ function normalizeVideoCodec(codec?: string | null): VideoCodec {
   return 'h264';
 }
 
-function formatLiveProtocol(protocol?: string | null) {
-  switch (String(protocol ?? '').toLowerCase()) {
-    case 'auto':
-      return 'Padrão (WebRTC -> LL-HLS -> HLS)';
-    case 'webrtc':
-      return 'WebRTC';
-    case 'hls':
-      return 'HLS';
-    case 'llhls':
-    case 'll-hls':
-      return 'LL-HLS';
-    case 'mjpeg':
-      return 'MJPEG';
-    default:
-      return 'Padrão (WebRTC -> LL-HLS -> HLS)';
-  }
-}
-
 function normalizePreferredLiveProtocol(protocol?: string | null): CameraConfig['preferredLiveProtocol'] {
   const value = String(protocol ?? '').trim().toLowerCase();
   if (value === 'webrtc' || value === 'hls' || value === 'llhls' || value === 'll-hls' || value === 'mjpeg') {
@@ -303,25 +285,6 @@ function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'neutra
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-md px-1 py-1.5 text-xs">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right font-medium text-foreground">{value}</span>
-    </div>
-  );
-}
-
-function StreamCard({ title, primary, secondary }: { title: string; primary: string; secondary?: string }) {
-  return (
-    <div className="rounded-lg border border-border/70 bg-background/55 px-3 py-3">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>
-      <p className="mt-1 text-sm font-semibold text-foreground">{primary}</p>
-      {secondary ? <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{secondary}</p> : null}
-    </div>
-  );
-}
-
 function PtzButton({
   icon: Icon,
   label,
@@ -411,14 +374,12 @@ export default function CameraDetailPage() {
 
   const initialTabs = useMemo(() => {
     if (typeof window === 'undefined') {
-      return { main: 'playback' as const, side: 'info' as const };
+      return { main: 'playback' as const };
     }
     const tab = new URLSearchParams(window.location.search).get('tab');
-    if (tab === 'ptz') return { main: 'playback' as const, side: 'ptz' as const };
-    if (tab === 'events' || tab === 'settings') return { main: tab, side: 'info' as const };
-    return { main: 'playback' as const, side: 'info' as const };
+    if (tab === 'events' || tab === 'settings') return { main: tab };
+    return { main: 'playback' as const };
   }, []);
-  const [sidePanelTab, setSidePanelTab] = useState<'info' | 'ptz'>(initialTabs.side);
 
   useEffect(() => {
     setLivePlayerStatus({ activeProtocol: null, state: 'loading', reason: null });
@@ -1235,64 +1196,8 @@ export default function CameraDetailPage() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 border-y border-border bg-background/35">
-              <button
-                type="button"
-                onClick={() => setSidePanelTab('info')}
-                className={cn(
-                  'h-9 border-r border-border text-xs font-medium transition-colors',
-                  sidePanelTab === 'info' ? 'bg-background text-foreground' : 'text-muted-foreground hover:bg-[hsl(var(--accent))]',
-                )}
-              >
-                Status
-              </button>
-              <button
-                type="button"
-                onClick={() => setSidePanelTab('ptz')}
-                className={cn(
-                  'h-9 text-xs font-medium transition-colors',
-                  sidePanelTab === 'ptz' ? 'bg-background text-foreground' : 'text-muted-foreground hover:bg-[hsl(var(--accent))]',
-                )}
-              >
-                PTZ
-              </button>
-            </div>
-
             <div className="flex-1 overflow-y-auto p-4">
-              {sidePanelTab === 'info' ? (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    <StreamCard title="Live" primary={liveSourceLabel} secondary={effectiveLiveText} />
-                    <StreamCard title="Gravação" primary={isRecordingActive ? 'Ativa' : recordingModeCopy.label} secondary={`${originalStreamText} · ${originalCodec}`} />
-                    <StreamCard title="Player" primary={livePlayerStatus.activeProtocol ?? 'Aguardando'} secondary={livePlayerStatus.state} />
-                    <StreamCard title="Retenção" primary={`${cam.retentionDays} dias`} secondary={cam.storage} />
-                  </div>
-                  {livePlayerStatus.reason ? (
-                    <div className="rounded-md border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-[11px] leading-relaxed text-sky-700 dark:text-sky-200">
-                      {livePlayerStatus.reason}
-                    </div>
-                  ) : null}
-                  {liveTranscodedFromHevc ? (
-                    <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-200">
-                      Live convertendo HEVC para H.264. A gravação continua usando o perfil dedicado.
-                    </div>
-                  ) : null}
-                  <details className="rounded-lg border border-border/70 bg-background/45 px-3 py-2">
-                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Detalhes técnicos</summary>
-                    <div className="mt-2 border-t border-border/70 pt-2">
-                      <InfoRow label="Localização" value={cam.location} />
-                      <InfoRow label="Modelo" value={<span className="font-mono">{cam.model}</span>} />
-                      <InfoRow label="Live" value={<span className="font-mono">{configuredLiveText}</span>} />
-                      <InfoRow label="Protocolo" value={<span className="font-mono">{formatLiveProtocol(form.preferredLiveProtocol || cam.preferredLiveProtocol)}</span>} />
-                      <InfoRow label="RTSP" value={<span className="font-mono uppercase">{cam.preferredRtspTransport}</span>} />
-                      <InfoRow label="Áudio" value={cam.hasAudio ? 'Sim' : 'Não'} />
-                      <p className="mt-2 break-all rounded bg-background px-2 py-1.5 font-mono text-[10px] text-muted-foreground">
-                        rtsp://{cam.ipAddress}:{cam.rtspPort}{cam.rtspPath ?? '/stream'}
-                      </p>
-                    </div>
-                  </details>
-                </div>
-              ) : cam.ptzCapable ? (
+              {cam.ptzCapable ? (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <p className="text-[11px] font-semibold text-foreground">PTZ ONVIF</p>
