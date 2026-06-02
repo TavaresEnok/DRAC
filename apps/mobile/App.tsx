@@ -18,6 +18,7 @@ import { LoginScreen } from './src/screens/LoginScreen';
 import { PlaybackScreen } from './src/screens/PlaybackScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { request, normalizeServerUrl } from './src/services/api';
+import { requestCachedStreamUrls } from './src/services/stream-urls-cache';
 import { cleanApiUrl, clearStoredSession, loadStoredSession, saveStoredSession } from './src/services/sessionStore';
 import type { ActivePlayback, Camera, Direction, MosaicArea, Recording, Session, StreamUrls, Tab, User } from './src/types';
 import { styles } from './src/styles/appStyles';
@@ -163,7 +164,8 @@ export default function App() {
   const loadStream = async (cameraId: string) => {
     if (!session) return;
     try {
-      const data = await request<StreamUrls>(session.apiUrl, `/camera-stream/${cameraId}/urls`, session.token);
+      // Use cached request to deduplicate concurrent requests for same camera
+      const data = await requestCachedStreamUrls<StreamUrls>(session.apiUrl, cameraId, session.token);
       const hlsUrl = normalizeServerUrl(data.protocols?.hlsUrl, session.apiUrl);
       const posterBaseUrl = normalizeServerUrl(data.protocols?.posterUrl, session.apiUrl);
       const posterUrl = posterBaseUrl && data.streamToken

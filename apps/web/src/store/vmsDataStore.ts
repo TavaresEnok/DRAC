@@ -355,7 +355,7 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
           recordingMode: effectiveRecordingMode,
           retentionDays: camera.retentionDays ?? 7,
           preferredRtspTransport: camera.preferredRtspTransport ?? 'tcp',
-          preferredLiveProtocol: camera.preferredLiveProtocol ?? 'auto',
+          preferredLiveProtocol: camera.preferredLiveProtocol ?? 'webrtc',
           rtspPath: camera.rtspPath ?? undefined,
           liveChannel: camera.liveChannel ?? null,
           liveSubtype: camera.liveSubtype ?? null,

@@ -20,6 +20,7 @@ import { RecordingProcessManagerService } from './recording-process-manager.serv
 import { RecordingsService } from './recordings.service';
 import { ExportClipDto } from './dto/export-clip.dto';
 import { InvestigationsService } from '../investigations/investigations.service';
+import { CommercialPolicyService } from '../commercial-policy/commercial-policy.service';
 
 @Controller()
 export class RecordingsController {
@@ -30,6 +31,7 @@ export class RecordingsController {
     private readonly authService: AuthService,
     private readonly accessControlService: AccessControlService,
     private readonly auditService: AuditService,
+    private readonly commercialPolicy: CommercialPolicyService,
   ) {}
 
   private extractBearerToken(req: Request): string | null {
@@ -68,6 +70,7 @@ export class RecordingsController {
     @Req() req: Request,
   ) {
     await this.accessControlService.assertCanRecordCamera(user, cameraId);
+    await this.commercialPolicy.assertFeature('localRecording', user);
     const defaultSegment = Number(process.env.RECORDING_SEGMENT_SECONDS ?? 300);
     const segmentSeconds = dto.segmentSeconds ?? defaultSegment;
     const result = await this.recordingManager.start(cameraId, segmentSeconds, { recordingMode: 'manual' });
@@ -93,6 +96,7 @@ export class RecordingsController {
     @Req() req: Request,
   ) {
     await this.accessControlService.assertCanRecordCamera(user, cameraId);
+    await this.commercialPolicy.assertFeature('localRecording', user);
     const enabled = body?.enabled !== false;
     const result = await this.recordingManager.setMotionRecording(cameraId, enabled);
     await this.auditService.log(user.id, enabled ? 'recording.motion.enable' : 'recording.motion.disable', 'Camera', cameraId, { status: result.status }, req);
@@ -133,6 +137,7 @@ export class RecordingsController {
     @Body() body: { cameraIds?: string[] },
     @Req() req: Request,
   ) {
+    await this.commercialPolicy.assertFeature('localRecording', user);
     const requestedIds = Array.isArray(body?.cameraIds) ? body.cameraIds.filter((id) => typeof id === 'string' && id.trim().length > 0) : [];
     let candidateIds: string[];
     if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {

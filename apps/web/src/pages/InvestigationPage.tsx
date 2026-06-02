@@ -651,7 +651,7 @@ export default function InvestigationPage() {
                         <span>{camera.ptzCapable ? 'PTZ' : 'FIXA'}</span>
                       </div>
                     </div>
-                    <div className="relative h-44 border-y border-white/10 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.05),transparent_60%)]">
+                    <div className="relative h-44 border-y border-white/10 bg-black/30">
                       <div className="absolute inset-0 opacity-30" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px)', backgroundSize: '28px 28px' }} />
                       <div className="absolute inset-0 flex items-center justify-center"><Camera className="h-10 w-10 text-white/10" /></div>
                       <div className="absolute inset-x-0 top-0 flex justify-between px-3 py-2 text-[10px] font-mono text-white/70">

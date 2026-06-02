@@ -91,7 +91,7 @@ type CameraConfig = {
   recordingMode: RecordingMode;
   retentionDays: string;
   preferredRtspTransport: 'tcp' | 'udp';
-  preferredLiveProtocol: 'auto' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
+  preferredLiveProtocol: 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
   streamVideoCodec: VideoCodec;
   streamWidth: string;
   streamHeight: string;
@@ -154,10 +154,10 @@ const emptyConfig: CameraConfig = {
   recordingMode: 'continuous',
   retentionDays: '7',
   preferredRtspTransport: 'tcp',
-  preferredLiveProtocol: 'auto',
+  preferredLiveProtocol: 'webrtc',
   streamVideoCodec: 'original',
-  streamWidth: '',
-  streamHeight: '',
+  streamWidth: '1280',
+  streamHeight: '720',
   streamFps: '',
   streamBitrateKbps: '',
   recordingVideoCodec: 'h265',
@@ -185,7 +185,7 @@ function normalizePreferredLiveProtocol(protocol?: string | null): CameraConfig[
   if (value === 'webrtc' || value === 'hls' || value === 'llhls' || value === 'll-hls' || value === 'mjpeg') {
     return value === 'll-hls' ? 'llhls' : value;
   }
-  return 'auto';
+  return 'webrtc';
 }
 
 function resolveLiveSourceMode(liveSubtype: string, fallbackSubtype: string): LiveSourceMode {
@@ -257,15 +257,6 @@ function SettingsSwitch({ checked, onChange, label, description }: { checked: bo
         <span className={cn('absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform', checked ? 'translate-x-5' : 'translate-x-1')} />
       </span>
     </button>
-  );
-}
-
-function CapabilityTile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-3">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="mt-1 text-sm font-semibold text-foreground">{value}</p>
-    </div>
   );
 }
 
@@ -625,8 +616,8 @@ export default function CameraDetailPage() {
       ...current,
       liveSubtype: value === 'original' ? '0' : '1',
       streamVideoCodec: 'original',
-      streamWidth: '',
-      streamHeight: '',
+      streamWidth: current.streamWidth || '1280',
+      streamHeight: current.streamHeight || '720',
       streamFps: '',
       streamBitrateKbps: '',
     }));
@@ -747,12 +738,14 @@ export default function CameraDetailPage() {
       const rtspAuthFailed = data.rtspReachable && data.selectedRtspPortAuthOk === false;
       const onvifAuthFailed = data.onvifReachable && data.ptzDigestOk === false;
       toast({
-        title: 'Teste de conexão concluído',
+        title: 'Teste de conexao concluido',
         description: rtspAuthFailed
-          ? 'RTSP respondeu, mas a autenticação falhou. Verifique usuário/senha da câmera.'
+          ? 'A câmera respondeu, mas recusou usuário ou senha.'
           : onvifAuthFailed
-            ? 'ONVIF respondeu, mas PTZ digest falhou. Verifique credenciais ONVIF/porta/path.'
-            : `RTSP: ${data.rtspReachable ? 'ok' : 'falhou'} | ONVIF: ${data.onvifReachable ? 'ok' : 'falhou'} | Status: ${String(data.status ?? '-')}`,
+            ? 'A câmera respondeu, mas recusou o controle externo.'
+            : data.rtspReachable
+              ? 'Câmera respondendo corretamente.'
+              : 'Não foi possível confirmar o vídeo desta câmera.',
         variant: rtspAuthFailed || onvifAuthFailed ? 'destructive' : undefined,
       });
       await loadData();
@@ -835,8 +828,10 @@ export default function CameraDetailPage() {
       }
 
       toast({
-        title: 'Descoberta concluída',
-        description: `RTSP porta informada: ${data.selectedRtspPortAuthOk ? 'ok' : 'falhou'} | RTSP em alguma porta: ${data.rtspAuthOk ? 'ok' : 'falhou'}${typeof data.detectedRtspPort === 'number' ? ` | Porta RTSP detectada: ${data.detectedRtspPort}` : ''}`,
+        title: 'Deteccao concluida',
+        description: data.rtspAuthOk || data.selectedRtspPortAuthOk
+          ? 'Os dados encontrados foram aplicados automaticamente.'
+          : 'Não foi possível confirmar o vídeo com os dados atuais.',
       });
     } catch (error) {
       toast({
@@ -907,29 +902,12 @@ export default function CameraDetailPage() {
   const originalCodecValue = normalizeVideoCodec(cameraMeta?.recordingVideoCodec ?? cameraMeta?.detectedVideoCodec ?? cameraMeta?.streamVideoCodec);
   const originalCodec = originalCodecValue.toUpperCase();
   const originalBitrate = cameraMeta?.recordingBitrateKbps ?? cameraMeta?.detectedBitrateKbps ?? cameraMeta?.streamBitrateKbps ?? null;
-  const originalStreamText = `${originalWidth ?? '--'}x${originalHeight ?? '--'} @ ${originalFps ?? '--'} FPS`;
   const liveSourceMode = resolveLiveSourceMode(form.liveSubtype, form.subtype);
-  const liveUsesOriginalSource = liveSourceMode === 'original';
-  const liveProfileWidth = cameraMeta?.detectedWidth ?? cameraMeta?.streamWidth ?? (resolutionMatch ? Number(resolutionMatch[1]) : null);
-  const liveProfileHeight = cameraMeta?.detectedHeight ?? cameraMeta?.streamHeight ?? (resolutionMatch ? Number(resolutionMatch[2]) : null);
-  const liveProfileFps = cameraMeta?.detectedFps ?? cameraMeta?.streamFps ?? cam?.fps ?? null;
-  const liveProfileCodecValue = normalizeVideoCodec(cameraMeta?.detectedVideoCodec ?? cameraMeta?.streamVideoCodec);
-  const selectedSourceCodecValue = liveUsesOriginalSource ? originalCodecValue : liveProfileCodecValue;
-  const effectiveLiveWidth = liveUsesOriginalSource ? originalWidth : liveProfileWidth;
-  const effectiveLiveHeight = liveUsesOriginalSource ? originalHeight : liveProfileHeight;
-  const effectiveLiveFps = liveUsesOriginalSource ? originalFps : liveProfileFps;
-  // Live sempre entrega H.264; HEVC no perfil Live é transcodificado sob demanda.
-  const liveTranscodedFromHevc = selectedSourceCodecValue === 'h265';
-  const effectiveLiveCodecValue = liveTranscodedFromHevc ? 'h264' : selectedSourceCodecValue;
-  const effectiveLiveCodec = effectiveLiveCodecValue.toUpperCase();
-  const effectiveLiveText = `${effectiveLiveWidth ?? '--'}x${effectiveLiveHeight ?? '--'} @ ${effectiveLiveFps ?? '--'} FPS · ${effectiveLiveCodec}${liveTranscodedFromHevc ? ' (transcod. de H265)' : ''}`;
-  const deliverySubtype = cameraMeta?.liveSubtype ?? cam?.liveSubtype ?? cameraMeta?.subtype ?? null;
   const liveSourceLabel = liveSourceMode === 'original'
       ? 'Original da câmera'
       : liveSourceMode === 'economical'
       ? 'Substream econômico'
       : `Subtype ${form.liveSubtype || form.subtype || '--'}`;
-  const configuredLiveText = `${liveSourceLabel}: ${effectiveLiveText} · subtype ${liveUsesOriginalSource ? '0' : (deliverySubtype ?? '--')}`;
   const recordingModeCopy = getRecordingModeCopy(form.recordingMode);
 
   const startManualRecording = async () => {
@@ -1039,10 +1017,10 @@ export default function CameraDetailPage() {
       );
       setPtzDiagnostics(data);
       toast({
-        title: data.ptzLikelyWorking ? 'Diagnóstico PTZ: provável funcional' : 'Diagnóstico PTZ: falha detectada',
+        title: data.ptzLikelyWorking ? 'Controle PTZ pronto' : 'Controle PTZ indisponivel',
         description: data.ptzLikelyWorking
-          ? `Método: ${data.detected.protocol === 'vendor_http' ? 'HTTP compatível' : 'ONVIF'} | Endpoint: ${data.detected.onvifPort ?? '-'} ${data.detected.onvifPath ?? ''}`.trim()
-          : 'A câmera não aceitou os endpoints ONVIF testados. Revise porta, path, token e credenciais.',
+          ? 'A câmera aceitou o controle externo.'
+          : 'Não foi possível confirmar o controle externo desta câmera.',
         variant: data.ptzLikelyWorking ? undefined : 'destructive',
       });
     } catch (error) {
@@ -1200,7 +1178,7 @@ export default function CameraDetailPage() {
               {cam.ptzCapable ? (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <p className="text-[11px] font-semibold text-foreground">PTZ ONVIF</p>
+                    <p className="text-[11px] font-semibold text-foreground">PTZ</p>
                     <button
                       type="button"
                       onClick={() => void stopMove()}
@@ -1246,13 +1224,13 @@ export default function CameraDetailPage() {
                     className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
                   >
                     {diagnosingPtz ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Radar className="h-3.5 w-3.5" />}
-                    Diagnosticar PTZ
+                    Verificar PTZ
                   </button>
                   {ptzDiagnostics ? (
                     <div className="rounded-md border border-border bg-background/55 px-2.5 py-2 text-[11px] text-muted-foreground">
                       {ptzDiagnostics.ptzLikelyWorking
-                        ? `PTZ provável funcional via ${ptzDiagnostics.detected.protocol === 'vendor_http' ? 'HTTP compatível' : 'ONVIF'}.`
-                        : 'PTZ ainda sem validação.'}
+                        ? 'Controle PTZ disponivel.'
+                        : 'Controle PTZ ainda sem validacao.'}
                     </div>
                   ) : null}
                   <button
@@ -1380,12 +1358,15 @@ export default function CameraDetailPage() {
                   }}
                   className="space-y-5 px-4 py-5 md:px-5 xl:px-6"
                 >
-                  <div className="grid gap-4 md:grid-cols-4">
-                    <CapabilityTile label="Codec original" value={originalCodec} />
-                    <CapabilityTile label="Resolução original" value={originalWidth && originalHeight ? `${originalWidth}x${originalHeight}` : '--'} />
-                    <CapabilityTile label="FPS original" value={originalFps ? `${originalFps} FPS` : '--'} />
-                    <CapabilityTile label="Bitrate detectado" value={originalBitrate ? `${originalBitrate} kbps` : '--'} />
-                  </div>
+                  <details className="rounded-lg border border-border/70 bg-background/55 px-4 py-3">
+                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Informações detectadas da câmera</summary>
+                    <div className="mt-3 grid gap-3 border-t border-border/70 pt-3 text-xs md:grid-cols-4">
+                      <div><span className="text-muted-foreground">Codec</span><div className="mt-1 font-medium text-foreground">{originalCodec}</div></div>
+                      <div><span className="text-muted-foreground">Resolução</span><div className="mt-1 font-medium text-foreground">{originalWidth && originalHeight ? `${originalWidth}x${originalHeight}` : '--'}</div></div>
+                      <div><span className="text-muted-foreground">FPS</span><div className="mt-1 font-medium text-foreground">{originalFps ? `${originalFps} FPS` : '--'}</div></div>
+                      <div><span className="text-muted-foreground">Bitrate</span><div className="mt-1 font-medium text-foreground">{originalBitrate ? `${originalBitrate} kbps` : '--'}</div></div>
+                    </div>
+                  </details>
 
                   <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
                     <div className="space-y-4">
@@ -1406,10 +1387,15 @@ export default function CameraDetailPage() {
                           <SettingsField label="Porta RTSP">
                             <SettingsInput type="number" min={1} value={form.rtspPort} onChange={(event) => updateField('rtspPort', event.target.value)} className="font-mono" />
                           </SettingsField>
-                          <SettingsField label="Porta ONVIF">
-                            <SettingsInput type="number" min={1} value={form.onvifPort} onChange={(event) => updateField('onvifPort', event.target.value)} className="font-mono" />
-                          </SettingsField>
                         </div>
+                        <details className="rounded-lg border border-border/70 bg-card/60 px-3 py-2">
+                          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Avançado</summary>
+                          <div className="mt-3 grid gap-3 border-t border-border/70 pt-3 md:grid-cols-2">
+                            <SettingsField label="Porta de controle">
+                              <SettingsInput type="number" min={1} value={form.onvifPort} onChange={(event) => updateField('onvifPort', event.target.value)} className="font-mono" />
+                            </SettingsField>
+                          </div>
+                        </details>
                       </SettingsCard>
 
                       <SettingsCard title="Perfis">
@@ -1430,7 +1416,7 @@ export default function CameraDetailPage() {
                       </SettingsCard>
 
                       <SettingsCard title="Live">
-                        <div className="grid gap-3 md:grid-cols-2">
+                        <div className="grid gap-3 md:grid-cols-3">
                           <SettingsField label="Fonte da imagem">
                             <SettingsSelect value={liveSourceMode} onChange={(event) => applyLiveSourceMode(event.target.value as LiveSourceMode)}>
                               <option value="original">Original da câmera (principal)</option>
@@ -1438,50 +1424,53 @@ export default function CameraDetailPage() {
                               {liveSourceMode === 'advanced' ? <option value="advanced">Subtype personalizado</option> : null}
                             </SettingsSelect>
                           </SettingsField>
-                          <SettingsField label="Codec da origem Live">
-                            <SettingsSelect value={form.streamVideoCodec} onChange={(event) => updateField('streamVideoCodec', event.target.value as CameraConfig['streamVideoCodec'])}>
-                              <option value="original">Detectar no perfil Live</option>
-                              <option value="h264">H.264</option>
-                              <option value="h265">H.265</option>
-                              <option value="mjpeg">MJPEG</option>
+                          <SettingsField label="Resolução em Live">
+                            <SettingsSelect
+                              value={getResolutionPresetValue(form.streamWidth, form.streamHeight) || 'custom'}
+                              onChange={(event) => applyResolutionPreset('stream', event.target.value)}
+                            >
+                              <option value="custom" disabled>Personalizada</option>
+                              <option value="original">Original da câmera</option>
+                              {RESOLUTION_PRESETS.map((preset) => (
+                                <option key={`stream-${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
+                                  {preset.label}
+                                </option>
+                              ))}
                             </SettingsSelect>
                           </SettingsField>
-                          <SettingsField label="Protocolo">
-                            <SettingsSelect value={form.preferredLiveProtocol} onChange={(event) => updateField('preferredLiveProtocol', event.target.value as CameraConfig['preferredLiveProtocol'])}>
-                              <option value="auto">Padrão (WebRTC -&gt; LL-HLS -&gt; HLS)</option>
-                              <option value="webrtc">WebRTC</option>
-                              <option value="llhls">LL-HLS</option>
-                              <option value="hls">HLS</option>
-                              <option value="mjpeg">MJPEG</option>
-                            </SettingsSelect>
-                          </SettingsField>
-                          <details className="md:col-span-2 rounded-lg border border-border/70 bg-card/60 px-3 py-2">
+                          <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Entrega</div>
+                            <div className="mt-1 text-sm font-medium text-foreground">WebRTC</div>
+                          </div>
+                          <details className="md:col-span-3 rounded-lg border border-border/70 bg-card/60 px-3 py-2">
                             <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Avançado</summary>
                             <div className="mt-3 grid gap-3 border-t border-border/70 pt-3 md:grid-cols-2">
+                              <SettingsField label="Codec da origem">
+                                <SettingsSelect value={form.streamVideoCodec} onChange={(event) => updateField('streamVideoCodec', event.target.value as CameraConfig['streamVideoCodec'])}>
+                                  <option value="original">Detectar no perfil live</option>
+                                  <option value="h264">H.264</option>
+                                  <option value="h265">H.265</option>
+                                  <option value="mjpeg">MJPEG</option>
+                                </SettingsSelect>
+                              </SettingsField>
+                              <SettingsField label="Protocolo">
+                                <SettingsSelect value={form.preferredLiveProtocol} onChange={(event) => updateField('preferredLiveProtocol', event.target.value as CameraConfig['preferredLiveProtocol'])}>
+                                  <option value="webrtc">WebRTC</option>
+                                  <option value="llhls">LL-HLS</option>
+                                  <option value="hls">HLS</option>
+                                  <option value="mjpeg">MJPEG</option>
+                                </SettingsSelect>
+                              </SettingsField>
                               <SettingsField label="Transporte RTSP">
                                 <SettingsSelect value={form.preferredRtspTransport} onChange={(event) => updateField('preferredRtspTransport', event.target.value as CameraConfig['preferredRtspTransport'])}>
                                   <option value="tcp">TCP</option>
                                   <option value="udp">UDP</option>
                                 </SettingsSelect>
                               </SettingsField>
-                              <SettingsField label="Fallback FLV: escala">
-                                <SettingsSelect
-                                  value={getResolutionPresetValue(form.streamWidth, form.streamHeight) || 'custom'}
-                                  onChange={(event) => applyResolutionPreset('stream', event.target.value)}
-                                >
-                                  <option value="custom" disabled>Personalizada</option>
-                                  <option value="original">Sem redimensionamento</option>
-                                  {RESOLUTION_PRESETS.map((preset) => (
-                                    <option key={`stream-${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
-                                      {preset.label}
-                                    </option>
-                                  ))}
-                                </SettingsSelect>
-                              </SettingsField>
-                              <SettingsField label="Fallback FLV: FPS">
+                              <SettingsField label="FPS em Live">
                                 <SettingsInput type="number" min={1} value={form.streamFps} onChange={(event) => updateField('streamFps', event.target.value)} className="font-mono" />
                               </SettingsField>
-                              <SettingsField label="Fallback FLV: bitrate">
+                              <SettingsField label="Bitrate em Live">
                                 <SettingsInput type="number" min={1} value={form.streamBitrateKbps} onChange={(event) => updateField('streamBitrateKbps', event.target.value)} className="font-mono" />
                               </SettingsField>
                             </div>
@@ -1519,31 +1508,36 @@ export default function CameraDetailPage() {
                           <SettingsField label="Retenção">
                             <SettingsInput type="number" min={1} value={form.retentionDays} onChange={(event) => updateField('retentionDays', event.target.value)} className="font-mono" />
                           </SettingsField>
-                          <SettingsField label="Codec de arquivo">
-                            <SettingsSelect value="h265" disabled>
-                              <option value="h265">H.265 / HEVC</option>
-                            </SettingsSelect>
-                          </SettingsField>
-                          <SettingsField label="Resolução">
-                            <SettingsSelect
-                              value={getResolutionPresetValue(form.recordingWidth, form.recordingHeight) || 'custom'}
-                              onChange={(event) => applyResolutionPreset('recording', event.target.value)}
-                            >
-                              <option value="custom" disabled>Personalizada</option>
-                              <option value="original">Original da câmera</option>
-                              {RESOLUTION_PRESETS.map((preset) => (
-                                <option key={`recording-${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
-                                  {preset.label}
-                                </option>
-                              ))}
-                            </SettingsSelect>
-                          </SettingsField>
-                          <SettingsField label="FPS">
-                            <SettingsInput type="number" min={1} value={form.recordingFps} onChange={(event) => updateField('recordingFps', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <SettingsField label="Bitrate">
-                            <SettingsInput type="number" min={1} value={form.recordingBitrateKbps} onChange={(event) => updateField('recordingBitrateKbps', event.target.value)} className="font-mono" />
-                          </SettingsField>
+                          <details className="rounded-lg border border-border/70 bg-card/60 px-3 py-2">
+                            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Avançado</summary>
+                            <div className="mt-3 grid gap-3 border-t border-border/70 pt-3">
+                              <SettingsField label="Codec de arquivo">
+                                <SettingsSelect value="h265" disabled>
+                                  <option value="h265">H.265 / HEVC</option>
+                                </SettingsSelect>
+                              </SettingsField>
+                              <SettingsField label="Resolução">
+                                <SettingsSelect
+                                  value={getResolutionPresetValue(form.recordingWidth, form.recordingHeight) || 'custom'}
+                                  onChange={(event) => applyResolutionPreset('recording', event.target.value)}
+                                >
+                                  <option value="custom" disabled>Personalizada</option>
+                                  <option value="original">Original da câmera</option>
+                                  {RESOLUTION_PRESETS.map((preset) => (
+                                    <option key={`recording-${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
+                                      {preset.label}
+                                    </option>
+                                  ))}
+                                </SettingsSelect>
+                              </SettingsField>
+                              <SettingsField label="FPS">
+                                <SettingsInput type="number" min={1} value={form.recordingFps} onChange={(event) => updateField('recordingFps', event.target.value)} className="font-mono" />
+                              </SettingsField>
+                              <SettingsField label="Bitrate">
+                                <SettingsInput type="number" min={1} value={form.recordingBitrateKbps} onChange={(event) => updateField('recordingBitrateKbps', event.target.value)} className="font-mono" />
+                              </SettingsField>
+                            </div>
+                          </details>
                         </div>
                       </SettingsCard>
 
@@ -1559,8 +1553,8 @@ export default function CameraDetailPage() {
                               className="h-4 w-4 accent-primary"
                             />
                             <div className="flex flex-col">
-                              <span className="text-sm font-medium">Servidor DRAC (Contínuo)</span>
-                              <span className="text-xs text-muted-foreground">O servidor analisa o vídeo 100% do tempo. (Alto uso de CPU)</span>
+                              <span className="text-sm font-medium">Análise pelo servidor</span>
+                              <span className="text-xs text-muted-foreground">Padrão recomendado para detecção visual.</span>
                             </div>
                           </label>
                           <label className={`flex items-center gap-3 rounded-lg border p-3 cursor-pointer ${!form.hasEdgeAi ? 'opacity-50 grayscale' : 'hover:bg-muted/50'}`}>
@@ -1574,8 +1568,8 @@ export default function CameraDetailPage() {
                               className="h-4 w-4 accent-primary"
                             />
                             <div className="flex flex-col">
-                              <span className="text-sm font-medium">Câmera ONVIF (Gatilho)</span>
-                              <span className="text-xs text-muted-foreground">{form.hasEdgeAi ? 'A câmera acorda o servidor apenas quando há movimento. (Baixo uso de CPU)' : 'Não suportado: A câmera não possui suporte a eventos ONVIF.'}</span>
+                              <span className="text-sm font-medium">Usar alerta da câmera</span>
+                              <span className="text-xs text-muted-foreground">{form.hasEdgeAi ? 'A câmera avisa o sistema quando houver movimento.' : 'Esta câmera não informou suporte a esse recurso.'}</span>
                             </div>
                           </label>
                         </div>
@@ -1585,7 +1579,7 @@ export default function CameraDetailPage() {
 
                   <div className="flex flex-col gap-4 border-t border-border/80 pt-6 md:flex-row md:items-center md:justify-between">
                     <div className="text-xs text-muted-foreground">
-                      <span className="font-semibold text-foreground">Resumo:</span> live {configuredLiveText}, gravação {form.recordingWidth && form.recordingHeight ? `${form.recordingWidth}x${form.recordingHeight}` : 'Original'} @ {form.recordingFps || 'auto'} FPS.
+                      <span className="font-semibold text-foreground">Resumo:</span> live em {liveSourceLabel.toLowerCase()}, gravação {getRecordingModeCopy(form.recordingMode).label.toLowerCase()}.
                     </div>
                     <button
                       type="submit"

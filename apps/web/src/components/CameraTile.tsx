@@ -93,17 +93,17 @@ export function CameraTile({
         <>
           {/* Top-left: camera code + status badge */}
           <div className="absolute top-1.5 left-1.5 z-20 flex items-center gap-1">
-            <span className="font-mono text-[9px] text-white/55 tracking-wider bg-black/35 px-1.5 py-px rounded-sm">
+            <span className="text-[9px] text-white/60 bg-black/35 px-1.5 py-px rounded-sm">
               {camera.code}
             </span>
             {isAlarm && (
-              <span className="font-mono text-[9px] text-[hsl(354_55%_68%)] bg-[hsl(354_50%_50%_/_0.18)] border border-[hsl(354_50%_50%_/_0.4)] px-1.5 py-px rounded-sm rec-pulse">
-                ALARM
+              <span className="text-[9px] text-[hsl(354_55%_68%)] bg-[hsl(354_50%_50%_/_0.18)] border border-[hsl(354_50%_50%_/_0.4)] px-1.5 py-px rounded-sm rec-pulse">
+                Alarme
               </span>
             )}
             {isMotion && (
-              <span className="font-mono text-[9px] text-[hsl(38_60%_68%)] bg-[hsl(38_58%_54%_/_0.15)] border border-[hsl(38_58%_54%_/_0.35)] px-1.5 py-px rounded-sm">
-                MOTION
+              <span className="text-[9px] text-[hsl(38_60%_68%)] bg-[hsl(38_58%_54%_/_0.15)] border border-[hsl(38_58%_54%_/_0.35)] px-1.5 py-px rounded-sm">
+                Movimento
               </span>
             )}
           </div>
@@ -121,13 +121,10 @@ export function CameraTile({
                       className="w-1 h-1 rounded-full shrink-0"
                       style={{ backgroundColor: STATUS_DOT[camera.status] }}
                     />
-                    <span className="font-mono text-[9px] text-white/40 capitalize">{camera.status.replace('_', ' ')}</span>
+                    <span className="text-[9px] text-white/45 capitalize">{camera.status.replace('_', ' ')}</span>
                   </div>
                 )}
               </div>
-              {!compact && !isOffline && (
-                <span className="font-mono text-[9px] text-white/30 shrink-0">{camera.resolution.split(' ')[0]}</span>
-              )}
             </div>
           </div>
         </>

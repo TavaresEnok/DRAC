@@ -4,6 +4,7 @@ import { type Request, type Response } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AccessControlService } from '../access-control/access-control.service';
 import { AuthService } from '../auth/auth.service';
+import { CommercialPolicyService } from '../commercial-policy/commercial-policy.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -31,6 +32,7 @@ export class CameraStreamController {
     private readonly authService: AuthService,
     private readonly accessControlService: AccessControlService,
     private readonly auditService: AuditService,
+    private readonly commercialPolicy: CommercialPolicyService,
   ) {}
 
   private extractBearerToken(req: Request): string | null {
@@ -64,6 +66,7 @@ export class CameraStreamController {
     @Req() req: Request,
   ) {
     await this.accessControlService.assertCanViewCamera(user, cameraId);
+    await this.commercialPolicy.assertFeature('localLive', user);
     const token = await this.authService.createStreamToken(user.id, cameraId);
     await this.auditService.log(user.id, 'stream.token.create', 'Camera', cameraId, null, req);
     return token;
@@ -89,6 +92,7 @@ export class CameraStreamController {
     @Req() req: Request,
   ) {
     await this.accessControlService.assertCanViewCamera(user, cameraId);
+    await this.commercialPolicy.assertFeature('localLive', user);
     const token = await this.authService.createStreamToken(user.id, cameraId);
     let camera = await this.camerasService.getCameraOrThrow(cameraId);
 
@@ -126,7 +130,7 @@ export class CameraStreamController {
     const flvUrl = `${reqProto}://${apiHost}/camera-stream/${cameraId}/flv`;
     const posterUrl = `${reqProto}://${apiHost}/camera-stream/${cameraId}/poster`;
 
-    const configuredPreferred = (camera.preferredLiveProtocol ?? 'auto').toLowerCase();
+    const configuredPreferred = (camera.preferredLiveProtocol ?? 'webrtc').toLowerCase();
     const configuredCodec = camera.streamVideoCodec ?? null;
     const originalCodec = resolveOriginalVideoCodec(camera);
     const sourceCodec = measuredLiveCodec ?? resolveDeliveryVideoCodec(camera);
@@ -162,6 +166,7 @@ export class CameraStreamController {
     return {
       cameraId,
       streamToken: token.streamToken,
+      streamTokenExpiresAt: token.expiresAt,
       preferredLiveProtocol: configuredPreferred,
       preferredRtspTransport: camera.preferredRtspTransport ?? 'tcp',
       configuredVideoCodec: configuredCodec,
@@ -178,8 +183,8 @@ export class CameraStreamController {
         protocolOrder,
         reason: smartOriginalEnabled
           ? 'Perfil Live recebido em HEVC; navegador recebe H.264, enquanto gravação permanece no perfil H.265 dedicado.'
-          : configuredPreferred === 'auto'
-            ? 'Modo automático: valida vídeo renderizado e faz fallback WebRTC -> LL-HLS -> HLS.'
+          : configuredPreferred === 'webrtc'
+            ? 'WebRTC configurado como protocolo principal; LL-HLS/HLS ficam apenas como contingência técnica.'
             : 'Ordem de fallback baseada no protocolo configurado.',
       },
       protocols: {

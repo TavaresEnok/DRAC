@@ -12,6 +12,7 @@ import {
   sanitizeRtspUrl,
 } from '../cameras/helpers/rtsp-url.helper';
 import { MediamtxProxyService } from '../camera-stream/mediamtx-proxy.service';
+import { CommercialPolicyService } from '../commercial-policy/commercial-policy.service';
 
 const AI_MODES = ['motion', 'face', 'general'] as const;
 type AiMode = typeof AI_MODES[number];
@@ -74,6 +75,7 @@ export class AiManagerService implements OnModuleInit {
     private readonly cryptoService: CryptoService,
     private readonly prisma: PrismaService,
     private readonly mediamtxProxy: MediamtxProxyService,
+    private readonly commercialPolicy: CommercialPolicyService,
   ) {}
 
   async onModuleInit() {
@@ -102,6 +104,11 @@ export class AiManagerService implements OnModuleInit {
   private async performSyncAll() {
     try {
       const settings = await this.getSettings();
+      if (!(await this.commercialPolicy.isAllowed('aiAdvanced'))) {
+        this.logger.log('IA bloqueada pela política comercial. Parando processadores ativos.');
+        await this.aiService.stopAll().catch(() => undefined);
+        return { started: 0, skipped: 'commercial_restriction', settings };
+      }
       if (!settings.enabled) {
         this.logger.log('IA global desativada. Parando processadores ativos.');
         await this.aiService.stopAll().catch(() => undefined);
@@ -138,6 +145,9 @@ export class AiManagerService implements OnModuleInit {
   }
 
   async startCamera(cameraId: string) {
+    if (!(await this.commercialPolicy.isAllowed('aiAdvanced'))) {
+      return { status: 'disabled', cameraId, reason: 'commercial_restriction' };
+    }
     const settings = await this.getSettings();
     if (!settings.enabled) {
       return { status: 'disabled', cameraId };
@@ -159,6 +169,7 @@ export class AiManagerService implements OnModuleInit {
   }
 
   async updateSettings(input: { enabled?: boolean; mode?: string }) {
+    await this.commercialPolicy.assertFeature('aiAdvanced');
     const data: { enabled?: boolean; mode?: AiMode } = {};
     if (typeof input.enabled === 'boolean') data.enabled = input.enabled;
     if (input.mode !== undefined) {

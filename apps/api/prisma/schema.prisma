@@ -84,7 +84,7 @@ model Camera {
   recordingMode     String       @default("continuous")
   retentionDays     Int          @default(7)
   preferredRtspTransport String  @default("tcp")
-  preferredLiveProtocol  String  @default("auto")
+  preferredLiveProtocol  String  @default("webrtc")
   streamVideoCodec       String?
   streamWidth            Int?
   streamHeight           Int?

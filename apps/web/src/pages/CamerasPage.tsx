@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  LayoutGrid, List, Search, Filter, Plus, Edit, PlaySquare,
-  Crosshair, RefreshCw, ChevronRight, X, Wifi, HardDrive,
+  LayoutGrid, List, Search, Plus, Edit, PlaySquare,
+  Crosshair, RefreshCw, ChevronRight, X, Wifi,
   Camera as CameraIcon, Check, Trash2, Circle, Radar
 } from 'lucide-react';
 import { format } from 'date-fns';
@@ -47,7 +47,7 @@ function getRequestErrorMessage(error: unknown, fallback: string) {
 
 type VideoCodec = 'original' | 'h264' | 'h265' | 'mjpeg';
 type RecordingMode = Camera['recordingMode'];
-type PreferredLiveProtocol = 'auto' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
+type PreferredLiveProtocol = 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
 
 const DEFAULT_CAMERA_CHANNEL = 1;
 const MAIN_STREAM_SUBTYPE = 0;
@@ -91,7 +91,7 @@ function normalizeVideoCodec(codec?: string | null): VideoCodec {
 function formatLiveProtocol(protocol?: string | null) {
   switch (String(protocol ?? '').toLowerCase()) {
     case 'auto':
-      return 'Padrão (WebRTC -> LL-HLS -> HLS)';
+      return 'WebRTC';
     case 'webrtc':
       return 'WebRTC';
     case 'hls':
@@ -102,7 +102,43 @@ function formatLiveProtocol(protocol?: string | null) {
     case 'mjpeg':
       return 'MJPEG';
     default:
-      return 'Padrão (WebRTC -> LL-HLS -> HLS)';
+      return 'WebRTC';
+  }
+}
+
+function formatCameraStatus(status: string) {
+  switch (status) {
+    case 'online':
+      return 'Online';
+    case 'recording':
+      return 'Gravando';
+    case 'motion':
+      return 'Movimento';
+    case 'alarm':
+      return 'Alarme';
+    case 'offline':
+      return 'Offline';
+    case 'no_signal':
+      return 'Sem sinal';
+    case 'maintenance':
+      return 'Manutenção';
+    default:
+      return status.replace('_', ' ');
+  }
+}
+
+function formatRecordingMode(mode: string) {
+  switch (mode) {
+    case 'continuous':
+      return 'Contínua';
+    case 'motion':
+      return 'Movimento';
+    case 'schedule':
+      return 'Agenda';
+    case 'manual':
+      return 'Manual';
+    default:
+      return mode;
   }
 }
 
@@ -111,7 +147,7 @@ function normalizePreferredLiveProtocol(protocol?: string | null): PreferredLive
   if (value === 'webrtc' || value === 'hls' || value === 'llhls' || value === 'll-hls' || value === 'mjpeg') {
     return value === 'll-hls' ? 'llhls' : value;
   }
-  return 'auto';
+  return 'webrtc';
 }
 
 function WizardModal({
@@ -221,10 +257,10 @@ function WizardModal({
     recordingMode: 'continuous',
     retentionDays: '90',
     preferredRtspTransport: 'tcp',
-    preferredLiveProtocol: 'auto',
+    preferredLiveProtocol: 'webrtc',
     streamVideoCodec: 'original',
-    streamWidth: '',
-    streamHeight: '',
+    streamWidth: '1280',
+    streamHeight: '720',
     streamFps: '',
     streamBitrateKbps: '',
     recordingVideoCodec: 'h265' as VideoCodec,
@@ -387,9 +423,11 @@ function WizardModal({
       if (result.detectedOnvifPath) updateField('onvifPath', result.detectedOnvifPath);
       if (result.detectedOnvifProfileToken) updateField('onvifProfileToken', result.detectedOnvifProfileToken);
       if (showResult) {
-        window.alert(
-          `Teste concluído\nRTSP: ${result.rtspAuthOk ? 'ok' : 'falhou'}\nONVIF: ${result.onvifReachable ? 'ok' : 'falhou'}\nPTZ/controle: ${result.ptzDigestOk ? 'ok' : 'não confirmado'}\nCodec detectado: ${result.detectedStream?.codec?.toUpperCase() ?? '-'}\nResolução detectada: ${result.detectedStream?.width && result.detectedStream?.height ? `${result.detectedStream.width}x${result.detectedStream.height}` : '-'}\nFPS detectado: ${result.detectedStream?.fps ?? '-'}\nBitrate detectado: ${result.detectedStream?.bitrateKbps ? `${result.detectedStream.bitrateKbps} kbps` : '-'}\nPerfis técnicos: configurados automaticamente\nStatus: ${result.status}${result.rtspProbeError ? `\nErro RTSP: ${result.rtspProbeError}` : ''}`,
-        );
+        if (result.rtspAuthOk || result.rtspReachable || result.rtspReachableAny) {
+          window.alert('Câmera detectada com sucesso. Os perfis de live, gravação e IA foram configurados automaticamente.');
+        } else {
+          window.alert('Não foi possível confirmar o vídeo desta câmera. Verifique IP, porta, usuário e senha.');
+        }
       }
       return true;
     } catch (error) {
@@ -426,59 +464,62 @@ function WizardModal({
           {step === 0 && (
             <div className="space-y-3">
               <div className="space-y-1">
-                <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Endereço IP</label>
+                <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Endereço IP</label>
                 <input value={form.ip} onChange={(e) => updateField('ip', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="192.168.20.149" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Porta</label>
+                  <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Porta RTSP</label>
                   <input value={form.port} onChange={(e) => updateField('port', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="554" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Porta ONVIF</label>
-                  <input value={form.onvifPort} onChange={(e) => updateField('onvifPort', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="80" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Protocolo</label>
-                  <Select value={form.protocol} onValueChange={(value) => updateField('protocol', value)}>
-                    <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="rtsp" className="text-xs">RTSP</SelectItem>
-                      <SelectItem value="onvif" className="text-xs">ONVIF</SelectItem>
-                      <SelectItem value="http" className="text-xs">HTTP</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Usuário</label>
+                  <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Usuário</label>
                   <input value={form.username} onChange={(e) => updateField('username', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="admin" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Senha</label>
+                  <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Senha</label>
                   <input type="password" value={form.password} onChange={(e) => updateField('password', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="********" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Canal</label>
+                  <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Canal</label>
                   <input value={form.channel} onChange={(e) => updateField('channel', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="1" />
                 </div>
-                <div className="col-span-2 rounded border border-border bg-background px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-                  Rotas RTSP, endpoint ONVIF, token de perfil e perfis de live/gravação/IA serão detectados e salvos internamente.
-                </div>
               </div>
+              <details className="rounded border border-border bg-background/60 px-3 py-2">
+                <summary className="cursor-pointer text-xs font-medium text-[hsl(var(--muted-foreground))]">Avançado</summary>
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Porta de controle</label>
+                    <input value={form.onvifPort} onChange={(e) => updateField('onvifPort', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="80" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Protocolo</label>
+                    <Select value={form.protocol} onValueChange={(value) => updateField('protocol', value)}>
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="rtsp" className="text-xs">RTSP</SelectItem>
+                        <SelectItem value="onvif" className="text-xs">ONVIF</SelectItem>
+                        <SelectItem value="http" className="text-xs">HTTP</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </details>
               <button onClick={() => void handleTestConnection()} disabled={isTesting} className="flex items-center gap-2 px-3 py-1.5 rounded border border-border text-xs hover:bg-[hsl(var(--accent))] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                 <Wifi className="w-3.5 h-3.5" />
                 {isTesting ? 'Detectando...' : 'Detectar câmera'}
               </button>
               {detectedMax && (
-                <div className="rounded border border-border bg-background px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-                  Capacidade máxima detectada:
-                  <span className="ml-1 font-mono text-foreground">
-                    {detectedMax.width && detectedMax.height ? `${detectedMax.width}x${detectedMax.height}` : '-'}
-                  </span>
-                  <span className="mx-2">|</span>
-                  <span className="font-mono text-foreground">{detectedMax.fps ?? '-'} FPS</span>
-                  <span className="mx-2">|</span>
-                  <span className="font-mono text-foreground">{detectedMax.bitrateKbps ? `${detectedMax.bitrateKbps} kbps` : '-'}</span>
+                <div className="rounded border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-300">
+                  Camera detectada. O sistema configurou os perfis automaticamente.
+                  <details className="mt-1 text-[hsl(var(--muted-foreground))]">
+                    <summary className="cursor-pointer text-[10px]">Detalhes</summary>
+                    <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1">
+                      <span>{detectedMax.width && detectedMax.height ? `${detectedMax.width}x${detectedMax.height}` : '-'}</span>
+                      <span>{detectedMax.fps ?? '-'} FPS</span>
+                      <span>{detectedMax.bitrateKbps ? `${detectedMax.bitrateKbps} kbps` : '-'}</span>
+                    </div>
+                  </details>
                 </div>
               )}
             </div>
@@ -486,18 +527,18 @@ function WizardModal({
           {step === 1 && (
             <div className="space-y-3">
               <div className="space-y-1">
-                <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Nome da Câmera</label>
+                <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Nome da câmera</label>
                 <input value={form.name} onChange={(e) => updateField('name', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" placeholder="Ex.: Legacy Camera - Canal 1" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Zona</label>
+                  <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Local</label>
                     <Select value={form.zone} onValueChange={(value) => updateField('zone', value)}><SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Selecionar zona..." /></SelectTrigger>
                     <SelectContent>{validZones.map((zone) => <SelectItem key={zone} value={zone} className="text-xs">{zone}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Unidade</label>
+                  <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Unidade</label>
                   <Select value={form.building} onValueChange={(value) => updateField('building', value)}><SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
                     <SelectContent>
                       {validZones.map((zone) => <SelectItem key={zone} value={zone} className="text-xs">{zone}</SelectItem>)}
@@ -510,14 +551,39 @@ function WizardModal({
           {step === 2 && (
             <div className="space-y-3">
               <div className="rounded-lg border border-border bg-background p-3 space-y-3">
-                <div className="text-[11px] font-semibold">Perfil de Live</div>
+                <div className="text-xs font-semibold">Gravação</div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Codec da origem Live</label>
+                    <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Modo</label>
+                    <Select value={form.recordingMode} onValueChange={(value) => updateField('recordingMode', value)}>
+                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="continuous" className="text-xs">Contínua</SelectItem>
+                        <SelectItem value="motion" className="text-xs">Por movimento</SelectItem>
+                        <SelectItem value="schedule" className="text-xs">Agenda</SelectItem>
+                        <SelectItem value="manual" className="text-xs">Manual</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Retenção</label>
+                    <input value={form.retentionDays} onChange={(e) => updateField('retentionDays', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                  </div>
+                  <div className="col-span-2 rounded border border-border bg-card px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+                    A live usa a imagem principal em alta qualidade. A gravação usa o perfil principal da câmera e salva em H.265 quando disponível.
+                  </div>
+                </div>
+              </div>
+
+              <details className="rounded-lg border border-border bg-background p-3">
+                <summary className="cursor-pointer text-xs font-medium text-[hsl(var(--muted-foreground))]">Avançado</summary>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Origem da live</label>
                     <Select value={form.streamVideoCodec} onValueChange={(value) => updateField('streamVideoCodec', value)}>
                       <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="original" className="text-xs">Detectar no perfil Live</SelectItem>
+                        <SelectItem value="original" className="text-xs">Detectar automaticamente</SelectItem>
                         <SelectItem value="h264" className="text-xs">H.264</SelectItem>
                         <SelectItem value="h265" className="text-xs">H.265</SelectItem>
                         <SelectItem value="mjpeg" className="text-xs">MJPEG</SelectItem>
@@ -525,11 +591,10 @@ function WizardModal({
                     </Select>
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Protocolo ao vivo</label>
+                    <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Entrega ao vivo</label>
                     <Select value={form.preferredLiveProtocol} onValueChange={(value) => updateField('preferredLiveProtocol', value as PreferredLiveProtocol)}>
                       <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="auto" className="text-xs">Padrão (WebRTC -&gt; LL-HLS -&gt; HLS)</SelectItem>
                         <SelectItem value="webrtc" className="text-xs">WebRTC</SelectItem>
                         <SelectItem value="llhls" className="text-xs">LL-HLS</SelectItem>
                         <SelectItem value="hls" className="text-xs">HLS</SelectItem>
@@ -538,42 +603,7 @@ function WizardModal({
                     </Select>
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Transporte RTSP</label>
-                    <Select value={form.preferredRtspTransport} onValueChange={(value) => updateField('preferredRtspTransport', value)}>
-                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="tcp" className="text-xs">TCP</SelectItem>
-                        <SelectItem value="udp" className="text-xs">UDP</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="col-span-2 rounded border border-border bg-card px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-                    Live usa o perfil principal em alta qualidade. Se a origem for H.265, o sistema entrega H.264/WebRTC ao navegador.
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-border bg-background p-3 space-y-3">
-                <div className="text-[11px] font-semibold">Perfil de Gravação</div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Modo de Gravação</label>
-                    <Select value={form.recordingMode} onValueChange={(value) => updateField('recordingMode', value)}>
-                      <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="continuous" className="text-xs">Contínua</SelectItem>
-                        <SelectItem value="motion" className="text-xs">Por Movimento</SelectItem>
-                        <SelectItem value="schedule" className="text-xs">Agenda</SelectItem>
-                        <SelectItem value="manual" className="text-xs">Manual</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Retenção (dias)</label>
-                    <input value={form.retentionDays} onChange={(e) => updateField('retentionDays', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Perfil de Gravação</label>
+                    <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Perfil de gravação</label>
                     <Select value="main" disabled>
                       <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -582,7 +612,7 @@ function WizardModal({
                     </Select>
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Codec de Arquivo</label>
+                    <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Arquivo</label>
                     <Select value="h265" disabled>
                       <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -590,42 +620,38 @@ function WizardModal({
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="col-span-2 rounded border border-border bg-card px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-                    A IA será configurada automaticamente para o substream leve direto da câmera.
-                  </div>
                 </div>
-              </div>
+              </details>
             </div>
           )}
           {step === 3 && (
             <div className="space-y-3">
               <div className="rounded-lg border border-border bg-background p-4 space-y-2 text-xs">
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Endereço IP</span><span className="font-mono">{form.ip || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Porta</span><span className="font-mono">{form.port || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Porta ONVIF</span><span className="font-mono">{form.onvifPort || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Protocolo</span><span className="font-mono uppercase">{form.protocol}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Nome</span><span>{form.name || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Usuário</span><span>{form.username || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Canal</span><span className="font-mono">{form.channel || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Zona</span><span>{form.zone || '-'}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Local</span><span>{form.zone || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Unidade</span><span>{form.building || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Codec Live</span><span className="font-mono uppercase">{form.streamVideoCodec}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Protocolo Live</span><span className="font-mono">{formatLiveProtocol(form.preferredLiveProtocol)}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">RTSP Transport</span><span className="font-mono uppercase">{form.preferredRtspTransport}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Perfil Live</span><span>Principal da câmera</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Perfil IA</span><span>Substream leve automático</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Gravação</span><span className="capitalize">{form.recordingMode}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Live</span><span>Imagem principal</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">IA</span><span>Substream automático</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Gravação</span><span>{formatRecordingMode(form.recordingMode)}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Retenção</span><span className="font-mono">{form.retentionDays || '-'} dias</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Codec Gravação</span><span className="font-mono uppercase">H.265</span></div>
                 {detectedMax && (
                   <div className="mt-2 rounded border border-border bg-card px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-                    Detectado no perfil principal: <span className="font-mono text-foreground">{detectedMax.width && detectedMax.height ? `${detectedMax.width}x${detectedMax.height}` : '-'}</span>
+                    Detectado: <span className="font-mono text-foreground">{detectedMax.width && detectedMax.height ? `${detectedMax.width}x${detectedMax.height}` : '-'}</span>
                     <span className="mx-2">|</span>
                     <span className="font-mono text-foreground">{detectedMax.fps ?? '-'} FPS</span>
-                    <span className="mx-2">|</span>
-                    <span className="font-mono text-foreground">{detectedMax.bitrateKbps ? `${detectedMax.bitrateKbps} kbps` : '-'}</span>
                   </div>
                 )}
+                <details className="pt-2">
+                  <summary className="cursor-pointer text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Detalhes avançados</summary>
+                  <div className="mt-2 space-y-2 border-t border-border pt-2">
+                    <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Porta RTSP</span><span className="font-mono">{form.port || '-'}</span></div>
+                    <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Porta de controle</span><span className="font-mono">{form.onvifPort || '-'}</span></div>
+                    <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Canal</span><span className="font-mono">{form.channel || '-'}</span></div>
+                    <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Origem live</span><span className="font-mono uppercase">{form.streamVideoCodec}</span></div>
+                    <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Entrega live</span><span className="font-mono">{formatLiveProtocol(form.preferredLiveProtocol)}</span></div>
+                  </div>
+                </details>
               </div>
             </div>
           )}
@@ -906,17 +932,9 @@ export default function CamerasPage() {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
-      const configured = data?.configured ?? {};
-      const detected = data?.detected ?? {};
-      const resultLine = data?.ptzLikelyWorking ? 'Resultado: PTZ provável funcional' : 'Resultado: falha de comunicação PTZ';
-      window.alert(
-        [
-          `Diagnóstico PTZ — ${camera.name}`,
-          `Config: porta ${configured.onvifPort ?? '-'} | path ${configured.onvifPath ?? '-'} | token ${configured.onvifProfileToken ?? '-'}`,
-          `Detectado: porta ${detected.onvifPort ?? '-'} | path ${detected.onvifPath ?? '-'} | token ${detected.onvifProfileToken ?? '-'}`,
-          resultLine,
-        ].join('\n'),
-      );
+      window.alert(data?.ptzLikelyWorking
+        ? `Controle PTZ pronto para ${camera.name}.`
+        : `Não foi possível confirmar o controle PTZ de ${camera.name}.`);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : 'Falha no diagnóstico PTZ.');
     } finally {
@@ -1017,7 +1035,7 @@ export default function CamerasPage() {
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 bg-card z-10">
                 <tr className="border-b border-border">
-                  {['Código', 'Nome', 'Zona', 'Codec', 'Resolução', 'FPS', 'IP', 'Status', 'Gravação', 'Ações'].map(h => (
+                  {['Câmera', 'Local', 'Status', 'Gravação', 'Ações'].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-medium text-[hsl(var(--muted-foreground))] whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -1031,69 +1049,28 @@ export default function CamerasPage() {
                     className="hover:bg-[hsl(var(--accent))] transition-colors cursor-pointer"
                     onClick={() => setLocation(`/cameras/${cam.id}`)}
                   >
-                    <td className="px-3 py-2.5 font-mono text-[10px]">{cam.code}</td>
-                    <td className="px-3 py-2.5 font-medium max-w-52 truncate">{cam.name}</td>
-                    <td className="px-3 py-2.5 text-[hsl(var(--muted-foreground))]">{cam.zone}</td>
-                    <td className="px-3 py-2.5 text-[hsl(var(--muted-foreground))] hidden lg:table-cell uppercase">{cam.streamVideoCodec ?? cam.detectedVideoCodec ?? '-'}</td>
-                    <td className="px-3 py-2.5 font-mono text-[10px] hidden xl:table-cell">{cam.resolution}</td>
-                    <td className="px-3 py-2.5 font-mono text-[10px]">{cam.fps}</td>
-                    <td className="px-3 py-2.5 font-mono text-[10px] text-[hsl(var(--muted-foreground))] hidden xl:table-cell">{cam.ipAddress}</td>
                     <td className="px-3 py-2.5">
-                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-mono capitalize ${STATUS_BADGE[cam.status] ?? STATUS_BADGE.offline}`}>
-                        {cam.status.replace('_', ' ')}
+                      <div className="font-medium max-w-72 truncate">{cam.name}</div>
+                      <div className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">{cam.code}</div>
+                    </td>
+                    <td className="px-3 py-2.5 text-[hsl(var(--muted-foreground))]">{cam.zone}</td>
+                    <td className="px-3 py-2.5">
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] ${STATUS_BADGE[cam.status] ?? STATUS_BADGE.offline}`}>
+                        {formatCameraStatus(cam.status)}
                       </span>
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex flex-col gap-1">
-                        <span className={`inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 text-[10px] font-mono ${recordingModeCopy.className}`}>
+                        <span className={`inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 text-[10px] ${recordingModeCopy.className}`}>
                           {recordingModeCopy.label}
                         </span>
-                        <span className="text-[9px] text-[hsl(var(--muted-foreground))]">{cam.retentionDays}d · {recordingModeCopy.detail}</span>
+                        <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{cam.retentionDays} dias</span>
                       </div>
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-                        {recordingHealthByCamera[cam.id]?.needsAttention && !isRecordingAutoRecovering(cam) ? (
-                          <button
-                            onClick={() => void reconnectSingleCamera(cam.id)}
-                            className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors"
-                            title={reconnectingSingleCameraId === cam.id ? 'Reconectando...' : 'Reconectar gravação desta câmera'}
-                            disabled={reconnectingSingleCameraId === cam.id}
-                          >
-                            <RefreshCw className={`w-3.5 h-3.5 ${reconnectingSingleCameraId === cam.id ? 'animate-spin' : ''}`} />
-                          </button>
-                        ) : null}
                         <button onClick={() => setLocation(`/cameras/${cam.id}?tab=settings`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors" title="Editar câmera"><Edit className="w-3.5 h-3.5" /></button>
                         <button onClick={() => void deleteCamera(cam)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors" title="Excluir câmera"><Trash2 className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => setLocation(`/playback?cameraId=${encodeURIComponent(cam.id)}`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))] transition-colors" title="Reprodução"><PlaySquare className="w-3.5 h-3.5" /></button>
-                        <button
-                          onClick={() => void runManualRecording(cam, isCameraRecording(cam) ? 'stop' : 'start')}
-                          className={`w-6 h-6 flex items-center justify-center rounded border transition-colors disabled:opacity-45 ${
-                            isCameraRecording(cam)
-                              ? 'border-red-500/55 text-red-400 hover:bg-red-500/10'
-                              : 'border-emerald-500/55 text-emerald-400 hover:bg-emerald-500/10'
-                          }`}
-                          title={isCameraRecording(cam) ? 'Parar gravação manual' : 'Iniciar gravação manual'}
-                          disabled={manualRecordingLoading?.cameraId === cam.id}
-                        >
-                          {manualRecordingLoading?.cameraId === cam.id ? (
-                            <span className="text-[10px]">...</span>
-                          ) : (
-                            <Circle className={`w-3 h-3 ${isCameraRecording(cam) ? 'fill-current' : ''}`} />
-                          )}
-                        </button>
-                        {cam.ptzCapable && <button onClick={() => setLocation(`/ptz?cameraId=${encodeURIComponent(cam.id)}`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))] transition-colors" title="PTZ"><Crosshair className="w-3.5 h-3.5" /></button>}
-                        {cam.ptzCapable && (
-                          <button
-                            onClick={() => void diagnosePtzCamera(cam)}
-                            className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors disabled:opacity-45"
-                            title={diagnosingPtzCameraId === cam.id ? 'Diagnosticando PTZ...' : 'Diagnosticar PTZ'}
-                            disabled={diagnosingPtzCameraId === cam.id}
-                          >
-                            <Wifi className={`w-3.5 h-3.5 ${diagnosingPtzCameraId === cam.id ? 'animate-pulse' : ''}`} />
-                          </button>
-                        )}
-                        <button className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors" title="Reiniciar"><RefreshCw className="w-3.5 h-3.5" /></button>
                       </div>
                     </td>
                   </tr>
@@ -1115,8 +1092,8 @@ export default function CamerasPage() {
                     <CameraIcon className="w-8 h-8 text-[hsl(var(--muted-foreground)_/_0.2)]" />
                     <div className="absolute top-2 left-2 font-mono text-[9px] text-white/50 bg-black/40 px-1.5 py-0.5 rounded">{cam.code}</div>
                     <div className="absolute top-2 right-2">
-                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[9px] font-mono capitalize ${STATUS_BADGE[cam.status] ?? STATUS_BADGE.offline}`}>
-                        {cam.status.replace('_', ' ')}
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[9px] ${STATUS_BADGE[cam.status] ?? STATUS_BADGE.offline}`}>
+                        {formatCameraStatus(cam.status)}
                       </span>
                     </div>
                   </div>
@@ -1124,53 +1101,13 @@ export default function CamerasPage() {
                     <div className="text-xs font-medium truncate mb-1">{cam.name}</div>
                     <div className="text-[10px] text-[hsl(var(--muted-foreground))] space-y-0.5">
                       <div>{cam.zone} · {cam.building}</div>
-                      <div className="font-mono">{cam.model}</div>
-                      <div className="font-mono">{cam.ipAddress}</div>
-                      <div className={`mt-1 inline-flex rounded-md border px-1.5 py-0.5 font-mono text-[9px] ${recordingModeCopy.className}`}>
+                      <div className={`mt-1 inline-flex rounded-md border px-1.5 py-0.5 text-[9px] ${recordingModeCopy.className}`}>
                         {recordingModeCopy.label}
                       </div>
                     </div>
                     <div className="mt-2 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      {recordingHealthByCamera[cam.id]?.needsAttention && !isRecordingAutoRecovering(cam) ? (
-                        <button
-                          onClick={() => void reconnectSingleCamera(cam.id)}
-                          className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors"
-                          title={reconnectingSingleCameraId === cam.id ? 'Reconectando...' : 'Reconectar gravação desta câmera'}
-                          disabled={reconnectingSingleCameraId === cam.id}
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 ${reconnectingSingleCameraId === cam.id ? 'animate-spin' : ''}`} />
-                        </button>
-                      ) : null}
                       <button onClick={() => setLocation(`/cameras/${cam.id}?tab=settings`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors" title="Editar câmera"><Edit className="w-3.5 h-3.5" /></button>
                       <button onClick={() => void deleteCamera(cam)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors" title="Excluir câmera"><Trash2 className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => setLocation(`/playback?cameraId=${encodeURIComponent(cam.id)}`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))] transition-colors" title="Reprodução"><PlaySquare className="w-3.5 h-3.5" /></button>
-                      <button
-                        onClick={() => void runManualRecording(cam, isCameraRecording(cam) ? 'stop' : 'start')}
-                        className={`w-6 h-6 flex items-center justify-center rounded border transition-colors disabled:opacity-45 ${
-                          isCameraRecording(cam)
-                            ? 'border-red-500/55 text-red-400 hover:bg-red-500/10'
-                            : 'border-emerald-500/55 text-emerald-400 hover:bg-emerald-500/10'
-                        }`}
-                        title={isCameraRecording(cam) ? 'Parar gravação manual' : 'Iniciar gravação manual'}
-                        disabled={manualRecordingLoading?.cameraId === cam.id}
-                      >
-                        {manualRecordingLoading?.cameraId === cam.id ? (
-                          <span className="text-[10px]">...</span>
-                        ) : (
-                          <Circle className={`w-3 h-3 ${isCameraRecording(cam) ? 'fill-current' : ''}`} />
-                        )}
-                      </button>
-                      {cam.ptzCapable && <button onClick={() => setLocation(`/ptz?cameraId=${encodeURIComponent(cam.id)}`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))] transition-colors" title="PTZ"><Crosshair className="w-3.5 h-3.5" /></button>}
-                      {cam.ptzCapable && (
-                        <button
-                          onClick={() => void diagnosePtzCamera(cam)}
-                          className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors disabled:opacity-45"
-                          title={diagnosingPtzCameraId === cam.id ? 'Diagnosticando PTZ...' : 'Diagnosticar PTZ'}
-                          disabled={diagnosingPtzCameraId === cam.id}
-                        >
-                          <Wifi className={`w-3.5 h-3.5 ${diagnosingPtzCameraId === cam.id ? 'animate-pulse' : ''}`} />
-                        </button>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -1209,10 +1146,10 @@ export default function CamerasPage() {
               <div>
                 <div className="text-sm font-semibold mb-0.5">{selectedCam.name}</div>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-mono capitalize ${STATUS_BADGE[liveCam.status] ?? STATUS_BADGE.offline}`}>
-                    {liveCam.status.replace('_', ' ')}
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] ${STATUS_BADGE[liveCam.status] ?? STATUS_BADGE.offline}`}>
+                    {formatCameraStatus(liveCam.status)}
                   </span>
-                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-mono ${recordingModeCopy.className}`}>
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] ${recordingModeCopy.className}`}>
                     {recordingModeCopy.label}
                   </span>
                 </div>
@@ -1220,13 +1157,9 @@ export default function CamerasPage() {
               <div className="space-y-2 text-xs">
                 {[
                   ['Código', selectedCam.code],
-                  ['Zona', selectedCam.zone],
+                  ['Local', selectedCam.zone],
                   ['Unidade', selectedCam.building],
                   ['Andar', selectedCam.floor],
-                  ['Endereço IP', selectedCam.ipAddress],
-                  ['Modelo', selectedCam.model],
-                  ['Resolução', selectedCam.resolution],
-                  ['FPS', selectedCam.fps.toString()],
                   ['Gravação', recordingModeCopy.label],
                   ['Retenção', `${selectedCam.retentionDays} dias`],
                   ['PTZ', selectedCam.ptzCapable ? 'Sim' : 'Não'],
@@ -1234,10 +1167,27 @@ export default function CamerasPage() {
                 ].map(([k, v]) => (
                   <div key={k} className="flex justify-between">
                     <span className="text-[hsl(var(--muted-foreground))]">{k}</span>
-                    <span className="font-mono">{v}</span>
+                    <span>{v}</span>
                   </div>
                 ))}
               </div>
+              <details className="rounded-lg border border-border bg-background/60 px-3 py-2 text-xs">
+                <summary className="cursor-pointer font-medium text-[hsl(var(--muted-foreground))]">Detalhes técnicos</summary>
+                <div className="mt-2 space-y-2 border-t border-border pt-2">
+                  {[
+                    ['Endereço IP', selectedCam.ipAddress],
+                    ['Modelo', selectedCam.model],
+                    ['Resolução', selectedCam.resolution],
+                    ['FPS', selectedCam.fps.toString()],
+                    ['Codec', liveCam.streamVideoCodec ?? liveCam.detectedVideoCodec ?? '-'],
+                  ].map(([k, v]) => (
+                    <div key={k} className="flex justify-between">
+                      <span className="text-[hsl(var(--muted-foreground))]">{k}</span>
+                      <span className="font-mono">{v}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
               <div className="flex flex-col gap-2">
                 <div className="grid grid-cols-3 gap-2">
                   <button

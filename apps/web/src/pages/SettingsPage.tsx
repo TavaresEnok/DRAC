@@ -58,7 +58,7 @@ function formatBytes(value?: number | null) {
 function SectionTitle({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
   return (
     <div>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-muted-foreground">{eyebrow}</p>
+      <p className="text-xs font-medium text-muted-foreground">{eyebrow}</p>
       <h2 className="mt-1 text-xl font-semibold tracking-tight text-foreground">{title}</h2>
       <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>
     </div>
@@ -66,7 +66,7 @@ function SectionTitle({ eyebrow, title, description }: { eyebrow: string; title:
 }
 
 function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-2xl border border-border/70 bg-card/85 shadow-sm shadow-black/5 ${className}`}>{children}</div>;
+  return <div className={`rounded-lg border border-border/70 bg-card/85 shadow-sm shadow-black/5 ${className}`}>{children}</div>;
 }
 
 function MetricCard({ icon: Icon, label, value, detail }: { icon: LucideIcon; label: string; value: string; detail: string }) {
@@ -127,7 +127,7 @@ function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neu
     success: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
     warning: 'border-amber-500/25 bg-amber-500/10 text-amber-300',
   }[tone];
-  return <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${toneClass}`}>{children}</span>;
+  return <span className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${toneClass}`}>{children}</span>;
 }
 
 export default function ConfiguracoesPage() {
@@ -203,11 +203,11 @@ export default function ConfiguracoesPage() {
   };
 
   return (
-    <div className="min-h-full bg-[radial-gradient(circle_at_top_left,hsl(var(--accent))_0,transparent_32rem)]">
+    <div className="min-h-full bg-background">
       <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 md:p-6">
-        <header className="flex flex-col gap-4 rounded-3xl border border-border/70 bg-card/80 p-5 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
+        <header className="flex flex-col gap-4 rounded-lg border border-border/70 bg-card/80 p-5 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-muted-foreground">Sistema</p>
+            <p className="text-xs font-medium text-muted-foreground">Sistema</p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Configurações</h1>
             <p className="mt-1 text-sm text-muted-foreground">Cada ajuste abaixo é persistido e aplicado de fato no servidor.</p>
           </div>
@@ -232,12 +232,12 @@ export default function ConfiguracoesPage() {
         </section>
 
         <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-          <aside className="h-fit rounded-3xl border border-border/70 bg-card/80 p-2 shadow-sm backdrop-blur">
+          <aside className="h-fit rounded-lg border border-border/70 bg-card/80 p-2 shadow-sm">
             {SECTIONS.map((section) => (
               <button
                 key={section.id}
                 onClick={() => setActiveSection(section.id)}
-                className={`group flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition ${
+                className={`group flex w-full items-center gap-3 rounded-md px-3 py-3 text-left transition ${
                   activeSection === section.id ? 'bg-foreground text-background shadow-sm' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                 }`}
               >

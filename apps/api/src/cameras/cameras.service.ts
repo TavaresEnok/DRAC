@@ -96,7 +96,7 @@ export class CamerasService {
         recordingMode: dto.recordingMode ?? ((dto.recordingEnabled ?? true) ? 'continuous' : 'manual'),
         retentionDays: dto.retentionDays ?? this.getDefaultRetentionDays(),
         preferredRtspTransport: dto.preferredRtspTransport ?? 'tcp',
-        preferredLiveProtocol: this.normalizeLiveProtocol(dto.preferredLiveProtocol) ?? 'auto',
+        preferredLiveProtocol: this.normalizeLiveProtocol(dto.preferredLiveProtocol) ?? 'webrtc',
         streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec, { allowOriginal: true }),
         streamWidth: normalizedProfile.streamWidth,
         streamHeight: normalizedProfile.streamHeight,
@@ -740,7 +740,7 @@ export class CamerasService {
         detectedFps: refreshed.detectedFps ?? null,
         configuredFps: refreshed.streamFps ?? null,
         recordingEnabled: refreshed.recordingEnabled,
-        preferredLiveProtocol: refreshed.preferredLiveProtocol ?? 'auto',
+        preferredLiveProtocol: refreshed.preferredLiveProtocol ?? 'webrtc',
         status,
         lastSeenAt: refreshed.lastSeenAt,
         liveProbeLatencyMs: Math.max(0, Date.now() - startedAt),
@@ -922,9 +922,9 @@ export class CamerasService {
   private normalizeLiveProtocol(protocol?: string | null) {
     const value = protocol?.trim().toLowerCase();
     if (!value) return undefined;
-    if (['auto', 'default', 'padrao', 'padrão', 'smart'].includes(value)) return 'auto';
+    if (['auto', 'default', 'padrao', 'padrão', 'smart'].includes(value)) return 'webrtc';
     if (['mjpg', 'jpeg'].includes(value)) return 'mjpeg';
-    if (value === 'flv') return 'auto';
+    if (value === 'flv') return 'webrtc';
     if (['ll-hls', 'low-latency-hls'].includes(value)) return 'llhls';
     if (['webrtc', 'hls', 'llhls', 'mjpeg'].includes(value)) return value;
     return value;

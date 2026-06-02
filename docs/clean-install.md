@@ -2,6 +2,31 @@
 
 Este roteiro descreve uma instalacao do zero em uma VM Linux nova. Para migracao com backup de ambiente antigo, use tambem `docs/migracao-nova-vm.md`.
 
+## Instalacao rapida recomendada
+
+Para um novo cliente, prefira o instalador automatico:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TavaresEnok/DRAC/main/scripts/install-drac.sh | bash
+```
+
+Ou use o modo silencioso com os dados do cliente:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TavaresEnok/DRAC/main/scripts/install-drac.sh | \
+DRAC_CUSTOMER_NAME='Cliente Exemplo' \
+DRAC_INSTALLATION_ID='cliente-exemplo-001' \
+DRAC_LICENSE_KEY='drac-chave-forte-unica' \
+DRAC_SERVER_IP='192.168.1.10' \
+DRAC_CENTRAL_URL='http://168.194.13.70:9765' \
+DRAC_AUTO_YES=true \
+bash
+```
+
+Detalhes em `docs/instalador-automatico.md`.
+
+O restante deste documento descreve a instalacao manual.
+
 ## 1. Dependencias do Host
 
 Instale Git, Docker e o plugin Docker Compose:

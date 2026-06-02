@@ -322,7 +322,7 @@ export default function LiveViewPage() {
                 />
               ) : (
                 <div className="w-full h-full bg-[hsl(210,15%,5%)] flex items-center justify-center">
-                  <span className="font-mono text-[10px] text-white/30">SEM SINAL</span>
+                  <span className="text-[11px] text-white/35">Sem câmera</span>
                 </div>
               )}
             </div>
@@ -349,7 +349,7 @@ export default function LiveViewPage() {
                 <TooltipTrigger asChild>
                   <button
                     onClick={() => setGridSize(size)}
-                    className={`h-7 min-w-12 px-2 rounded-md flex items-center justify-center gap-1.5 text-[10px] font-mono transition-colors ${
+                  className={`h-7 min-w-12 px-2 rounded-md flex items-center justify-center gap-1.5 text-[10px] transition-colors ${
                       gridSize === size ? 'ops-segment-active' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'
                     }`}
                     data-testid={`button-grid-${size}`}
@@ -426,7 +426,7 @@ export default function LiveViewPage() {
                 <button
                   onClick={() => void (isRecording ? stopManualRecording() : startManualRecording())}
                   disabled={recordingActionLoading !== null}
-                  className={`ops-button h-7 px-2.5 flex items-center gap-1.5 text-[10px] font-mono transition-all ${
+                  className={`ops-button h-7 px-2.5 flex items-center gap-1.5 text-[10px] transition-all ${
                     isRecording
                       ? 'border-red-500/70 text-red-300 bg-red-500/10'
                       : 'border-emerald-500/70 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20'
@@ -440,13 +440,13 @@ export default function LiveViewPage() {
                   ) : (
                     <Circle className="w-3 h-3" />
                   )}
-                  {isRecording ? 'GRAVANDO' : 'GRAVAR'}
+                  {isRecording ? 'Gravando' : 'Gravar'}
                 </button>
               </>
             ) : null}
             <span className="ops-chip">
               <span className="w-1.5 h-1.5 rounded-full status-online" />
-              {onlineCount}/{cameras.length} ONLINE
+              {onlineCount}/{cameras.length} online
             </span>
           </div>
 
@@ -536,8 +536,8 @@ export default function LiveViewPage() {
                   style={{ minHeight: 80 }}
                 >
                   <Video className="w-4 h-4 text-[hsl(var(--muted-foreground)_/_0.45)]" />
-                  <span className="font-mono text-[10px] text-[hsl(var(--muted-foreground)_/_0.45)]">
-                    {selectedSlotIndex === i ? 'ESCOLHA UMA CÂMERA' : 'SLOT VAZIO'}
+                  <span className="text-[11px] text-[hsl(var(--muted-foreground)_/_0.55)]">
+                    {selectedSlotIndex === i ? 'Escolha uma câmera' : 'Adicionar câmera'}
                   </span>
                 </div>
               )}
@@ -550,17 +550,17 @@ export default function LiveViewPage() {
         {panelOpen && (
           <motion.aside
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 276, opacity: 1 }}
+            animate={{ width: 236, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 32 }}
             className="border-l border-border bg-card flex flex-col overflow-hidden shrink-0"
           >
-            <div className="px-3 py-3 border-b border-border shrink-0 space-y-3">
+            <div className="px-2.5 py-3 border-b border-border shrink-0 space-y-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-[13px] font-semibold">Diretório de câmeras</h2>
+                  <h2 className="text-[13px] font-semibold">Câmeras</h2>
                   <p className="text-[10px] text-[hsl(var(--muted-foreground))] mt-0.5">
-                    {selectedSlotIndex != null ? `Escolha a câmera para o quadrado ${selectedSlotIndex + 1}` : 'Atribuição de stream para grade'}
+                    {selectedSlotIndex != null ? `Escolha para o quadro ${selectedSlotIndex + 1}` : 'Selecione para abrir na grade'}
                   </p>
                 </div>
                 <ShieldCheck className="w-4 h-4 text-[hsl(var(--status-online))]" />
@@ -570,14 +570,14 @@ export default function LiveViewPage() {
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
                 <input
                   type="search"
-                  placeholder="Buscar por câmera, código ou IP"
+                  placeholder="Buscar câmera ou IP"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   className="w-full h-8 pl-8 pr-3 rounded-md border border-border bg-background/60 text-xs focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))] placeholder:text-[hsl(var(--muted-foreground)_/_0.5)]"
                 />
               </div>
 
-              <div className="grid grid-cols-[1fr_112px] gap-1.5">
+              <div className="grid grid-cols-2 gap-1.5">
                 <Select value={zoneFilter} onValueChange={setZoneFilter}>
                   <SelectTrigger className="h-8 text-[10px]">
                     <Filter className="w-3 h-3 mr-1.5 text-[hsl(var(--muted-foreground))]" />
@@ -610,7 +610,7 @@ export default function LiveViewPage() {
                 return (
                   <button
                     key={cam.id}
-                    className={`w-full text-left grid grid-cols-[10px_1fr_auto] items-center gap-2.5 px-3 py-2.5 hover:bg-[hsl(var(--accent)_/_0.7)] transition-colors ${
+                    className={`w-full text-left grid grid-cols-[10px_1fr_auto] items-center gap-2 px-2.5 py-2.5 hover:bg-[hsl(var(--accent)_/_0.7)] transition-colors ${
                       isInGrid ? 'bg-[hsl(var(--primary)_/_0.06)]' : ''
                     }`}
                     onClick={() => addCameraToGrid(cam.id)}
@@ -618,23 +618,23 @@ export default function LiveViewPage() {
                     <span className={`w-2 h-2 rounded-full ${statusClass}`} />
                     <span className="min-w-0">
                       <span className="block text-[12px] font-medium truncate">{cam.name}</span>
-                      <span className="block font-mono text-[9px] text-[hsl(var(--muted-foreground))] truncate">
-                        {cam.code} / {cam.zone} / {cam.ipAddress}
+                      <span className="block text-[10px] text-[hsl(var(--muted-foreground))] truncate">
+                        {cam.zone}
                       </span>
                     </span>
-                    <span className={`font-mono text-[9px] shrink-0 ${isInGrid ? 'text-[hsl(var(--primary))]' : 'text-[hsl(var(--muted-foreground)_/_0.55)]'}`}>
-                      {selectedSlotIndex != null ? 'USAR AQUI' : isInGrid ? 'AO VIVO' : cam.status.replace('_', ' ').toUpperCase()}
+                    <span className={`max-w-[64px] truncate text-[10px] shrink-0 ${isInGrid ? 'text-[hsl(var(--primary))]' : 'text-[hsl(var(--muted-foreground)_/_0.55)]'}`}>
+                      {selectedSlotIndex != null ? 'Usar aqui' : isInGrid ? 'Na grade' : STATUS_FILTER_LABEL[cam.status as (typeof STATUS_FILTERS)[number]] ?? cam.status.replace('_', ' ')}
                     </span>
                   </button>
                 );
               })}
             </div>
 
-            <div className="px-3 py-2 border-t border-border shrink-0 flex items-center justify-between">
-              <span className="font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{filteredList.length} câmeras</span>
+            <div className="px-2.5 py-2 border-t border-border shrink-0 flex items-center justify-between">
+              <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{filteredList.length} câmeras</span>
               <button
                 onClick={() => setPanelOpen(false)}
-                className="flex items-center gap-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))] hover:text-foreground transition-colors"
+                className="flex items-center gap-1 text-[10px] text-[hsl(var(--muted-foreground))] hover:text-foreground transition-colors"
               >
                 Recolher <ChevronRight className="w-3 h-3" />
               </button>

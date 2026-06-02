@@ -23,6 +23,8 @@ import { AlarmsModule } from './alarms/alarms.module';
 import { InvestigationsModule } from './investigations/investigations.module';
 import { SettingsModule } from './settings/settings.module';
 import { RolePermissionsModule } from './role-permissions/role-permissions.module';
+import { CloudConnectorModule } from './cloud-connector/cloud-connector.module';
+import { CommercialPolicyModule } from './commercial-policy/commercial-policy.module';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard } from '@nestjs/throttler';
 
@@ -33,14 +35,18 @@ import { ThrottlerGuard } from '@nestjs/throttler';
       load: [envConfig],
     }),
     ThrottlerModule.forRoot([
+      // Default rate limit: 300 requests per 60 seconds (~5 req/sec)
+      // This is more lenient to support grid views with multiple cameras
       {
         ttl: 60000,
-        limit: 100,
+        limit: 300,
       },
     ]),
     PrismaModule,
+    CommercialPolicyModule,
     SettingsModule,
     RolePermissionsModule,
+    CloudConnectorModule,
     HealthModule,
     AuthModule,
     UsersModule,

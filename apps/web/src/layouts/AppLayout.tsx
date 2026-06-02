@@ -13,17 +13,17 @@ import { useVmsDataStore } from '../store/vmsDataStore';
 const PAGE_TITLES: Record<string, string> = {
   '/live':         'Ao Vivo',
   '/playback':     'Reprodução',
-  '/events':       'Log de Eventos',
-  '/alarms':       'Gestão de Alertas',
-  '/cameras':      'Gestão de Câmeras',
+  '/events':       'Eventos',
+  '/alarms':       'Alertas',
+  '/cameras':      'Câmeras',
   '/cameras/':     'Detalhe da Câmera',
   '/map':          'Mapa / Planta',
   '/ptz':          'Controle PTZ',
-  '/investigation':'Modo Investigação',
-  '/evidence':     'Exportar Evidências',
-  '/storage':      'Monitoramento',
+  '/investigation':'Investigação',
+  '/evidence':     'Evidências',
+  '/storage':      'Armazenamento',
   '/settings':     'Configurações',
-  '/users':        'Gestão de Usuários',
+  '/users':        'Usuários',
   '/roles':        'Perfis e Permissões',
   '/audit':        'Logs de Auditoria',
   '/reports':      'Relatórios',
@@ -53,7 +53,6 @@ export function AppLayout({ children }: AppLayoutProps) {
   const [cmdOpen, setCmdOpen] = useState(false);
   const [shortcutsOpen, setAtalhosOpen] = useState(false);
   const { theme, setTheme } = useThemeStore();
-  const system = useVmsDataStore((state) => state.system);
   const cameras = useVmsDataStore((state) => state.cameras);
   const isDark = theme === 'dark' || theme === 'dim';
 
@@ -88,8 +87,8 @@ export function AppLayout({ children }: AppLayoutProps) {
         <header className="h-12 flex items-center px-5 border-b border-border bg-card/60 backdrop-blur-sm shrink-0">
           <div className="flex-1 min-w-0">
             <h1 className="text-[13px] font-semibold text-foreground leading-none">{pageTitle}</h1>
-            <div className="text-[9px] font-mono text-[hsl(var(--muted-foreground)_/_0.6)] mt-0.5 tracking-wide">
-              {(system?.server.hostname ?? 'DRAC Host')} / {pageTitle} / {cameras.length} CAM
+            <div className="text-[10px] text-[hsl(var(--muted-foreground)_/_0.68)] mt-0.5">
+              {cameras.length} câmera{cameras.length === 1 ? '' : 's'} cadastrada{cameras.length === 1 ? '' : 's'}
             </div>
           </div>
           <div className="flex items-center gap-2">

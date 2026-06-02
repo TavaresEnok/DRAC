@@ -145,11 +145,12 @@ function authHeaders(accessToken: string | null) {
 }
 
 async function createReproduçãoToken(recordingId: string, accessToken: string) {
-  await axios.post<{ playToken: string }>(
+  const { data } = await axios.post<{ playToken: string; expiresAt?: string | null }>(
     `${API_URL}/recordings/${recordingId}/play-token`,
     {},
     { headers: authHeaders(accessToken), withCredentials: true },
   );
+  return data;
 }
 
 async function downloadGravação(recordingId: string, cameraCódigo: string, accessToken: string) {
@@ -374,6 +375,8 @@ export default function ReproduçãoPage() {
   }, [recordings, playhead]);
 
   const selectedGravação = recordings.find((recording) => recording.id === selectedGravaçãoId) ?? null;
+  const selectedDiagnostics = selectedGravaçãoId ? diagnosticsByRecordingId[selectedGravaçãoId] ?? null : null;
+  const playbackMayUseCompatible = compatMode || Boolean(selectedDiagnostics?.compatibleRecommended);
   const recordingById = useMemo(() => new Map(recordings.map((recording) => [recording.id, recording] as const)), [recordings]);
 
   useEffect(() => {
@@ -398,10 +401,13 @@ export default function ReproduçãoPage() {
     playbackReadyRef.current = false;
 
     void createReproduçãoToken(selectedGravaçãoId, accessToken)
-      .then(() => {
+      .then((token) => {
         if (cancelled) return;
-        const compatFlag = compatMode ? 'compatible=1' : 'forceDirect=1';
-        setReproduçãoUrl(`${API_URL}/recordings/${selectedGravaçãoId}/play?${compatFlag}&v=${reloadNonce}`);
+        const params = new URLSearchParams();
+        if (compatMode) params.set('compatible', '1');
+        if (token.playToken) params.set('token', token.playToken);
+        params.set('v', String(reloadNonce));
+        setReproduçãoUrl(`${API_URL}/recordings/${selectedGravaçãoId}/play?${params.toString()}`);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -415,7 +421,7 @@ export default function ReproduçãoPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedGravaçãoId, accessToken, compatMode, selectedGravação?.fileExists, reloadNonce]);
+  }, [selectedGravaçãoId, accessToken, compatMode, selectedGravação?.fileExists, selectedGravação?.fileUsable, reloadNonce]);
 
   useEffect(() => {
     setCompatMode(false);
@@ -428,15 +434,16 @@ export default function ReproduçãoPage() {
     playbackReadyRef.current = false;
     const timeout = window.setTimeout(() => {
       if (playbackReadyRef.current) return;
-      if (!compatMode) {
-        setVideoError('O playback direto demorou além do esperado. Se necessário, use "Forçar compatível" manualmente.');
+      if (!playbackMayUseCompatible) {
+        setVideoError('O playback direto demorou além do esperado. Preparando versão compatível...');
+        setCompatMode(true);
         return;
       }
       setVideoError('A transcodificação para modo compatível demorou mais que o esperado. Isso ocorre na primeira reprodução de vídeos HEVC (H.265). Aguarde e tente novamente — o arquivo já pode estar sendo processado.');
-    }, compatMode ? PLAYBACK_TIMEOUT_COMPAT_MS : PLAYBACK_TIMEOUT_DIRECT_MS);
+    }, playbackMayUseCompatible ? PLAYBACK_TIMEOUT_COMPAT_MS : PLAYBACK_TIMEOUT_DIRECT_MS);
 
     return () => window.clearTimeout(timeout);
-  }, [playbackUrl, compatMode]);
+  }, [playbackUrl, playbackMayUseCompatible]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -680,7 +687,7 @@ export default function ReproduçãoPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 p-4">
-      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card/70 px-4 py-3 shadow-sm">
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card/70 px-4 py-3 shadow-sm">
         <Select value={selectedCamId} onValueChange={setSelectedCamId}>
           <SelectTrigger className="h-10 w-[min(100%,320px)] text-xs">
             <SelectValue placeholder="Selecione uma câmera" />
@@ -737,7 +744,7 @@ export default function ReproduçãoPage() {
 
             <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
               <span className="rounded bg-black/50 px-2 py-1 font-mono text-[10px] text-white/60">{selectedCam?.code ?? '—'}</span>
-              <span className="rounded bg-black/50 px-2 py-1 font-mono text-[10px] text-white/60">PLAYBACK</span>
+              <span className="rounded bg-black/50 px-2 py-1 text-[10px] text-white/65">Reprodução</span>
               {playing && <span className="rec-pulse h-2 w-2 rounded-full bg-[hsl(var(--destructive))]" />}
             </div>
 
@@ -781,8 +788,9 @@ export default function ReproduçãoPage() {
                     setPlayhead(clamp(Math.round(minute), 0, TOTAL_MINS));
                   }}
                   onError={() => {
-                    if (!compatMode) {
-                      setVideoError('Falha no playback direto. Use "Forçar compatível" apenas se realmente precisar.');
+                    if (!playbackMayUseCompatible) {
+                      setVideoError('Falha no playback direto. Preparando versão compatível...');
+                      setCompatMode(true);
                       return;
                     }
                     if (selectedGravaçãoId && !autoSkipTriedRef.current.has(selectedGravaçãoId)) {
@@ -803,7 +811,7 @@ export default function ReproduçãoPage() {
               <div className="absolute inset-0 flex items-center justify-center">
                 <div className="text-center">
                   {recordings.length ? <CameraIcon className="mx-auto mb-2 h-10 w-10 text-white/10" /> : <VideoOff className="mx-auto mb-2 h-10 w-10 text-white/10" />}
-                  <div className="font-mono text-xs text-white/25">
+                  <div className="text-xs text-white/30">
                     {recordings.length ? 'Selecione um ponto da timeline' : 'Sem gravações nesta data'}
                   </div>
                 </div>
@@ -839,7 +847,7 @@ export default function ReproduçãoPage() {
             )}
 
             <div className="absolute bottom-3 left-3 right-3 z-10 flex items-center justify-between gap-3">
-              <span className="rounded bg-black/50 px-2 py-1 font-mono text-sm text-white/70">{format(currentTime, 'yyyy-MM-dd HH:mm:ss')}</span>
+              <span className="rounded bg-black/50 px-2 py-1 text-sm text-white/75">{format(currentTime, 'dd/MM/yyyy HH:mm:ss')}</span>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -847,7 +855,7 @@ export default function ReproduçãoPage() {
                   disabled={!selectedGravaçãoId}
                   className="rounded border border-white/20 bg-black/45 px-2 py-1 text-[10px] text-white/80 hover:bg-black/65 disabled:opacity-45"
                 >
-                  Segmento válido anterior
+                  Anterior
                 </button>
                 <button
                   type="button"
@@ -855,11 +863,9 @@ export default function ReproduçãoPage() {
                   disabled={!selectedGravaçãoId}
                   className="rounded border border-white/20 bg-black/45 px-2 py-1 text-[10px] text-white/80 hover:bg-black/65 disabled:opacity-45"
                 >
-                  Próximo válido
+                  Próximo
                 </button>
-                <span className="rounded bg-black/50 px-2 py-1 font-mono text-xs text-white/50">
-                  {speed} · zoom {videoZoom.toFixed(2)}x · {selectedGravação ? `segmento ${selectedGravação.id.slice(0, 8)}` : 'sem segmento'}
-                </span>
+                <span className="rounded bg-black/50 px-2 py-1 text-xs text-white/55">{speed}</span>
               </div>
             </div>
           </div>
@@ -966,14 +972,21 @@ export default function ReproduçãoPage() {
               ))}
               <button type="button" onClick={() => void handleDownload()} disabled={!selectedGravação || downloadingRecordingId === selectedGravação?.id} className="ml-auto flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45">
                 {downloadingRecordingId === selectedGravação?.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                Download Gravação
+                Baixar
               </button>
             </div>
 
-            <div className="mb-3 rounded-xl border border-border bg-background/55 p-3">
+            <details className="mb-3 rounded-xl border border-border bg-background/55 p-3">
+              <summary className="cursor-pointer text-xs font-semibold">
+                <span className="inline-flex items-center gap-2">
+                  <Scissors className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
+                  Exportar trecho
+                </span>
+              </summary>
+              <div className="mt-3">
               <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                 <Scissors className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
-                Exportação de clip por intervalo real
+                Intervalo do clipe
               </div>
               <div className="grid gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))_240px_auto]">
                 <button type="button" onClick={() => setClipStartSeconds(Math.floor(currentVideoSeconds))} disabled={!selectedGravação} className="rounded border border-border px-3 py-2 text-left text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45">
@@ -1002,7 +1015,7 @@ export default function ReproduçãoPage() {
                   </SelectContent>
                 </Select>
                 <button type="button" onClick={() => void exportClip()} disabled={!selectedGravação || exportingClip || selectedGravaçãoDuration <= 0} className="rounded border border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.08)] px-3 py-2 text-xs text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)_/_0.12)] disabled:opacity-45">
-                  {exportingClip ? <span className="inline-flex items-center gap-1.5"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Exportando</span> : 'Exportar Clip'}
+                  {exportingClip ? <span className="inline-flex items-center gap-1.5"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Exportando</span> : 'Exportar'}
                 </button>
                 <button type="button" onClick={() => void saveBookmark()} disabled={!selectedGravação || selectedInvestigaçãoId === '__none__' || savingBookmark} className="rounded border border-border px-3 py-2 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45">
                   {savingBookmark ? <span className="inline-flex items-center gap-1.5"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Salvando</span> : 'Salvar Marcador'}
@@ -1016,7 +1029,8 @@ export default function ReproduçãoPage() {
                   {lastExportedClip.investigationItemId && <span className="rounded bg-[hsl(var(--primary)_/_0.08)] px-2 py-1 text-[hsl(var(--primary))]">Anexado à investigação</span>}
                 </div>
               )}
-            </div>
+              </div>
+            </details>
 
             <div className="flex items-center justify-center gap-2">
               <button type="button" onClick={() => setPlayheadFromMinute(playhead - 15)} className="flex h-8 w-8 items-center justify-center rounded text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground"><SkipBack className="h-4 w-4" /></button>
@@ -1052,7 +1066,7 @@ export default function ReproduçãoPage() {
 
         <div className="hidden xl:flex w-80 shrink-0 flex-col overflow-hidden rounded-[18px] border border-border bg-card">
           <div className="border-b border-border px-3 py-2.5">
-            <span className="text-xs font-semibold">Gravacoes do dia</span>
+            <span className="text-xs font-semibold">Gravações do dia</span>
           </div>
           <div className="flex-1 overflow-y-auto divide-y divide-border">
             {recordings.length ? [...recordings].reverse().map((item) => {
@@ -1106,7 +1120,7 @@ export default function ReproduçãoPage() {
               );
             }) : (
               <div className="px-4 py-8 text-center text-xs text-[hsl(var(--muted-foreground))]">
-                Sem gravacoes nesta data.
+                Sem gravações nesta data.
               </div>
             )}
           </div>

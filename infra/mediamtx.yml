@@ -27,7 +27,7 @@ rtspTransports: [tcp, udp]
 
 hls: yes
 hlsAddress: :8888
-hlsAllowOrigins: ['${MEDIAMTX_HLS_ALLOW_ORIGIN}']
+hlsAllowOrigins: ['*']
 hlsAlwaysRemux: false
 hlsVariant: lowLatency
 hlsSegmentDuration: 1s
@@ -36,9 +36,9 @@ hlsSegmentCount: 7
 
 webrtc: yes
 webrtcAddress: :8889
-webrtcAllowOrigins: ['${MEDIAMTX_WEBRTC_ALLOW_ORIGIN}']
+webrtcAllowOrigins: ['*']
 webrtcLocalUDPAddress: :8189
-webrtcAdditionalHosts: ['${MEDIAMTX_WEBRTC_ADDITIONAL_HOST}']
+webrtcAdditionalHosts: ['168.194.13.70']
 
 pathDefaults:
   rtspTransport: tcp

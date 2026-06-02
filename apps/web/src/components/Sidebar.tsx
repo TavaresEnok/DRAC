@@ -17,7 +17,7 @@ const NAV_SECTIONS = [
     items: [
       { path: '/live', label: 'Ao Vivo', icon: Monitor },
       { path: '/playback', label: 'Reprodução', icon: PlaySquare },
-      { path: '/ai', label: 'IA Central', icon: Brain },
+      { path: '/ai', label: 'IA', icon: Brain },
     ],
   },
   {
@@ -25,7 +25,7 @@ const NAV_SECTIONS = [
     icon: Server,
     items: [
       { path: '/cameras', label: 'Câmeras', icon: Camera },
-      { path: '/storage', label: 'Monitoramento', icon: Gauge },
+      { path: '/storage', label: 'Armazenamento', icon: Gauge },
     ],
   },
   {
@@ -79,7 +79,7 @@ export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
               className="min-w-0"
             >
               <div className="text-[13px] font-semibold text-sidebar-foreground leading-tight tracking-tight">DRAC</div>
-              <div className="text-[9px] font-mono text-[hsl(var(--muted-foreground))] tracking-[0.18em] uppercase">Central de Comando VMS</div>
+              <div className="text-[10px] text-[hsl(var(--muted-foreground))]">VMS</div>
             </motion.div>
           )}
         </div>
@@ -159,7 +159,7 @@ export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
 
         {/* User row */}
         {user && (
-          <div className={`sidebar-user flex items-center gap-2.5 h-12 px-2.5 rounded-2xl ${isExpanded ? 'pr-2' : 'justify-center'}`}>
+          <div className={`sidebar-user flex items-center gap-2.5 h-12 px-2.5 rounded-lg ${isExpanded ? 'pr-2' : 'justify-center'}`}>
             <div className="shrink-0 w-8 h-8 rounded-xl bg-[hsl(var(--primary)_/_0.12)] border border-[hsl(var(--primary)_/_0.18)] flex items-center justify-center">
               <span className="text-[10px] font-bold text-[hsl(var(--primary))]">
                 {user.name.split(' ').map(n => n[0]).join('').slice(0, 2)}

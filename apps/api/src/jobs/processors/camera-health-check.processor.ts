@@ -338,7 +338,7 @@ export class CameraHealthCheckProcessor extends WorkerHost {
         }
 
         const codec = String(status.detectedVideoCodec ?? '').toLowerCase();
-        const liveProtocol = String(status.preferredLiveProtocol ?? camera.preferredLiveProtocol ?? 'auto').toLowerCase();
+        const liveProtocol = String(status.preferredLiveProtocol ?? camera.preferredLiveProtocol ?? 'webrtc').toLowerCase();
         const incompatibleCodecForFlv = liveProtocol === 'flv' && (codec.includes('h265') || codec.includes('hevc') || codec.includes('265'));
         if (incompatibleCodecForFlv && await this.shouldEmitWithCooldown(camera.id, 'HEALTH_STREAM_CODEC_INCOMPATIBLE', cooldownSeconds)) {
           await this.camerasService.registerEvent(

@@ -34,11 +34,7 @@ const SEV_STYLES: Record<string, string> = {
 const PAGE_SIZE = 18;
 
 function severityLabel(severity: VMSEvent['severity']) {
-  return severity === 'critical' ? 'CRÍTICO' : severity === 'warning' ? 'ALTO' : 'MÉDIO';
-}
-
-function previewColor(severity: VMSEvent['severity']) {
-  return severity === 'critical' ? 'hsl(var(--destructive))' : severity === 'warning' ? 'hsl(var(--chart-2))' : 'hsl(var(--chart-1))';
+  return severity === 'critical' ? 'Crítico' : severity === 'warning' ? 'Alto' : 'Médio';
 }
 
 export default function EventosPage() {
@@ -92,8 +88,8 @@ export default function EventosPage() {
         <div className="flex min-h-0 flex-col rounded-2xl border border-card-border bg-card overflow-hidden">
           <div className="px-4 pt-4 pb-3 border-b border-border space-y-3">
             <div className="space-y-1">
-              <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-[hsl(var(--muted-foreground))]">Operações &gt; Eventos &gt; Ocorrências</div>
-              <h2 className="text-[14px] font-semibold tracking-tight">Alertas recentes</h2>
+              <h2 className="text-[14px] font-semibold tracking-tight">Eventos</h2>
+              <p className="text-[11px] text-[hsl(var(--muted-foreground))]">Ocorrências recentes das câmeras.</p>
             </div>
 
             <div className="grid grid-cols-3 gap-2">
@@ -103,8 +99,8 @@ export default function EventosPage() {
                 { label: 'Abertos', value: stats.open, color: 'text-[hsl(var(--chart-2))]' },
               ].map(card => (
                 <div key={card.label} className="rounded-xl border border-border bg-[hsl(var(--muted))] px-3 py-2">
-                  <div className={`text-[12px] font-semibold font-mono ${card.color ?? 'text-foreground'}`}>{card.value}</div>
-                  <div className="text-[9px] uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">{card.label}</div>
+                  <div className={`text-[12px] font-semibold ${card.color ?? 'text-foreground'}`}>{card.value}</div>
+                  <div className="text-[10px] text-[hsl(var(--muted-foreground))]">{card.label}</div>
                 </div>
               ))}
             </div>
@@ -131,13 +127,6 @@ export default function EventosPage() {
                   ].map((s) => <SelectItem key={s.value} value={s.value} className="text-xs">{s.label}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <Select value={typeFilter} onValueChange={v => { setTypeFilter(v); setPage(0); }}>
-                <SelectTrigger className="w-32 h-8 text-[11px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all" className="text-xs">Todos</SelectItem>
-                  {Object.entries(EVENT_TYPE_LABELS).map(([k, v]) => <SelectItem key={k} value={k} className="text-xs">{v}</SelectItem>)}
-                </SelectContent>
-              </Select>
               <Select value={ackFilter} onValueChange={v => { setAckFilter(v); setPage(0); }}>
                 <SelectTrigger className="w-32 h-8 text-[11px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -146,16 +135,28 @@ export default function EventosPage() {
                   <SelectItem value="acknowledged" className="text-xs">Reconhecido</SelectItem>
                 </SelectContent>
               </Select>
-              <Select value={healthFilter} onValueChange={v => { setHealthFilter(v); setPage(0); }}>
-                <SelectTrigger className="w-36 h-8 text-[11px]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all" className="text-xs">Operação: todas</SelectItem>
-                  <SelectItem value="health" className="text-xs">Somente saúde</SelectItem>
-                  <SelectItem value="stream" className="text-xs">Somente transmissão</SelectItem>
-                  <SelectItem value="degraded" className="text-xs">Rotina de gravação</SelectItem>
-                  <SelectItem value="recovered" className="text-xs">Eventos de recuperação</SelectItem>
-                </SelectContent>
-              </Select>
+              <details className="w-full rounded-xl border border-border bg-background/55 px-3 py-2">
+                <summary className="cursor-pointer text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Filtros avançados</summary>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Select value={typeFilter} onValueChange={v => { setTypeFilter(v); setPage(0); }}>
+                    <SelectTrigger className="w-40 h-8 text-[11px]"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all" className="text-xs">Todos os tipos</SelectItem>
+                      {Object.entries(EVENT_TYPE_LABELS).map(([k, v]) => <SelectItem key={k} value={k} className="text-xs">{v}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={healthFilter} onValueChange={v => { setHealthFilter(v); setPage(0); }}>
+                    <SelectTrigger className="w-44 h-8 text-[11px]"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all" className="text-xs">Operação: todas</SelectItem>
+                      <SelectItem value="health" className="text-xs">Somente saúde</SelectItem>
+                      <SelectItem value="stream" className="text-xs">Somente transmissão</SelectItem>
+                      <SelectItem value="degraded" className="text-xs">Rotina de gravação</SelectItem>
+                      <SelectItem value="recovered" className="text-xs">Eventos de recuperação</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </details>
             </div>
 
             {selected.size > 0 && (
@@ -188,7 +189,7 @@ export default function EventosPage() {
                   >
                     <div className="flex items-start gap-3">
                       <div className="mt-0.5 shrink-0">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[9px] font-mono ${SEV_STYLES[evt.severity]}`}>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[9px] ${SEV_STYLES[evt.severity]}`}>
                           {severityLabel(evt.severity)}
                         </span>
                       </div>
@@ -200,12 +201,10 @@ export default function EventosPage() {
                           </div>
                           <ChevronRight className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-[hsl(var(--primary))]' : 'text-[hsl(var(--muted-foreground))]'}`} />
                         </div>
-                        <div className="mt-2 flex items-center gap-2 text-[9px] font-mono text-[hsl(var(--muted-foreground))]">
-                          <span>{evt.id}</span>
-                          <span>•</span>
+                        <div className="mt-2 flex items-center gap-2 text-[10px] text-[hsl(var(--muted-foreground))]">
                           <span>{format(new Date(evt.timestamp), 'HH:mm:ss')}</span>
                           <span>•</span>
-                          <span>{evt.acknowledged ? 'RECONHECIDO' : 'ABERTO'}</span>
+                          <span>{evt.acknowledged ? 'Reconhecido' : 'Aberto'}</span>
                         </div>
                       </div>
                     </div>
@@ -216,7 +215,7 @@ export default function EventosPage() {
           </div>
 
           <div className="flex items-center justify-between border-t border-border px-4 py-3 bg-card">
-            <span className="font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} de {filtered.length}</span>
+            <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} de {filtered.length}</span>
             <div className="flex items-center gap-1">
               <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} className="px-2.5 py-1.5 rounded-lg border border-border text-[11px] disabled:opacity-40 hover:bg-[hsl(var(--accent))] transition-colors">Anterior</button>
               <button onClick={() => setPage(p => Math.min(pages - 1, p + 1))} disabled={page >= pages - 1} className="px-2.5 py-1.5 rounded-lg border border-border text-[11px] disabled:opacity-40 hover:bg-[hsl(var(--accent))] transition-colors">Próximo</button>
@@ -229,11 +228,10 @@ export default function EventosPage() {
             <div className="rounded-2xl border border-card-border bg-card overflow-hidden min-h-0 flex flex-col">
               <div className="px-4 py-3 border-b border-border flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-[10px] font-mono uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">Evento selecionado</div>
                   <h3 className="mt-1 text-[16px] font-semibold tracking-tight">{current ? EVENT_TYPE_LABELS[current.type] ?? current.type : 'Sem seleção'}</h3>
                   <div className="text-[11px] text-[hsl(var(--muted-foreground))] mt-1">{current?.description ?? 'Selecione um alerta para visualizar o contexto da câmera.'}</div>
                 </div>
-                <span className={`mt-0.5 inline-flex items-center px-2 py-0.5 rounded-full border text-[9px] font-mono ${current ? SEV_STYLES[current.severity] : 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border-border'}`}>
+                <span className={`mt-0.5 inline-flex items-center px-2 py-0.5 rounded-full border text-[9px] ${current ? SEV_STYLES[current.severity] : 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))] border-border'}`}>
                   {current ? severityLabel(current.severity) : '—'}
                 </span>
               </div>
@@ -241,7 +239,6 @@ export default function EventosPage() {
               <div className="p-4 space-y-4 overflow-y-auto">
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    ['Código', current?.id ?? '—'],
                     ['Horário', current ? format(new Date(current.timestamp), 'dd/MM/yyyy HH:mm:ss') : '—'],
                     ['Câmera', current?.cameraName ?? '—'],
                     ['Zona', currentCamera?.zone ?? '—'],
@@ -255,22 +252,21 @@ export default function EventosPage() {
 
                 <div className="rounded-2xl border border-border bg-background overflow-hidden">
                   <div className="relative aspect-video bg-[hsl(220_20%_7%)] overflow-hidden">
-                    <div className="absolute inset-0 opacity-70" style={{ background: `radial-gradient(circle at 20% 20%, ${previewColor(current?.severity ?? 'info')} / 0.14, transparent 28%), linear-gradient(180deg, hsl(220 20% 9% / 0.95), hsl(220 20% 6% / 1))` }} />
+                    <div className="absolute inset-0 opacity-70" style={{ background: 'linear-gradient(180deg, hsl(220 20% 9% / 0.95), hsl(220 20% 6% / 1))' }} />
                     <div className="absolute inset-0 opacity-25 bg-[linear-gradient(to_right,hsl(var(--border))_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border))_1px,transparent_1px)] bg-[size:24px_24px]" />
                     <div className="absolute inset-0 flex items-center justify-center">
                       <div className="text-center">
                         <Video className="w-9 h-9 mx-auto text-[hsl(var(--primary))] opacity-80" />
-                        <div className="mt-2 text-[10px] font-mono tracking-[0.18em] text-[hsl(var(--muted-foreground))]">VISUALIZAÇÃO DA CÂMERA</div>
+                        <div className="mt-2 text-[11px] text-[hsl(var(--muted-foreground))]">Visualização da câmera</div>
                         <div className="mt-1 text-[12px] font-semibold">{currentCamera?.code ?? 'CAM-000'}</div>
                       </div>
                     </div>
-                    <div className="absolute left-3 top-3 flex items-center gap-2 text-[9px] font-mono text-white/70">
+                    <div className="absolute left-3 top-3 flex items-center gap-2 text-[9px] text-white/70">
                       <span className="rounded bg-black/45 px-1.5 py-0.5">REC</span>
                       <span className="rounded bg-black/45 px-1.5 py-0.5">UTC+0</span>
                     </div>
-                    <div className="absolute right-3 top-3 rounded bg-black/45 px-1.5 py-0.5 text-[9px] font-mono text-white/70">PTZ</div>
-                    <div className="absolute left-3 bottom-3 text-[9px] font-mono text-white/55">{current?.cameraName ?? 'Sem câmera'}</div>
-                    <div className="absolute right-3 bottom-3 text-[9px] font-mono text-white/55">{current ? format(new Date(current.timestamp), 'HH:mm:ss') : '--:--:--'}</div>
+                    <div className="absolute left-3 bottom-3 text-[10px] text-white/60">{current?.cameraName ?? 'Sem câmera'}</div>
+                    <div className="absolute right-3 bottom-3 text-[10px] text-white/60">{current ? format(new Date(current.timestamp), 'HH:mm:ss') : '--:--:--'}</div>
                   </div>
                 </div>
 
@@ -308,24 +304,27 @@ export default function EventosPage() {
                       <div className="text-[11px] font-semibold">{currentCamera?.name ?? 'Câmera indisponível'}</div>
                       <div className="text-[10px] text-[hsl(var(--muted-foreground))]">{currentCamera?.zone ?? 'Zona não encontrada'}</div>
                     </div>
-                    <span className={`text-[9px] font-mono px-2 py-0.5 rounded-full border ${currentCamera?.isOnline ? 'bg-[hsl(152_36%_45%_/_0.12)] text-[hsl(152_36%_55%)] border-[hsl(152_36%_45%_/_0.25)]' : 'bg-[hsl(var(--destructive)_/_0.12)] text-[hsl(var(--destructive))] border-[hsl(var(--destructive)_/_0.25)]'}`}>
-                      {currentCamera?.isOnline ? 'ONLINE' : 'OFFLINE'}
+                    <span className={`text-[9px] px-2 py-0.5 rounded-full border ${currentCamera?.isOnline ? 'bg-[hsl(152_36%_45%_/_0.12)] text-[hsl(152_36%_55%)] border-[hsl(152_36%_45%_/_0.25)]' : 'bg-[hsl(var(--destructive)_/_0.12)] text-[hsl(var(--destructive))] border-[hsl(var(--destructive)_/_0.25)]'}`}>
+                      {currentCamera?.isOnline ? 'Online' : 'Offline'}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 text-[10px]">
-                    {[
-                      ['Código', currentCamera?.code ?? '—'],
-                      ['Modelo', currentCamera?.model ?? '—'],
-                      ['Resolução', currentCamera?.resolution ?? '—'],
-                      ['FPS', currentCamera ? `${currentCamera.fps}` : '—'],
-                    ].map(([k, v]) => (
-                      <div key={k} className="rounded-xl bg-background border border-border px-3 py-2">
-                        <div className="uppercase tracking-[0.14em] text-[hsl(var(--muted-foreground))]">{k}</div>
-                        <div className="mt-1 font-medium truncate">{v}</div>
-                      </div>
-                    ))}
-                  </div>
+                  <details className="rounded-xl border border-border bg-background px-3 py-2 text-[10px]">
+                    <summary className="cursor-pointer text-[hsl(var(--muted-foreground))]">Detalhes da câmera</summary>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {[
+                        ['Código', currentCamera?.code ?? '—'],
+                        ['Modelo', currentCamera?.model ?? '—'],
+                        ['Resolução', currentCamera?.resolution ?? '—'],
+                        ['FPS', currentCamera ? `${currentCamera.fps}` : '—'],
+                      ].map(([k, v]) => (
+                        <div key={k} className="rounded-lg bg-card border border-border px-3 py-2">
+                          <div className="text-[hsl(var(--muted-foreground))]">{k}</div>
+                          <div className="mt-1 font-medium truncate">{v}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
                 </div>
 
                 <div className="rounded-2xl border border-border overflow-hidden bg-[hsl(220_20%_7%)]">
@@ -335,11 +334,11 @@ export default function EventosPage() {
                     <div className="absolute inset-0 flex items-center justify-center">
                       <div className="text-center">
                         <Shield className="w-10 h-10 mx-auto text-[hsl(var(--primary))] opacity-80" />
-                        <div className="mt-3 text-[10px] font-mono tracking-[0.2em] text-[hsl(var(--muted-foreground))]">PREVIEW DA CÂMERA</div>
+                        <div className="mt-3 text-[11px] text-[hsl(var(--muted-foreground))]">Preview da câmera</div>
                       </div>
                     </div>
-                    <div className="absolute left-3 top-3 rounded bg-black/40 px-1.5 py-0.5 text-[9px] font-mono text-white/70">AO VIVO</div>
-                    <div className="absolute right-3 top-3 rounded bg-black/40 px-1.5 py-0.5 text-[9px] font-mono text-white/70">REC</div>
+                    <div className="absolute left-3 top-3 rounded bg-black/40 px-1.5 py-0.5 text-[9px] text-white/70">Ao vivo</div>
+                    <div className="absolute right-3 top-3 rounded bg-black/40 px-1.5 py-0.5 text-[9px] text-white/70">Gravando</div>
                   </div>
                 </div>
 

@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+DRAC_REPO_URL="${DRAC_REPO_URL:-git@github.com:TavaresEnok/DRAC.git}"
+DRAC_BRANCH="${DRAC_BRANCH:-main}"
+DRAC_INSTALL_DIR="${DRAC_INSTALL_DIR:-/home/flashnet/Drac}"
+DRAC_OPERATING_USER="${DRAC_OPERATING_USER:-flashnet}"
+DRAC_CENTRAL_URL="${DRAC_CENTRAL_URL:-http://168.194.13.70:9765}"
+DRAC_ENVIRONMENT="${DRAC_ENVIRONMENT:-prod}"
+DRAC_AUTO_YES="${DRAC_AUTO_YES:-false}"
+
+log() {
+  printf '\033[1;36m[DRAC]\033[0m %s\n' "$*"
+}
+
+warn() {
+  printf '\033[1;33m[DRAC]\033[0m %s\n' "$*"
+}
+
+fail() {
+  printf '\033[1;31m[DRAC]\033[0m %s\n' "$*" >&2
+  exit 1
+}
+
+run_sudo() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+run_as_user() {
+  local user="$1"
+  shift
+  if [ "$(id -u)" -eq 0 ]; then
+    runuser -u "$user" -- "$@"
+  elif [ "$(id -un)" = "$user" ]; then
+    "$@"
+  else
+    sudo -u "$user" "$@"
+  fi
+}
+
+prompt() {
+  local var_name="$1"
+  local label="$2"
+  local default_value="${3:-}"
+  local current_value="${!var_name:-}"
+
+  if [ -n "$current_value" ]; then
+    return
+  fi
+
+  if [ "$DRAC_AUTO_YES" = "true" ]; then
+    if [ -n "$default_value" ]; then
+      printf -v "$var_name" '%s' "$default_value"
+      return
+    fi
+    fail "Variavel obrigatoria nao informada: $var_name"
+  fi
+
+  local answer
+  if [ -n "$default_value" ]; then
+    read -r -p "$label [$default_value]: " answer
+    printf -v "$var_name" '%s' "${answer:-$default_value}"
+  else
+    while true; do
+      read -r -p "$label: " answer
+      if [ -n "$answer" ]; then
+        printf -v "$var_name" '%s' "$answer"
+        return
+      fi
+      warn "Campo obrigatorio."
+    done
+  fi
+}
+
+slugify() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g'
+}
+
+random_hex() {
+  local bytes="${1:-32}"
+  openssl rand -hex "$bytes"
+}
+
+detect_ip() {
+  hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true
+}
+
+ensure_operating_user() {
+  if id "$DRAC_OPERATING_USER" >/dev/null 2>&1; then
+    return
+  fi
+  log "Criando usuario operacional $DRAC_OPERATING_USER"
+  run_sudo useradd -m -s /bin/bash "$DRAC_OPERATING_USER"
+}
+
+install_host_dependencies() {
+  if ! command -v apt-get >/dev/null 2>&1; then
+    fail "Instalador automatico suporta Ubuntu/Debian com apt-get. Instale Docker, Compose e Git manualmente neste sistema."
+  fi
+
+  log "Instalando dependencias do host"
+  run_sudo apt-get update
+  run_sudo apt-get install -y ca-certificates curl git gnupg openssl lsb-release
+
+  if ! command -v docker >/dev/null 2>&1; then
+    log "Instalando Docker"
+    run_sudo install -m 0755 -d /etc/apt/keyrings
+    . /etc/os-release
+    local docker_os="$ID"
+    if [ "$docker_os" != "ubuntu" ] && [ "$docker_os" != "debian" ]; then
+      docker_os="ubuntu"
+    fi
+    run_sudo rm -f /etc/apt/keyrings/docker.gpg
+    curl -fsSL "https://download.docker.com/linux/${docker_os}/gpg" | run_sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    run_sudo chmod a+r /etc/apt/keyrings/docker.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${docker_os} ${VERSION_CODENAME} stable" \
+      | run_sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+    run_sudo apt-get update
+    run_sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  fi
+
+  if ! docker compose version >/dev/null 2>&1; then
+    fail "Docker Compose plugin nao ficou disponivel apos a instalacao."
+  fi
+
+  run_sudo usermod -aG docker "$DRAC_OPERATING_USER" || true
+}
+
+sync_repository() {
+  local parent_dir
+  parent_dir="$(dirname "$DRAC_INSTALL_DIR")"
+  run_sudo mkdir -p "$parent_dir"
+  run_sudo chown -R "$DRAC_OPERATING_USER:$DRAC_OPERATING_USER" "$parent_dir"
+
+  if [ -d "$DRAC_INSTALL_DIR/.git" ]; then
+    log "Atualizando repositorio em $DRAC_INSTALL_DIR"
+    run_as_user "$DRAC_OPERATING_USER" git -C "$DRAC_INSTALL_DIR" fetch origin "$DRAC_BRANCH"
+    run_as_user "$DRAC_OPERATING_USER" git -C "$DRAC_INSTALL_DIR" checkout "$DRAC_BRANCH"
+    run_as_user "$DRAC_OPERATING_USER" git -C "$DRAC_INSTALL_DIR" pull --ff-only origin "$DRAC_BRANCH"
+  else
+    log "Clonando DRAC em $DRAC_INSTALL_DIR"
+    run_as_user "$DRAC_OPERATING_USER" git clone --branch "$DRAC_BRANCH" "$DRAC_REPO_URL" "$DRAC_INSTALL_DIR"
+  fi
+}
+
+env_set() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local escaped
+  escaped="$(printf '%s' "$value" | sed -e 's/[\/&]/\\&/g')"
+
+  if grep -qE "^${key}=" "$file"; then
+    run_sudo sed -i -E "s/^${key}=.*/${key}=${escaped}/" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" | run_sudo tee -a "$file" >/dev/null
+  fi
+}
+
+prepare_env() {
+  local env_file="$DRAC_INSTALL_DIR/infra/.env"
+  local example_file="$DRAC_INSTALL_DIR/infra/.env.example"
+  local server_ip="${DRAC_SERVER_IP:-$(detect_ip)}"
+  local install_slug
+
+  prompt DRAC_CUSTOMER_NAME "Nome do cliente"
+  install_slug="$(slugify "${DRAC_CUSTOMER_NAME:-$(hostname)}")"
+  prompt DRAC_INSTALLATION_ID "Codigo da instalacao" "${install_slug:-drac-cliente}"
+  prompt DRAC_LICENSE_KEY "Chave/licenca do cliente" "drac-$(random_hex 16)"
+  prompt DRAC_SERVER_IP "IP ou dominio deste servidor" "${server_ip:-127.0.0.1}"
+  prompt DRAC_CENTRAL_URL "URL da DRAC Central" "$DRAC_CENTRAL_URL"
+
+  if [ ! -f "$env_file" ]; then
+    log "Criando infra/.env"
+    run_sudo cp "$example_file" "$env_file"
+    run_sudo chmod 600 "$env_file"
+  else
+    warn "infra/.env ja existe; atualizando somente chaves controladas pelo instalador."
+    run_sudo cp "$env_file" "$env_file.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+  fi
+
+  env_set "$env_file" POSTGRES_PASSWORD "$(random_hex 24)"
+  env_set "$env_file" JWT_SECRET "$(random_hex 32)"
+  env_set "$env_file" CAMERA_SECRET_KEY "$(random_hex 32)"
+  env_set "$env_file" INTERNAL_SERVICE_TOKEN "$(random_hex 24)"
+  env_set "$env_file" EVIDENCE_HMAC_SECRET "$(random_hex 32)"
+  env_set "$env_file" MEDIAMTX_API_USER "drac_media"
+  env_set "$env_file" MEDIAMTX_API_PASS "$(random_hex 18)"
+  env_set "$env_file" CORS_ALLOWED_ORIGINS "http://${DRAC_SERVER_IP}:5173,http://${DRAC_SERVER_IP}:3002"
+  env_set "$env_file" VITE_API_URL ""
+  env_set "$env_file" CLOUD_CONNECTOR_ENABLED "true"
+  env_set "$env_file" CLOUD_API_URL "$DRAC_CENTRAL_URL"
+  env_set "$env_file" CLOUD_INSTALLATION_ID "$DRAC_INSTALLATION_ID"
+  env_set "$env_file" CLOUD_LICENSE_KEY "$DRAC_LICENSE_KEY"
+  env_set "$env_file" CLOUD_CUSTOMER_NAME "$DRAC_CUSTOMER_NAME"
+  env_set "$env_file" CLOUD_HEARTBEAT_INTERVAL_SECONDS "60"
+  env_set "$env_file" CLOUD_CONNECTOR_TIMEOUT_MS "8000"
+  env_set "$env_file" DRAC_VERSION "$DRAC_BRANCH"
+  env_set "$env_file" DRAC_API_BIND "0.0.0.0"
+  env_set "$env_file" DRAC_WEB_BIND "0.0.0.0"
+  env_set "$env_file" DRAC_POSTGRES_BIND "127.0.0.1"
+  env_set "$env_file" DRAC_REDIS_BIND "127.0.0.1"
+  env_set "$env_file" DRAC_MEDIAMTX_RTSP_BIND "0.0.0.0"
+  env_set "$env_file" DRAC_MEDIAMTX_HLS_BIND "0.0.0.0"
+  env_set "$env_file" DRAC_MEDIAMTX_WEBRTC_HTTP_BIND "0.0.0.0"
+  env_set "$env_file" DRAC_MEDIAMTX_WEBRTC_UDP_BIND "0.0.0.0"
+  env_set "$env_file" MEDIAMTX_WEBRTC_ADDITIONAL_HOST "$DRAC_SERVER_IP"
+  env_set "$env_file" MEDIAMTX_HLS_ALLOW_ORIGIN "*"
+  env_set "$env_file" MEDIAMTX_WEBRTC_ALLOW_ORIGIN "*"
+
+  run_sudo chown "$DRAC_OPERATING_USER:$DRAC_OPERATING_USER" "$env_file"
+}
+
+compose_files() {
+  if [ "$DRAC_ENVIRONMENT" = "dev" ]; then
+    printf -- '-f infra/docker-compose.yml -f infra/docker-compose.dev.yml'
+  else
+    printf -- '-f infra/docker-compose.yml -f infra/docker-compose.prod.yml'
+  fi
+}
+
+start_stack() {
+  local files
+  files="$(compose_files)"
+  log "Subindo containers DRAC"
+  # shellcheck disable=SC2086
+  run_as_user "$DRAC_OPERATING_USER" bash -lc "cd '$DRAC_INSTALL_DIR' && docker compose --env-file infra/.env $files up -d --build"
+}
+
+run_migrations() {
+  local files
+  files="$(compose_files)"
+  log "Aplicando migrations do banco"
+  # shellcheck disable=SC2086
+  run_as_user "$DRAC_OPERATING_USER" bash -lc "cd '$DRAC_INSTALL_DIR' && docker compose --env-file infra/.env $files exec -T -w /app/apps/api api npx prisma migrate deploy"
+}
+
+validate_installation() {
+  log "Validando instalacao"
+  docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | sed -n '1,20p'
+
+  if curl -fsS "http://127.0.0.1:3000/health" >/dev/null; then
+    log "API local respondeu em http://127.0.0.1:3000/health"
+  else
+    warn "API local ainda nao respondeu. Veja: docker logs --tail=120 vms-api"
+  fi
+
+  if curl -fsS "${DRAC_CENTRAL_URL%/}/api/health" >/dev/null; then
+    log "Central respondeu em ${DRAC_CENTRAL_URL%/}/api/health"
+  else
+    warn "Nao foi possivel validar a central agora. Confira rede/firewall e CLOUD_API_URL."
+  fi
+}
+
+print_summary() {
+  cat <<EOF
+
+Instalacao DRAC concluida.
+
+Painel local:
+  http://${DRAC_SERVER_IP}:5173
+
+API local:
+  http://${DRAC_SERVER_IP}:3000/health
+
+Central configurada:
+  ${DRAC_CENTRAL_URL}
+
+Instalacao enviada para a central:
+  ${DRAC_INSTALLATION_ID} - ${DRAC_CUSTOMER_NAME}
+
+Se a instalacao ainda nao apareceu na central, aguarde ate 60 segundos
+ou verifique os logs:
+  docker logs --tail=120 vms-api
+
+EOF
+}
+
+main() {
+  log "Instalador DRAC VMS"
+  ensure_operating_user
+  install_host_dependencies
+  sync_repository
+  prepare_env
+  start_stack
+  run_migrations
+  validate_installation
+  print_summary
+}
+
+main "$@"

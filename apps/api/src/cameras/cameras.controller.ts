@@ -19,6 +19,7 @@ import { RequirePermission } from '../role-permissions/require-permission.decora
 import { RecordingProcessManagerService } from '../recordings/recording-process-manager.service';
 import { MediamtxProxyService } from '../camera-stream/mediamtx-proxy.service';
 import { AiManagerService } from '../ai/ai-manager.service';
+import { CommercialPolicyService } from '../commercial-policy/commercial-policy.service';
 
 @Controller('cameras')
 export class CamerasController {
@@ -29,6 +30,7 @@ export class CamerasController {
     private readonly auditService: AuditService,
     private readonly recordingManager: RecordingProcessManagerService,
     private readonly moduleRef: ModuleRef,
+    private readonly commercialPolicy: CommercialPolicyService,
   ) {}
 
   private schedulePostCreateProvisioning(cameraId: string) {
@@ -80,6 +82,7 @@ export class CamerasController {
   @RequirePermission('cameraConfig')
   @Post()
   async create(@CurrentUser() user: AuthUser, @Body() dto: CreateCameraDto, @Req() req: Request) {
+    await this.commercialPolicy.assertFeature('addCameras', user);
     const camera = await this.camerasService.create(dto);
     await this.auditService.log(user.id, 'camera.create', 'Camera', camera.id, { name: camera.name }, req);
     this.schedulePostCreateProvisioning(camera.id);

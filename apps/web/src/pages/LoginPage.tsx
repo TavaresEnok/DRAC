@@ -60,35 +60,18 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen w-full flex flex-col bg-background relative overflow-hidden">
 
-      {/* Very subtle dot-grid — barely visible */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          backgroundImage: `radial-gradient(circle, hsl(213 72% 57% / 0.06) 1px, transparent 1px)`,
-          backgroundSize: '40px 40px',
-        }}
-      />
-
-      {/* Ambient glow behind form */}
-      <div
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[480px] h-[480px] rounded-full pointer-events-none"
-        style={{
-          background: 'radial-gradient(circle, hsl(213 72% 57% / 0.04) 0%, transparent 70%)',
-        }}
-      />
-
       {/* Top bar */}
-      <div className="relative flex items-center justify-between px-8 py-4 border-b border-border/20">
+      <div className="relative flex items-center justify-between px-6 py-4 border-b border-border bg-card/70">
         <div className="flex items-center gap-2">
           <div className="w-5 h-5 rounded bg-[hsl(var(--primary)_/_0.12)] border border-[hsl(var(--primary)_/_0.22)] flex items-center justify-center">
             <Shield className="w-3 h-3 text-[hsl(var(--primary))]" />
           </div>
-          <span className="font-mono text-[10px] text-[hsl(var(--muted-foreground)_/_0.7)] tracking-[0.15em] uppercase">
-            DRAC Sistemas de Segurança
+          <span className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
+            DRAC VMS
           </span>
         </div>
-        <div className="font-mono text-[10px] text-[hsl(var(--muted-foreground)_/_0.55)] tabular-nums">
-          {format(now, 'yyyy-MM-dd HH:mm:ss')} UTC
+        <div className="text-[11px] text-[hsl(var(--muted-foreground))] tabular-nums">
+          {format(now, 'dd/MM/yyyy HH:mm:ss')}
         </div>
       </div>
 
@@ -98,16 +81,16 @@ export default function LoginPage() {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: 'easeOut' }}
-          className="w-full max-w-[360px] px-6"
+          className="w-full max-w-[380px] rounded-lg border border-border bg-card/80 px-6 py-7 shadow-sm"
         >
           {/* Logo */}
-          <div className="text-center mb-9">
+          <div className="text-center mb-7">
             <div className="w-12 h-12 mx-auto mb-4 rounded-xl bg-[hsl(var(--primary)_/_0.08)] border border-[hsl(var(--primary)_/_0.18)] flex items-center justify-center">
               <Shield className="w-6 h-6 text-[hsl(var(--primary))]" />
             </div>
             <h1 className="text-xl font-semibold tracking-tight text-foreground">DRAC VMS</h1>
-            <p className="text-[10px] text-[hsl(var(--muted-foreground)_/_0.7)] mt-1.5 tracking-[0.15em] font-mono uppercase">
-              Gestão de Segurança Local
+            <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1.5">
+              Acesso ao servidor local de monitoramento
             </p>
           </div>
 
@@ -191,17 +174,16 @@ export default function LoginPage() {
           </form>
 
           {/* Installation card */}
-          <div className="mt-7 rounded-md border border-border/60 bg-card/50 px-4 py-3 space-y-0.5">
-            <div className="text-[9px] font-mono text-[hsl(var(--muted-foreground)_/_0.5)] uppercase tracking-[0.15em]">Instalação</div>
-            <div className="text-[11px] text-foreground/80 font-medium">Acesso ao servidor on-premise</div>
-            <div className="text-[9px] font-mono text-[hsl(var(--muted-foreground)_/_0.5)]">
-              Backend em tempo real · autenticação local ativa
+          <div className="mt-6 rounded-md border border-border/60 bg-background/55 px-4 py-3">
+            <div className="text-[11px] text-foreground/80 font-medium">Instalação local</div>
+            <div className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">
+              Autenticação e dados protegidos neste servidor.
             </div>
           </div>
 
           <div className="mt-4 text-center">
-            <span className="font-mono text-[9px] text-[hsl(var(--muted-foreground)_/_0.3)]">
-              DRAC VMS v4.2.1 · Instalação Local · Todos os direitos reservados
+            <span className="text-[10px] text-[hsl(var(--muted-foreground)_/_0.55)]">
+              DRAC VMS · Instalação Local
             </span>
           </div>
         </motion.div>

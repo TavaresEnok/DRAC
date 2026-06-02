@@ -14,6 +14,7 @@ import { basename, join } from 'node:path';
 import { type Readable } from 'stream';
 import Redis from 'ioredis';
 import { CamerasService } from '../cameras/cameras.service';
+import { CommercialPolicyService } from '../commercial-policy/commercial-policy.service';
 import { buildRtspUrl, resolveRecordingRtspProfile } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -62,6 +63,7 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
     private readonly camerasService: CamerasService,
     private readonly cryptoService: CryptoService,
     private readonly prisma: PrismaService,
+    private readonly commercialPolicy: CommercialPolicyService,
   ) {
     this.recordingsRoot = this.configService.get<string>('recordingsRoot') ?? './storage/recordings';
     this.recordingFormat = this.configService.get<string>('ffmpegRecordingFormat') ?? 'mp4';
@@ -427,6 +429,7 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
   }
 
   async start(cameraId: string, segmentSeconds: number, options?: { recordingMode?: Camera['recordingMode'] }) {
+    await this.commercialPolicy.assertFeature('localRecording');
     await this.assertStorageWritable();
     await this.assertMinimumStorageFree();
 

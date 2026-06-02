@@ -7,6 +7,7 @@ import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AuthUser } from '../common/types/auth-user.type';
 import { AccessControlService } from '../access-control/access-control.service';
+import { CommercialPolicyService } from '../commercial-policy/commercial-policy.service';
 
 type UpdateAiSettingsBody = {
   enabled?: boolean;
@@ -25,6 +26,7 @@ export class AiController {
     private readonly aiService: AiService,
     private readonly aiManagerService: AiManagerService,
     private readonly accessControlService: AccessControlService,
+    private readonly commercialPolicy: CommercialPolicyService,
   ) {}
 
   @Roles(UserRole.OPERATOR)
@@ -54,6 +56,7 @@ export class AiController {
   @Roles(UserRole.OPERATOR)
   @Post('sync')
   async sync() {
+    await this.commercialPolicy.assertFeature('aiAdvanced');
     return this.aiManagerService.restartAll();
   }
 
@@ -61,6 +64,7 @@ export class AiController {
   @Post('start/:cameraId')
   async start(@CurrentUser() user: AuthUser, @Param('cameraId') cameraId: string) {
     await this.accessControlService.assertCanRecordCamera(user, cameraId);
+    await this.commercialPolicy.assertFeature('aiAdvanced', user);
     return this.aiManagerService.startCamera(cameraId);
   }
 

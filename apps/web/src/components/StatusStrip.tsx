@@ -28,21 +28,20 @@ export function StatusStrip() {
       {/* Left: system status */}
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${systemOk ? 'status-online' : 'status-alarm rec-pulse'}`} />
-        <span className="text-[hsl(var(--muted-foreground))] font-mono truncate tracking-wide">
-          DRAC VMS — {system?.server.hostname ?? 'Servidor local'}
+        <span className="text-[hsl(var(--muted-foreground))] truncate">
+          DRAC VMS
         </span>
         <span className="text-[hsl(var(--border))] hidden sm:block">│</span>
-        <span className="text-[hsl(var(--muted-foreground))] hidden sm:block font-mono">
-          Sistema:{' '}
+        <span className="text-[hsl(var(--muted-foreground))] hidden sm:block">
           <span className={systemOk ? 'text-[hsl(var(--status-online))]' : 'text-[hsl(var(--destructive))]'}>
-            {systemOk ? 'NOMINAL' : `${activeAlertas} ALERTA${activeAlertas !== 1 ? 'S' : ''}`}
+            {systemOk ? 'Sistema online' : `${activeAlertas} alerta${activeAlertas !== 1 ? 's' : ''}`}
           </span>
         </span>
         {system && (
           <>
             <span className="text-[hsl(var(--border))] hidden sm:block">│</span>
-            <span className="text-[hsl(var(--muted-foreground))] hidden sm:block font-mono truncate">
-              {system.server.hostname} · {system.disk.usagePercent}% disco
+            <span className="text-[hsl(var(--muted-foreground))] hidden sm:block truncate">
+              Disco {system.disk.usagePercent}%
             </span>
           </>
         )}
@@ -51,11 +50,11 @@ export function StatusStrip() {
       {/* Center: active alarms + cameras */}
       <div className="flex items-center gap-4 px-4">
         {activeAlertas > 0 && (
-          <span className="font-mono text-[hsl(var(--destructive)_/_0.85)]">
+          <span className="text-[hsl(var(--destructive)_/_0.85)]">
             {activeAlertas} Alerta ativo{activeAlertas !== 1 ? 's' : ''}
           </span>
         )}
-        <span className="font-mono text-[hsl(var(--muted-foreground))]">
+        <span className="text-[hsl(var(--muted-foreground))]">
           <span className="text-[hsl(var(--status-online))]">{onlineCameras}</span>
           <span>/{totalCameras} online</span>
         </span>
@@ -65,16 +64,15 @@ export function StatusStrip() {
       <div className="flex items-center gap-3 flex-1 justify-end min-w-0">
         {user && (
           <>
-            <span className="text-[hsl(var(--muted-foreground))] hidden sm:block truncate font-mono">
+            <span className="text-[hsl(var(--muted-foreground))] hidden sm:block truncate">
               {user.name} · <span className="capitalize">{user.role}</span>
             </span>
             <span className="text-[hsl(var(--border))] hidden sm:block">│</span>
           </>
         )}
-        <span className="font-mono text-[hsl(var(--muted-foreground))] shrink-0 tabular-nums">
-          {format(now, 'yyyy-MM-dd HH:mm:ss')}
+        <span className="text-[hsl(var(--muted-foreground))] shrink-0 tabular-nums">
+          {format(now, 'HH:mm:ss')}
         </span>
-        <span className="font-mono text-[hsl(var(--border))] shrink-0 hidden md:block">v4.2.1</span>
       </div>
     </div>
   );

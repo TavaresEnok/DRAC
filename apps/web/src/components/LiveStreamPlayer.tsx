@@ -3,6 +3,7 @@ import axios from 'axios';
 import { AlertTriangle, LoaderCircle, VideoOff, Volume2, VolumeX } from 'lucide-react';
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
+import { streamUrlsCache } from '../lib/stream-urls-cache';
 
 type LiveStreamPlayerProps = {
   cameraId: string;
@@ -17,14 +18,18 @@ type LiveStreamPlayerProps = {
 };
 
 const API_URL = getApiBaseUrl();
-const HLS_FIRST_FRAME_TIMEOUT_MS = 8000;
-const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 7000;
+const HLS_FIRST_FRAME_TIMEOUT_MS = 5000;
+const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 5000;
+const WEBRTC_WHEP_NEGOTIATION_TIMEOUT_MS = 6500;
+const WEBRTC_DISCONNECT_GRACE_MS = 3500;
 const LIVE_RESUME_GRACE_MS = 1200;
 const LIVE_SOFT_ONLY_RESUME_MS = 120000;
 const LIVE_STALL_CHECK_INTERVAL_MS = 4000;
 const LIVE_STALL_SOFT_RECOVER_MS = 8000;
 const LIVE_STALL_RECONNECT_MS = 16000;
 const LIVE_RECONNECT_DEBOUNCE_MS = 1200;
+const LIVE_FAST_RETRY_BASE_MS = 800;
+const LIVE_FAST_RETRY_MAX_MS = 5000;
 const LIVE_EDGE_OFFSET_SECONDS = 0.35;
 const LIVE_RENDER_STALL_RECONNECT_MS = 10000;
 const LIVE_VISUAL_FREEZE_RECONNECT_MS = 45000;
@@ -49,6 +54,12 @@ type HlsController = {
   startLoad?: (startPosition?: number) => void;
   recoverMediaError?: () => void;
   liveSyncPosition?: number | null;
+};
+
+type CommercialRestrictionError = {
+  error?: string;
+  userMessage?: string;
+  adminMessage?: string;
 };
 
 type PlaybackProgress = {
@@ -222,6 +233,8 @@ export function LiveStreamPlayer({
   const webrtcPcRef = useRef<RTCPeerConnection | null>(null);
   const webrtcSessionUrlRef = useRef<string | null>(null);
   const webrtcStreamRef = useRef<MediaStream | null>(null);
+  const webrtcAbortControllerRef = useRef<AbortController | null>(null);
+  const webrtcDisconnectTimerRef = useRef<number | null>(null);
   const hasFrameRef = useRef(false);
   const retryTimerRef = useRef<number | null>(null);
   const retryAttemptRef = useRef(0);
@@ -351,6 +364,36 @@ export function LiveStreamPlayer({
     }
   }, []);
 
+  const getFastRetryDelay = useCallback(() => {
+    const attempt = retryAttemptRef.current;
+    const delayMs = Math.min(LIVE_FAST_RETRY_MAX_MS, LIVE_FAST_RETRY_BASE_MS * Math.max(1, 2 ** attempt));
+    retryAttemptRef.current = attempt + 1;
+    return delayMs;
+  }, []);
+
+  const scheduleFastRetry = useCallback((message: string, preserveExistingFrame = true) => {
+    if (retryTimerRef.current != null) window.clearTimeout(retryTimerRef.current);
+    const delayMs = getFastRetryDelay();
+    const alreadyHadFrame = hasFrameRef.current && preserveExistingFrame;
+    setError(null);
+    setRetryMessage(message);
+    if (!alreadyHadFrame) {
+      setActiveProtocol(null);
+      activeProtocolRef.current = null;
+      setIsLoading(true);
+      setHasLiveFrame(false);
+      hasFrameRef.current = false;
+    } else {
+      preserveFrameOnReloadRef.current = true;
+      setIsLoading(false);
+    }
+    retryTimerRef.current = window.setTimeout(() => {
+      failedProtocolsRef.current.clear();
+      retryTimerRef.current = null;
+      setReloadNonce((value) => value + 1);
+    }, delayMs);
+  }, [getFastRetryDelay]);
+
   const failActiveProtocol = useCallback((reason: string) => {
     const active = activeProtocolRef.current;
     if (active) {
@@ -358,28 +401,14 @@ export function LiveStreamPlayer({
       const transitionReason = `${active} falhou: ${reason}. Alternando para o próximo protocolo.`;
       setProtocolReason(transitionReason);
       if (failedProtocolsRef.current.has('webrtc') && failedProtocolsRef.current.has('llhls') && failedProtocolsRef.current.has('hls')) {
-        const attempt = retryAttemptRef.current;
-        const delayMs = Math.min(30000, 1500 * Math.max(1, 2 ** attempt));
-        retryAttemptRef.current = attempt + 1;
-        setActiveProtocol(null);
-        activeProtocolRef.current = null;
-        setIsLoading(true);
-        setHasLiveFrame(false);
-        hasFrameRef.current = false;
-        setRetryMessage(`Todos os protocolos falharam. Nova tentativa em ${Math.ceil(delayMs / 1000)}s.`);
-        if (retryTimerRef.current != null) window.clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = window.setTimeout(() => {
-          failedProtocolsRef.current.clear();
-          retryTimerRef.current = null;
-          setReloadNonce((value) => value + 1);
-        }, delayMs);
+        scheduleFastRetry('Reconectando transmissão...', true);
         return;
       }
-      requestFreshLiveBoot(transitionReason, false);
+      requestFreshLiveBoot('Reconectando transmissão...', true);
       return;
     }
-    requestFreshLiveBoot(reason, false);
-  }, [requestFreshLiveBoot]);
+    scheduleFastRetry('Reconectando transmissão...', true);
+  }, [requestFreshLiveBoot, scheduleFastRetry]);
 
   useEffect(() => {
     const element = videoRef.current;
@@ -416,12 +445,12 @@ export function LiveStreamPlayer({
     const scheduleReconnect = (message: string) => {
       if (cancelled) return;
       clearRetryTimer();
-      const attempt = retryAttemptRef.current;
-      const delayMs = Math.min(30000, 1500 * Math.max(1, 2 ** attempt));
-      retryAttemptRef.current = attempt + 1;
+      const delayMs = getFastRetryDelay();
       const alreadyHadFrame = hasFrameRef.current;
       setError(null);
-      setRetryMessage(`${message} Reconectando automaticamente...`);
+      setRetryMessage(/Nenhum protocolo de live conseguiu iniciar/i.test(message)
+        ? 'Reconectando transmissão...'
+        : `${message} Reconectando...`);
       if (!alreadyHadFrame) {
         setActiveProtocol(null);
         activeProtocolRef.current = null;
@@ -450,25 +479,33 @@ export function LiveStreamPlayer({
       }
 
       try {
-        const { data } = await axios.get<{
-          preferredLiveProtocol?: 'auto' | 'flv' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg' | null;
-          detectedVideoCodec?: string | null;
-          sourceVideoCodec?: string | null;
-          smartLive?: {
-            enabled?: boolean;
-            recommendedProtocol?: LiveProtocol;
-            protocolOrder?: LiveProtocol[];
-          } | null;
-          protocols?: {
-            posterUrl?: string | null;
-            hlsUrl?: string | null;
-            webrtcUrl?: string | null;
-            whepUrl?: string | null;
-          };
-          streamToken?: string;
-        }>(
-          `${API_URL}/camera-stream/${cameraId}/urls`,
-          { headers: tokenHeaders },
+        // Use cache to deduplicate concurrent requests for the same camera
+        // This prevents overwhelming the backend when multiple cameras load simultaneously
+        const cacheKey = `stream-urls:${cameraId}:${accessToken}`;
+        const data = await streamUrlsCache.getOrFetch(
+          cacheKey,
+          () => axios.get<{
+            preferredLiveProtocol?: 'auto' | 'flv' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg' | null;
+            detectedVideoCodec?: string | null;
+            sourceVideoCodec?: string | null;
+            smartLive?: {
+              enabled?: boolean;
+              recommendedProtocol?: LiveProtocol;
+              protocolOrder?: LiveProtocol[];
+            } | null;
+            protocols?: {
+              posterUrl?: string | null;
+              hlsUrl?: string | null;
+              webrtcUrl?: string | null;
+              whepUrl?: string | null;
+            };
+            streamToken?: string;
+            streamTokenExpiresAt?: string | null;
+          }>(
+            `${API_URL}/camera-stream/${cameraId}/urls`,
+            { headers: tokenHeaders },
+          ).then(res => res.data),
+          8000, // 8 second cache TTL
         );
 
         if (cancelled) return;
@@ -479,7 +516,7 @@ export function LiveStreamPlayer({
         const whepUrl =
           data?.protocols?.whepUrl
           ?? (data?.protocols?.webrtcUrl ? `${data.protocols.webrtcUrl.replace(/\/+$/, '')}/whep` : null);
-        const preferredLiveProtocol = data?.preferredLiveProtocol ?? 'auto';
+        const preferredLiveProtocol = data?.preferredLiveProtocol ?? 'webrtc';
         const sourceCodec = data?.sourceVideoCodec ?? data?.detectedVideoCodec;
         const orderedProtocols = buildProtocolOrder(
           cameraId,
@@ -491,7 +528,7 @@ export function LiveStreamPlayer({
         if (!protocolOrder.length) {
           failedProtocolsRef.current.clear();
           protocolOrder = orderedProtocols;
-          setProtocolReason('Todos os protocolos falharam; reiniciando o ciclo automático após reconexão.');
+          setProtocolReason('Reconectando transmissão.');
         }
 
         if (rawPosterUrl && streamToken) {
@@ -503,16 +540,20 @@ export function LiveStreamPlayer({
           throw new Error('Token de stream inválido retornado pela API.');
         }
 
-        // Schedule proactive token renewal before it expires (5min TTL, renew 60s early)
+        // Schedule proactive token renewal before it expires.
         if (streamTokenRenewTimerRef.current != null) {
           window.clearTimeout(streamTokenRenewTimerRef.current);
         }
+        const tokenExpiresAtMs = data?.streamTokenExpiresAt ? new Date(data.streamTokenExpiresAt).getTime() : NaN;
+        const tokenRenewDelayMs = Number.isFinite(tokenExpiresAtMs)
+          ? Math.max(30_000, tokenExpiresAtMs - Date.now() - STREAM_TOKEN_RENEW_BEFORE_MS)
+          : STREAM_TOKEN_TTL_MS - STREAM_TOKEN_RENEW_BEFORE_MS;
         streamTokenRenewTimerRef.current = window.setTimeout(() => {
           if (!cancelled) {
             requestFreshLiveBoot('Renovando token de stream...', true);
           }
           streamTokenRenewTimerRef.current = null;
-        }, STREAM_TOKEN_TTL_MS - STREAM_TOKEN_RENEW_BEFORE_MS);
+        }, tokenRenewDelayMs);
 
         const cleanupHls = () => {
           if (!hlsRef.current) return;
@@ -523,11 +564,29 @@ export function LiveStreamPlayer({
           hlsRef.current = null;
         };
 
+        const abortWebrtcNegotiation = () => {
+          if (!webrtcAbortControllerRef.current) return;
+          try {
+            webrtcAbortControllerRef.current.abort();
+          } catch {
+          }
+          webrtcAbortControllerRef.current = null;
+        };
+
+        const clearWebrtcDisconnectTimer = () => {
+          if (webrtcDisconnectTimerRef.current == null) return;
+          window.clearTimeout(webrtcDisconnectTimerRef.current);
+          webrtcDisconnectTimerRef.current = null;
+        };
+
         const cleanupWebrtc = async () => {
+          abortWebrtcNegotiation();
+          clearWebrtcDisconnectTimer();
           if (webrtcPcRef.current) {
             try {
               webrtcPcRef.current.ontrack = null;
               webrtcPcRef.current.onconnectionstatechange = null;
+              webrtcPcRef.current.oniceconnectionstatechange = null;
               webrtcPcRef.current.close();
             } catch {
             }
@@ -596,7 +655,7 @@ export function LiveStreamPlayer({
           check();
         });
 
-        const waitIceGatheringComplete = (pc: RTCPeerConnection, timeoutMs = 1800) => {
+        const waitIceGatheringComplete = (pc: RTCPeerConnection, timeoutMs = 900) => {
           return new Promise<void>((resolve) => {
             if (pc.iceGatheringState === 'complete') {
               resolve();
@@ -632,22 +691,67 @@ export function LiveStreamPlayer({
           element.srcObject = null;
           element.load();
 
-          const pc = new RTCPeerConnection();
+          const pc = new RTCPeerConnection({
+            bundlePolicy: 'max-bundle',
+            rtcpMuxPolicy: 'require',
+          });
           webrtcPcRef.current = pc;
 
           pc.addTransceiver('video', { direction: 'recvonly' });
           pc.addTransceiver('audio', { direction: 'recvonly' });
+          const abortController = new AbortController();
+          webrtcAbortControllerRef.current = abortController;
 
           await new Promise<void>((resolve, reject) => {
             let videoTrackReceived = false;
+            let settled = false;
+            let whepTimeout: number | null = null;
+            const finish = (error?: Error) => {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(startupTimeout);
+              if (whepTimeout != null) {
+                window.clearTimeout(whepTimeout);
+                whepTimeout = null;
+              }
+              if (webrtcAbortControllerRef.current === abortController) {
+                webrtcAbortControllerRef.current = null;
+              }
+              if (error) reject(error);
+              else resolve();
+            };
             const startupTimeout = window.setTimeout(() => {
               if (!videoTrackReceived) {
-                reject(new Error('WebRTC não entregou uma track de vídeo dentro do tempo limite.'));
+                abortController.abort();
+                finish(new Error('WebRTC não entregou uma track de vídeo dentro do tempo limite.'));
               }
             }, WEBRTC_FIRST_FRAME_TIMEOUT_MS);
+            const failOrRetryWebrtc = (reason: string, transient: boolean) => {
+              if (cancelled || webrtcPcRef.current !== pc) return;
+              if (activeProtocolRef.current === 'WEBRTC' && hasFrameRef.current) {
+                if (transient) {
+                  requestFreshLiveBoot(`${reason}. Reconectando WebRTC...`, true);
+                } else {
+                  failActiveProtocol(reason);
+                }
+                return;
+              }
+              finish(new Error('Stream indisponível via WebRTC.'));
+            };
+            const scheduleDisconnectRecovery = (reason: string) => {
+              if (webrtcDisconnectTimerRef.current != null) return;
+              webrtcDisconnectTimerRef.current = window.setTimeout(() => {
+                webrtcDisconnectTimerRef.current = null;
+                if (cancelled || webrtcPcRef.current !== pc) return;
+                if (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                  return;
+                }
+                failOrRetryWebrtc(reason, true);
+              }, WEBRTC_DISCONNECT_GRACE_MS);
+            };
 
             pc.ontrack = (event) => {
-              if (cancelled) return;
+              if (cancelled || webrtcPcRef.current !== pc) return;
               const stream = event.streams[0] ?? (() => {
                 const fallback = webrtcStreamRef.current ?? new MediaStream();
                 fallback.addTrack(event.track);
@@ -660,27 +764,52 @@ export function LiveStreamPlayer({
               if (autoPlay) void element.play().catch(() => {});
               if (event.track.kind !== 'video') return;
               videoTrackReceived = true;
-              void waitForVisibleFrame('WEBRTC', WEBRTC_FIRST_FRAME_TIMEOUT_MS)
-                .then(() => {
-                  window.clearTimeout(startupTimeout);
-                  markHealthy('WEBRTC');
-                  resolve();
-                })
-                .catch((frameError) => {
-                  window.clearTimeout(startupTimeout);
-                  reject(frameError);
+              clearWebrtcDisconnectTimer();
+              markHealthy('WEBRTC');
+              finish();
+              void waitForVisibleFrame('WEBRTC', WEBRTC_FIRST_FRAME_TIMEOUT_MS + 2000)
+                .catch(() => {
+                  if (!cancelled && activeProtocolRef.current === 'WEBRTC') {
+                    failActiveProtocol('WebRTC conectado, mas sem frame visível');
+                  }
                 });
             };
 
             pc.onconnectionstatechange = () => {
-              if (cancelled) return;
-              if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                window.clearTimeout(startupTimeout);
-                if (activeProtocolRef.current === 'WEBRTC' && hasFrameRef.current) {
-                  failActiveProtocol('conexão encerrada ou desconectada');
-                } else {
-                  reject(new Error('Stream indisponível via WebRTC.'));
-                }
+              if (cancelled || webrtcPcRef.current !== pc) return;
+              if (pc.connectionState === 'connected' && videoTrackReceived) {
+                clearWebrtcDisconnectTimer();
+                markHealthy('WEBRTC');
+                return;
+              }
+              if (pc.connectionState === 'disconnected') {
+                scheduleDisconnectRecovery('WebRTC desconectou temporariamente');
+                return;
+              }
+              if (pc.connectionState === 'failed') {
+                clearWebrtcDisconnectTimer();
+                failOrRetryWebrtc('conexão WebRTC falhou', false);
+                return;
+              }
+              if (pc.connectionState === 'closed') {
+                clearWebrtcDisconnectTimer();
+              }
+            };
+
+            pc.oniceconnectionstatechange = () => {
+              if (cancelled || webrtcPcRef.current !== pc) return;
+              if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                clearWebrtcDisconnectTimer();
+                if (videoTrackReceived) markHealthy('WEBRTC');
+                return;
+              }
+              if (pc.iceConnectionState === 'disconnected') {
+                scheduleDisconnectRecovery('ICE WebRTC desconectou temporariamente');
+                return;
+              }
+              if (pc.iceConnectionState === 'failed') {
+                clearWebrtcDisconnectTimer();
+                failOrRetryWebrtc('ICE WebRTC falhou', false);
               }
             };
 
@@ -689,12 +818,18 @@ export function LiveStreamPlayer({
                 const offer = await pc.createOffer();
                 await pc.setLocalDescription(offer);
                 await waitIceGatheringComplete(pc);
+                if (cancelled || webrtcPcRef.current !== pc) {
+                  throw new Error('Inicialização WebRTC cancelada.');
+                }
 
                 const localSdp = pc.localDescription?.sdp;
                 if (!localSdp) {
                   throw new Error('Falha ao gerar SDP local do WebRTC.');
                 }
 
+                whepTimeout = window.setTimeout(() => {
+                  abortController.abort();
+                }, WEBRTC_WHEP_NEGOTIATION_TIMEOUT_MS);
                 const response = await fetch(whepUrl, {
                   method: 'POST',
                   mode: 'cors',
@@ -702,7 +837,12 @@ export function LiveStreamPlayer({
                     'Content-Type': 'application/sdp',
                   },
                   body: localSdp,
+                  signal: abortController.signal,
                 });
+                if (whepTimeout != null) {
+                  window.clearTimeout(whepTimeout);
+                  whepTimeout = null;
+                }
 
                 if (!response.ok) {
                   throw new Error(`Falha ao conectar WebRTC (${response.status}).`);
@@ -714,13 +854,18 @@ export function LiveStreamPlayer({
                 }
 
                 const remoteSdp = await response.text();
+                if (cancelled || webrtcPcRef.current !== pc || abortController.signal.aborted) {
+                  throw new Error('Inicialização WebRTC cancelada.');
+                }
                 await pc.setRemoteDescription({
                   type: 'answer',
                   sdp: remoteSdp,
                 });
               } catch (error) {
-                window.clearTimeout(startupTimeout);
-                reject(error);
+                const message = abortController.signal.aborted
+                  ? 'WebRTC excedeu o tempo de negociação com o servidor.'
+                  : error instanceof Error ? error.message : 'Falha desconhecida no WebRTC.';
+                finish(new Error(message));
               }
             })();
           });
@@ -730,6 +875,8 @@ export function LiveStreamPlayer({
           if (!hlsUrl) {
             throw new Error('Stream HLS indisponível.');
           }
+          cleanupHls();
+          await cleanupWebrtc();
 
           const HlsModule = await import('hls.js/dist/hls.mjs');
           const Hls = HlsModule.default;
@@ -809,9 +956,21 @@ export function LiveStreamPlayer({
           }
         }
 
-        throw new Error('Nenhum protocolo de live conseguiu iniciar para esta câmera.');
+        failedProtocolsRef.current.clear();
+        throw new Error('A transmissão ainda não respondeu. Tentando novamente.');
       } catch (streamError) {
         if (cancelled) return;
+        if (axios.isAxiosError<CommercialRestrictionError>(streamError) && streamError.response?.status === 423) {
+          const friendlyMessage =
+            streamError.response.data?.userMessage
+            ?? 'Transmissão temporariamente indisponível. Entre em contato com o administrador do sistema.';
+          setError(friendlyMessage);
+          setRetryMessage(null);
+          setIsLoading(false);
+          setActiveProtocol(null);
+          activeProtocolRef.current = null;
+          return;
+        }
         const message = streamError instanceof Error ? streamError.message : 'Falha ao iniciar stream.';
         if (/401|403|unauthorized|forbidden|auth|credencial|senha/i.test(message)) {
           setError('Falha de autenticação da câmera: valide usuário/senha RTSP/ONVIF.');
@@ -836,6 +995,17 @@ export function LiveStreamPlayer({
         window.clearTimeout(streamTokenRenewTimerRef.current);
         streamTokenRenewTimerRef.current = null;
       }
+      if (webrtcAbortControllerRef.current) {
+        try {
+          webrtcAbortControllerRef.current.abort();
+        } catch {
+        }
+        webrtcAbortControllerRef.current = null;
+      }
+      if (webrtcDisconnectTimerRef.current != null) {
+        window.clearTimeout(webrtcDisconnectTimerRef.current);
+        webrtcDisconnectTimerRef.current = null;
+      }
       if (hlsRef.current) {
         try {
           hlsRef.current.destroy();
@@ -847,6 +1017,7 @@ export function LiveStreamPlayer({
         try {
           webrtcPcRef.current.ontrack = null;
           webrtcPcRef.current.onconnectionstatechange = null;
+          webrtcPcRef.current.oniceconnectionstatechange = null;
           webrtcPcRef.current.close();
         } catch {
         }
@@ -873,7 +1044,7 @@ export function LiveStreamPlayer({
         element.load();
       }
     };
-  }, [accessToken, autoPlay, cameraId, failActiveProtocol, isLikelyBlackFrame, requestFreshLiveBoot, startDelayMs, tokenHeaders, reloadNonce]);
+  }, [accessToken, autoPlay, cameraId, failActiveProtocol, getFastRetryDelay, isLikelyBlackFrame, requestFreshLiveBoot, startDelayMs, tokenHeaders, reloadNonce]);
 
   useEffect(() => {
     const element = videoRef.current;

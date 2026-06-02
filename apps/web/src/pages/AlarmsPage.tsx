@@ -132,7 +132,7 @@ function AlarmCard({ alarm, onAck, onResolve, onAddNote }: { alarm: Alarm; onAck
   const ps = PRIORITY_STYLES[alarm.priority];
   const Icon = TYPE_ICONS[alarm.type] ?? AlertTriangle;
   const isActiveP1 = alarm.priority === 'P1' && alarm.status === 'active';
-  const statusLabel = alarm.status === 'active' ? 'ABERTO' : alarm.status === 'acknowledged' ? 'RECONHECIDO' : 'RESOLVIDO';
+  const statusLabel = alarm.status === 'active' ? 'Aberto' : alarm.status === 'acknowledged' ? 'Reconhecido' : 'Resolvido';
 
   return (
     <motion.div
@@ -152,7 +152,7 @@ function AlarmCard({ alarm, onAck, onResolve, onAddNote }: { alarm: Alarm; onAck
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded border font-bold ${ps.badge}`}>{alarm.priority}</span>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold ${ps.badge}`}>{alarm.priority}</span>
             <span className="text-[12px] font-semibold truncate">{alarm.name}</span>
           </div>
           <div className="flex items-center gap-2 mt-0.5">
@@ -162,7 +162,7 @@ function AlarmCard({ alarm, onAck, onResolve, onAddNote }: { alarm: Alarm; onAck
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded border ${
+          <span className={`text-[9px] px-1.5 py-0.5 rounded border ${
             alarm.status === 'active'
               ? 'bg-[hsl(354_52%_52%_/_0.09)] text-[hsl(354,52%,65%)] border-[hsl(354_52%_52%_/_0.28)]'
               : alarm.status === 'acknowledged'
@@ -201,8 +201,8 @@ function AlarmCard({ alarm, onAck, onResolve, onAddNote }: { alarm: Alarm; onAck
                 </div>
               )}
               {Array.isArray(alarm.notificationDelivery) && alarm.notificationDelivery.length > 0 && (
-                <div className="space-y-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Entrega de notificações</p>
+                <details className="space-y-1.5 rounded border border-border bg-background/45 px-3 py-2">
+                  <summary className="cursor-pointer text-[10px] font-semibold text-muted-foreground">Entrega de notificações</summary>
                   <div className="space-y-1">
                     {alarm.notificationDelivery.slice(-4).reverse().map((delivery, idx) => {
                       const channel = String(delivery?.channel ?? '-').toUpperCase();
@@ -232,7 +232,7 @@ function AlarmCard({ alarm, onAck, onResolve, onAddNote }: { alarm: Alarm; onAck
                       );
                     })}
                   </div>
-                </div>
+                </details>
               )}
               {showNoteInput && (
                 <div className="flex gap-2">
@@ -557,8 +557,9 @@ export default function AlertasPage() {
           </button>
         </div>
 
-        <div className="bg-card border border-card-border rounded-lg p-4 space-y-3">
-          <div className="text-[12px] font-semibold">Filtros avançados de alarmes</div>
+        <details className="bg-card border border-card-border rounded-lg p-4 space-y-3">
+          <summary className="cursor-pointer text-[12px] font-semibold">Filtros avançados</summary>
+          <div className="mt-3 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-2">
             <select value={cameraFilter} onChange={(e) => setCameraFilter(e.target.value)} className="h-8 px-2 rounded border border-border bg-background text-xs">
               <option value="all">Todas as câmeras</option>
@@ -615,9 +616,12 @@ export default function AlertasPage() {
               {alarmsError && <span className="text-[hsl(354,52%,62%)]">{alarmsError}</span>}
             </div>
           )}
-        </div>
+          </div>
+        </details>
 
-        <div className="bg-card border border-card-border rounded-lg p-4 space-y-3">
+        <details className="bg-card border border-card-border rounded-lg p-4 space-y-3">
+          <summary className="cursor-pointer text-[12px] font-semibold">Regras e simulação</summary>
+          <div className="mt-3 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-[12px] font-semibold">
               <Settings2 className="w-4 h-4" />
@@ -683,11 +687,12 @@ export default function AlertasPage() {
               </tbody>
             </table>
           </div>
-        </div>
+          </div>
+        </details>
 
         {activeAlertas.length > 0 ? (
           <div className="space-y-2">
-            <div className="text-[10px] font-semibold text-[hsl(354,52%,62%)] uppercase tracking-wider flex items-center gap-2">
+            <div className="text-[11px] font-semibold text-[hsl(354,52%,62%)] flex items-center gap-2">
               <Bell className="w-3 h-3" />Ativos ({activeAlertas.length})
             </div>
             <AnimatePresence>
@@ -706,7 +711,7 @@ export default function AlertasPage() {
 
         {ackAlertas.length > 0 && (
           <div className="space-y-2">
-            <div className="text-[10px] font-semibold text-[hsl(var(--muted-foreground))] uppercase tracking-wider flex items-center gap-2">
+            <div className="text-[11px] font-semibold text-[hsl(var(--muted-foreground))] flex items-center gap-2">
               <CheckCheck className="w-3 h-3" />Reconhecidos ({ackAlertas.length})
             </div>
             {ackAlertas.slice(0, 5).map((alarm) => (
@@ -717,7 +722,7 @@ export default function AlertasPage() {
 
         {resolvedAlertas.length > 0 && (
           <div className="space-y-2">
-            <div className="text-[10px] font-semibold text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Resolvidos ({resolvedAlertas.length})</div>
+            <div className="text-[11px] font-semibold text-[hsl(var(--muted-foreground))]">Resolvidos ({resolvedAlertas.length})</div>
             <div className="bg-card border border-card-border rounded-lg overflow-hidden">
               <table className="w-full text-[11px]">
                 <thead>
@@ -745,7 +750,7 @@ export default function AlertasPage() {
       </div>
 
       <div className="w-60 border-l border-border bg-card p-4 overflow-y-auto shrink-0 space-y-5">
-        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Estatísticas</h3>
+        <h3 className="text-[12px] font-semibold text-[hsl(var(--muted-foreground))]">Resumo</h3>
 
         <div className="grid grid-cols-2 gap-2">
             {[
@@ -755,7 +760,7 @@ export default function AlertasPage() {
               { label: 'Total', value: visibleAlarms.length, color: 'text-foreground' },
             ].map((s) => (
             <div key={s.label} className="bg-[hsl(var(--muted))] rounded-lg p-2.5 text-center">
-              <div className={`text-lg font-bold font-mono ${s.color}`}>{s.value}</div>
+              <div className={`text-lg font-bold ${s.color}`}>{s.value}</div>
               <div className="text-[9px] text-[hsl(var(--muted-foreground))]">{s.label}</div>
             </div>
           ))}

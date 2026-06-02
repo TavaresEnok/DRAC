@@ -123,7 +123,7 @@ export default function UsuariosPage() {
     } catch (error) {
       toast({
         title: 'Falha ao carregar acessos',
-        description: error instanceof Error ? error.message : 'Nao foi possivel carregar grupos e permissoes.',
+        description: error instanceof Error ? error.message : 'Não foi possível carregar grupos e permissões.',
         variant: 'destructive',
       });
     } finally {
@@ -173,11 +173,11 @@ export default function UsuariosPage() {
       setNewGroupDescription('');
       setSelectedGroupId(data.id);
       await loadAccess();
-      toast({ title: 'Grupo criado', description: `${name} pronto para receber cameras e usuarios.` });
+      toast({ title: 'Grupo criado', description: `${name} pronto para receber câmeras e usuários.` });
     } catch (error) {
       toast({
         title: 'Falha ao criar grupo',
-        description: error instanceof Error ? error.message : 'Nao foi possivel criar o grupo.',
+        description: error instanceof Error ? error.message : 'Não foi possível criar o grupo.',
         variant: 'destructive',
       });
     } finally {
@@ -197,8 +197,8 @@ export default function UsuariosPage() {
       await Promise.all([loadAccess(), loadData()]);
     } catch (error) {
       toast({
-        title: shouldAdd ? 'Falha ao adicionar camera' : 'Falha ao remover camera',
-        description: error instanceof Error ? error.message : 'Nao foi possivel atualizar o grupo.',
+        title: shouldAdd ? 'Falha ao adicionar câmera' : 'Falha ao remover câmera',
+        description: error instanceof Error ? error.message : 'Não foi possível atualizar o grupo.',
         variant: 'destructive',
       });
     } finally {
@@ -218,7 +218,7 @@ export default function UsuariosPage() {
     } catch (error) {
       toast({
         title: 'Falha ao liberar acesso',
-        description: error instanceof Error ? error.message : 'Nao foi possivel salvar a permissao.',
+        description: error instanceof Error ? error.message : 'Não foi possível salvar a permissão.',
         variant: 'destructive',
       });
     } finally {
@@ -234,7 +234,7 @@ export default function UsuariosPage() {
     } catch (error) {
       toast({
         title: 'Falha ao remover acesso',
-        description: error instanceof Error ? error.message : 'Nao foi possivel remover a permissao.',
+        description: error instanceof Error ? error.message : 'Não foi possível remover a permissão.',
         variant: 'destructive',
       });
     } finally {
@@ -250,7 +250,7 @@ export default function UsuariosPage() {
       return;
     }
     if (!editUser && !userForm.password) {
-      toast({ title: 'Senha obrigatoria', description: 'Crie uma senha inicial para o usuario.', variant: 'destructive' });
+      toast({ title: 'Senha obrigatória', description: 'Crie uma senha inicial para o usuário.', variant: 'destructive' });
       return;
     }
 
@@ -264,7 +264,7 @@ export default function UsuariosPage() {
           isActive: userForm.isActive,
           ...(userForm.password ? { password: userForm.password } : {}),
         });
-        toast({ title: 'Usuario atualizado', description: `${name} foi atualizado.` });
+        toast({ title: 'Usuário atualizado', description: `${name} foi atualizado.` });
       } else {
         await apiClient().post('/users', {
           name,
@@ -272,7 +272,7 @@ export default function UsuariosPage() {
           password: userForm.password,
           role: userForm.role,
         });
-        toast({ title: 'Usuario criado', description: `${name} ja pode receber acesso a grupos.` });
+        toast({ title: 'Usuário criado', description: `${name} já pode receber acesso a grupos.` });
       }
       setAddOpen(false);
       setEditUser(null);
@@ -280,8 +280,8 @@ export default function UsuariosPage() {
       await Promise.all([loadData(), loadAccess()]);
     } catch (error) {
       toast({
-        title: editUser ? 'Falha ao atualizar usuario' : 'Falha ao criar usuario',
-        description: error instanceof Error ? error.message : 'Nao foi possivel salvar o usuario.',
+        title: editUser ? 'Falha ao atualizar usuário' : 'Falha ao criar usuário',
+        description: error instanceof Error ? error.message : 'Não foi possível salvar o usuário.',
         variant: 'destructive',
       });
     } finally {
@@ -294,13 +294,13 @@ export default function UsuariosPage() {
       <div className="flex shrink-0 items-center justify-between border-b border-border px-6 py-3">
         <div className="flex items-center gap-2">
           <Users className="h-4 w-4 text-primary" />
-          <h1 className="text-lg font-semibold">Usuarios e Acessos</h1>
+          <h1 className="text-lg font-semibold">Usuários e acessos</h1>
         </div>
         <div className="flex items-center gap-2">
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar usuarios..."
+            placeholder="Buscar usuários..."
             className="h-7 w-44 rounded border border-border bg-card px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
           />
           <button
@@ -316,7 +316,7 @@ export default function UsuariosPage() {
             className="flex h-7 items-center gap-1.5 rounded bg-primary px-3 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
           >
             <Plus className="h-3.5 w-3.5" />
-            Adicionar Usuario
+            Novo usuário
           </button>
         </div>
       </div>
@@ -324,14 +324,14 @@ export default function UsuariosPage() {
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(420px,0.85fr)]">
         <section className="overflow-hidden rounded-xl border border-border bg-card/45">
           <div className="border-b border-border px-4 py-3">
-            <p className="text-sm font-semibold">Usuarios do sistema</p>
-            <p className="text-xs text-muted-foreground">O perfil define o que a pessoa pode fazer. O grupo define quais cameras ela enxerga.</p>
+            <p className="text-sm font-semibold">Usuários do sistema</p>
+            <p className="text-xs text-muted-foreground">Perfis definem ações. Grupos definem quais câmeras cada pessoa vê.</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-card/80">
                 <tr>
-                  {['Nome', 'Email', 'Perfil', 'Grupos liberados', 'Status', 'Acoes'].map(h => (
+                  {['Nome', 'Email', 'Perfil', 'Grupos', 'Status', 'Ações'].map(h => (
                     <th key={h} className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">{h}</th>
                   ))}
                 </tr>
@@ -430,7 +430,7 @@ export default function UsuariosPage() {
             <input
               value={newGroupDescription}
               onChange={(event) => setNewGroupDescription(event.target.value)}
-              placeholder="Descricao opcional"
+              placeholder="Descrição opcional"
               className="mt-2 h-9 w-full rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
             />
 
@@ -459,8 +459,8 @@ export default function UsuariosPage() {
             <div className="mb-4 flex items-start gap-2">
               <Camera className="mt-0.5 h-4 w-4 text-primary" />
               <div>
-                <p className="text-sm font-semibold">Cameras do grupo</p>
-                <p className="text-xs text-muted-foreground">{selectedGroup ? `Selecionado: ${selectedGroup.name}` : 'Crie ou selecione um grupo para vincular cameras.'}</p>
+                <p className="text-sm font-semibold">Câmeras do grupo</p>
+                <p className="text-xs text-muted-foreground">{selectedGroup ? `Selecionado: ${selectedGroup.name}` : 'Crie ou selecione um grupo para vincular câmeras.'}</p>
               </div>
             </div>
 
@@ -490,8 +490,8 @@ export default function UsuariosPage() {
             <div className="mb-4 flex items-start gap-2">
               <Save className="mt-0.5 h-4 w-4 text-primary" />
               <div>
-                <p className="text-sm font-semibold">Liberar usuario para grupo</p>
-                <p className="text-xs text-muted-foreground">O usuario so vera as cameras dos grupos em que tiver permissao.</p>
+                <p className="text-sm font-semibold">Acesso por grupo</p>
+                <p className="text-xs text-muted-foreground">O usuário vê apenas as câmeras dos grupos liberados.</p>
               </div>
             </div>
 
@@ -552,7 +552,7 @@ export default function UsuariosPage() {
       <Dialog open={addOpen || !!editUser} onOpenChange={(o) => { if (!o) { setAddOpen(false); setEditUser(null); } }}>
         <DialogContent className="max-w-md border-border bg-card">
           <DialogHeader>
-            <DialogTitle>{editUser ? `Editar Usuario - ${editUser.name}` : 'Novo Usuario'}</DialogTitle>
+            <DialogTitle>{editUser ? `Editar usuário - ${editUser.name}` : 'Novo usuário'}</DialogTitle>
           </DialogHeader>
           <div className="mt-2 space-y-3">
             <div>
@@ -560,7 +560,7 @@ export default function UsuariosPage() {
               <input
                 value={userForm.name}
                 onChange={(event) => setUserForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Nome do usuario"
+                placeholder="Nome do usuário"
                 className="h-8 w-full rounded border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
@@ -589,7 +589,7 @@ export default function UsuariosPage() {
                 type="password"
                 value={userForm.password}
                 onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
-                placeholder={editUser ? 'Deixe em branco para manter' : 'Minimo 10, maiuscula, numero e simbolo'}
+                placeholder={editUser ? 'Deixe em branco para manter' : 'Mínimo 10, maiúscula, número e símbolo'}
                 className="h-8 w-full rounded border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>
@@ -601,7 +601,7 @@ export default function UsuariosPage() {
                   onChange={(event) => setUserForm((current) => ({ ...current, isActive: event.target.checked }))}
                   className="rounded"
                 />
-                <span className="text-xs text-muted-foreground">Usuario ativo</span>
+                <span className="text-xs text-muted-foreground">Usuário ativo</span>
               </label>
             ) : null}
             <div className="flex justify-end gap-2 pt-2">
@@ -611,7 +611,7 @@ export default function UsuariosPage() {
                 disabled={userSaving}
                 className="h-8 rounded bg-primary px-4 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                {editUser ? 'Salvar alteracoes' : 'Criar usuario'}
+                {editUser ? 'Salvar alterações' : 'Criar usuário'}
               </button>
             </div>
           </div>
