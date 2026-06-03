@@ -193,20 +193,24 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
       String(process.env.MEDIAMTX_WEBRTC_ALLOW_ORIGIN ?? '*') !== '*';
     const recordingRuntime = this.getRecordingRuntimeSummary();
     const recordingCapacity = await this.getRecordingCapacityEstimate(disk);
+    const continuousRecordingConfigured = cameraOperational.recordingContinuous > 0;
+    const recordingAutoStartEnabled = String(process.env.RECORDING_AUTO_START_ENABLED ?? 'false') === 'true';
+    const recordingCapacityEnforced = continuousRecordingConfigured || recordingAutoStartEnabled;
+
     if (cameraCounts.total > 0 && cameraOperational.recordingEnabled === 0) {
       alerts.push({
         level: 'warning',
         code: 'recording_disabled_all',
-        message: 'Nenhuma camera esta com gravacao continua habilitada.',
+        message: 'Nenhuma camera esta com gravacao habilitada. O administrador pode ativar gravacao continua, por movimento ou manual conforme o contrato.',
       });
     }
-    if (recordingCapacity.status === 'blocked') {
+    if (recordingCapacityEnforced && recordingCapacity.status === 'blocked') {
       alerts.push({
         level: 'critical',
         code: 'recording_storage_capacity_insufficient',
         message: `Storage insuficiente para ${recordingCapacity.retentionDays}d de retencao: estimado ${recordingCapacity.estimatedRequiredGb}GB, capacidade segura ${recordingCapacity.safeCapacityGb}GB.`,
       });
-    } else if (recordingCapacity.status === 'attention') {
+    } else if (recordingCapacityEnforced && recordingCapacity.status === 'attention') {
       alerts.push({
         level: 'warning',
         code: 'recording_storage_capacity_attention',
@@ -239,6 +243,7 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         recentRecordingCountLastHour: recentRecordings,
         activeRecordingCount: recordingRuntime?.activeCount ?? activeRecordings,
         recordingCapacityStatus: recordingCapacity.status,
+        recordingCapacityEnforced,
         activeUsers,
         diskUsagePercent: disk?.usagePercent ?? null,
         alerts,
@@ -274,6 +279,7 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
           lastStartedAt: recordings._max.startedAt,
           runtime: recordingRuntime,
           capacity: recordingCapacity,
+          capacityEnforced: recordingCapacityEnforced,
         },
         ai: {
           autoStartEnabled: String(process.env.AI_AUTO_START_ENABLED ?? 'true') !== 'false',
@@ -327,6 +333,7 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
     const [
       total,
       recordingEnabled,
+      recordingContinuous,
       aiEnabled,
       audioEnabled,
       byLiveProtocol,
@@ -337,6 +344,7 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
     ] = await Promise.all([
       this.prisma.camera.count(),
       this.prisma.camera.count({ where: { recordingEnabled: true } }),
+      this.prisma.camera.count({ where: { recordingEnabled: true, recordingMode: 'continuous' } }),
       this.prisma.camera.count({ where: { aiEnabled: true } }),
       this.prisma.camera.count({ where: { audioEnabled: true } }),
       this.prisma.camera.groupBy({ by: ['preferredLiveProtocol'], _count: { id: true } }),
@@ -349,6 +357,7 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
     return {
       total,
       recordingEnabled,
+      recordingContinuous,
       aiEnabled,
       audioEnabled,
       byLiveProtocol: this.groupRowsToRecord(byLiveProtocol, 'preferredLiveProtocol'),

@@ -1,0 +1,137 @@
+# DRAC Central
+
+Painel central para monitorar instalacoes DRAC VMS em servidores de clientes.
+
+## Rodar a central
+
+Nao ha dependencias externas obrigatorias; basta Node 20+. Em producao, rode atras de HTTPS/reverse proxy.
+
+```bash
+cd apps/central
+cp .env.example .env
+nano .env
+npm start
+```
+
+Tambem pode rodar em container:
+
+```bash
+docker build -f apps/central/Dockerfile -t drac-central .
+docker run --env-file apps/central/.env -p 9765:9765 -v drac-central-data:/app/data drac-central
+```
+
+Padrao local:
+
+- Painel: `http://SERVIDOR:9765`
+- Heartbeat: `POST /api/agent/heartbeat`
+
+## Login administrativo
+
+O painel humano usa apenas e-mail/senha e sessao por cookie.
+
+Gere o hash da senha antes de preencher o `.env`:
+
+```bash
+npm run hash-password -- 'SENHA_FORTE_AQUI'
+```
+
+Variaveis:
+
+```bash
+DRAC_CENTRAL_ADMIN_EMAIL=admin@drac.local
+DRAC_CENTRAL_ADMIN_PASSWORD_HASH=pbkdf2_sha256$...
+DRAC_CENTRAL_SESSION_HOURS=8
+DRAC_CENTRAL_ALLOWED_ORIGINS=https://central.seudominio.com.br
+DRAC_CENTRAL_COOKIE_SECURE=true
+```
+
+`DRAC_CENTRAL_ADMIN_TOKEN` e opcional e serve somente para automacao/API interna. Deixe vazio se nao houver integracao tecnica consumindo os endpoints administrativos.
+
+## Heartbeat do DRAC local
+
+Cada instalacao DRAC envia conexao outbound para o central. Nao precisa abrir porta no cliente.
+
+Headers:
+
+- `x-drac-installation-id`
+- `x-drac-license-key`
+
+## Gerador oficial de instalacao
+
+No painel, use a aba `Instalação`.
+
+A central:
+
+- cria a instalacao como `Aguardando instalação`;
+- gera a chave/licenca no servidor;
+- grava auditoria;
+- entrega um comando unico `curl ... | bash` para executar no servidor do cliente;
+- publica o instalador temporario em `/install/:installationId/:installerToken`;
+- permite cancelar uma instalacao pendente antes do primeiro heartbeat.
+
+API usada pelo painel:
+
+```text
+POST /api/admin/provision
+DELETE /api/admin/installations/:id
+```
+
+O `DELETE` remove apenas instalacoes que ainda nao enviaram heartbeat.
+
+Estados comerciais suportados:
+
+- `ACTIVE`
+- `GRACE`
+- `RESTRICTED`
+- `SUSPENDED`
+
+## Configurar uma instalacao DRAC local
+
+No `infra/.env` do cliente:
+
+```bash
+CLOUD_CONNECTOR_ENABLED=true
+CLOUD_API_URL=http://IP_OU_DOMINIO_DA_CENTRAL:9765
+CLOUD_INSTALLATION_ID=cliente-001
+CLOUD_LICENSE_KEY=chave-do-cliente
+CLOUD_CUSTOMER_NAME=Nome do Cliente
+CLOUD_HEARTBEAT_INTERVAL_SECONDS=60
+DRAC_VERSION=local
+```
+
+Depois reinicie a API do cliente.
+
+## Restricoes comerciais
+
+Politica atual:
+
+- `ACTIVE`: tudo normal.
+- `GRACE`: tudo operacional, usado como periodo de tolerancia.
+- `RESTRICTED`: bloqueia cadastro de novas cameras, IA avancada e atualizacoes; mantem live, gravacao, playback e exportacao.
+- `SUSPENDED`: bloqueia live, novas gravacoes e IA; mantem login admin, playback e exportacao.
+
+O operador ve mensagem generica na camera. Administradores podem consultar o motivo real via painel/estado da licenca.
+
+Isso e intencional: `RESTRICTED` deve ser tratado como modo comercial degradado, nao como desligamento brusco de seguranca. Qualquer bloqueio futuro precisa preservar acesso minimo, evidencias e gravacao critica.
+
+## Auditoria
+
+A central registra em `data/installations.json`:
+
+- login aceito, falha de login e bloqueio por excesso de tentativas;
+- logout;
+- alteracao de contrato;
+- heartbeat recusado por chave invalida.
+
+O painel exibe os ultimos eventos na aba `Auditoria`.
+
+## Seguranca minima para producao
+
+- Usar HTTPS na frente da central.
+- Definir `DRAC_CENTRAL_ALLOWED_ORIGINS` com o dominio real.
+- Definir `DRAC_CENTRAL_COOKIE_SECURE=true` quando estiver em HTTPS.
+- Manter `DRAC_CENTRAL_ADMIN_TOKEN` vazio, exceto se houver automacao interna.
+- Usar uma senha forte e armazenar somente `DRAC_CENTRAL_ADMIN_PASSWORD_HASH`.
+- Fazer backup do arquivo definido em `DRAC_CENTRAL_DATA_FILE`.
+- Proteger a porta `9765` por firewall/reverse proxy.
+- Monitorar logs do container e alertar falhas de heartbeat.

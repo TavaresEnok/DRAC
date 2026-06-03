@@ -1,0 +1,14 @@
+{
+  "name": "drac-central",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DRAC Central - painel administrativo para monitorar instalacoes DRAC VMS",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "DRAC_CENTRAL_PORT=9765 node src/server.js",
+    "hash-password": "node scripts/hash-password.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

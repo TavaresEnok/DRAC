@@ -550,12 +550,12 @@ export default function LiveViewPage() {
         {panelOpen && (
           <motion.aside
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 236, opacity: 1 }}
+            animate={{ width: 208, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 32 }}
             className="border-l border-border bg-card flex flex-col overflow-hidden shrink-0"
           >
-            <div className="px-2.5 py-3 border-b border-border shrink-0 space-y-3">
+            <div className="px-2 py-2.5 border-b border-border shrink-0 space-y-2.5">
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-[13px] font-semibold">Câmeras</h2>
@@ -570,7 +570,7 @@ export default function LiveViewPage() {
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
                 <input
                   type="search"
-                  placeholder="Buscar câmera ou IP"
+                  placeholder="Buscar"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   className="w-full h-8 pl-8 pr-3 rounded-md border border-border bg-background/60 text-xs focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))] placeholder:text-[hsl(var(--muted-foreground)_/_0.5)]"
@@ -610,7 +610,7 @@ export default function LiveViewPage() {
                 return (
                   <button
                     key={cam.id}
-                    className={`w-full text-left grid grid-cols-[10px_1fr_auto] items-center gap-2 px-2.5 py-2.5 hover:bg-[hsl(var(--accent)_/_0.7)] transition-colors ${
+                    className={`w-full text-left grid grid-cols-[10px_1fr_auto] items-center gap-2 px-2 py-2 hover:bg-[hsl(var(--accent)_/_0.7)] transition-colors ${
                       isInGrid ? 'bg-[hsl(var(--primary)_/_0.06)]' : ''
                     }`}
                     onClick={() => addCameraToGrid(cam.id)}
@@ -622,7 +622,7 @@ export default function LiveViewPage() {
                         {cam.zone}
                       </span>
                     </span>
-                    <span className={`max-w-[64px] truncate text-[10px] shrink-0 ${isInGrid ? 'text-[hsl(var(--primary))]' : 'text-[hsl(var(--muted-foreground)_/_0.55)]'}`}>
+                    <span className={`max-w-[52px] truncate text-[9px] shrink-0 ${isInGrid ? 'text-[hsl(var(--primary))]' : 'text-[hsl(var(--muted-foreground)_/_0.55)]'}`}>
                       {selectedSlotIndex != null ? 'Usar aqui' : isInGrid ? 'Na grade' : STATUS_FILTER_LABEL[cam.status as (typeof STATUS_FILTERS)[number]] ?? cam.status.replace('_', ' ')}
                     </span>
                   </button>

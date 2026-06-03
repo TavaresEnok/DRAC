@@ -174,13 +174,32 @@ check_container() {
   esac
 }
 
+is_ai_expected() {
+  local ai_enabled_count
+  ai_enabled_count="$(psql_value 'select count(*) from "Camera" where "aiEnabled" = true;' 2>/dev/null || echo 0)"
+  if [ "${AI_AUTO_START_ENABLED:-true}" = "false" ] && [ "${ai_enabled_count:-0}" -eq 0 ]; then
+    return 1
+  fi
+  return 0
+}
+
 check_containers() {
   check_container vms-postgres
   check_container vms-redis
   check_container vms-mediamtx
   check_container vms-api
   check_container vms-web
-  check_container vms-ai-service
+  if is_ai_expected; then
+    check_container vms-ai-service
+  else
+    local ai_status
+    ai_status="$(container_status vms-ai-service)"
+    if [ "$ai_status" = "running" ]; then
+      warn "Container vms-ai-service esta rodando, mas IA foi marcada como desativada"
+    else
+      ok "IA desativada por configuracao; vms-ai-service nao e obrigatorio neste perfil"
+    fi
+  fi
   check_container vms-postgres-backup
 }
 
@@ -240,6 +259,7 @@ psql_value() {
 
 check_recording_capacity() {
   local storage_path="$1"
+  local enforce_capacity="${2:-false}"
   local df_line total_kb retention_days safe_capacity_gb hist_line hist_bytes hist_seconds required_gb source
 
   df_line="$(df -Pk "$storage_path" 2>/dev/null | awk 'NR==2 {print $2}')"
@@ -268,6 +288,17 @@ check_recording_capacity() {
     source="bitrate configurado/fallback ${fallback_kbps}kbps"
   fi
 
+  if [ "$enforce_capacity" != "true" ]; then
+    if awk -v required="$required_gb" -v safe="$safe_capacity_gb" 'BEGIN { exit !(required > safe) }'; then
+      warn "Storage atual nao comportaria retencao continua de ${retention_days}d: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+    elif awk -v required="$required_gb" -v safe="$safe_capacity_gb" 'BEGIN { exit !(required > safe * 0.70) }'; then
+      warn "Storage apertado caso gravacao continua seja habilitada: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+    else
+      ok "Storage comporta retencao de ${retention_days}d caso gravacao continua seja habilitada: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+    fi
+    return
+  fi
+
   if awk -v required="$required_gb" -v safe="$safe_capacity_gb" 'BEGIN { exit !(required > safe) }'; then
     fail "Storage insuficiente para retencao de ${retention_days}d: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
   elif awk -v required="$required_gb" -v safe="$safe_capacity_gb" 'BEGIN { exit !(required > safe * 0.70) }'; then
@@ -278,7 +309,7 @@ check_recording_capacity() {
 }
 
 check_camera_profiles() {
-  local total online live_webrtc live_subtype0 live_720p recording_enabled recording_subtype0 recording_h265 ai_enabled analytics_subtype_set
+  local total online live_webrtc live_subtype0 live_720p recording_enabled recording_continuous recording_subtype0 recording_h265 ai_enabled analytics_subtype_set
   total="$(psql_value 'select count(*) from "Camera";')"
   total="${total:-0}"
 
@@ -292,6 +323,7 @@ check_camera_profiles() {
   live_subtype0="$(psql_value 'select count(*) from "Camera" where coalesce("liveSubtype", subtype) = 0;')"
   live_720p="$(psql_value 'select count(*) from "Camera" where "streamWidth" = 1280 and "streamHeight" = 720;')"
   recording_enabled="$(psql_value 'select count(*) from "Camera" where "recordingEnabled" = true;')"
+  recording_continuous="$(psql_value 'select count(*) from "Camera" where "recordingEnabled" = true and "recordingMode" = '\''continuous'\'';')"
   recording_subtype0="$(psql_value 'select count(*) from "Camera" where coalesce("recordingSubtype", subtype) = 0;')"
   recording_h265="$(psql_value 'select count(*) from "Camera" where lower(coalesce("recordingVideoCodec", '\''h265'\'')) in ('\''h265'\'','\''hevc'\'','\''h.265'\'');')"
   ai_enabled="$(psql_value 'select count(*) from "Camera" where "aiEnabled" = true;')"
@@ -322,11 +354,11 @@ check_camera_profiles() {
   fi
 
   if [ "${recording_enabled:-0}" -eq 0 ]; then
-    warn "Nenhuma camera esta com gravacao continua habilitada; habilite apos validar capacidade de storage"
+    warn "Nenhuma camera esta com gravacao habilitada; o administrador pode ativar continua, movimento ou manual conforme o contrato"
   elif [ "$recording_enabled" -eq "$total" ]; then
-    ok "Todas as cameras estao com gravacao habilitada"
+    ok "Todas as cameras estao com gravacao habilitada (${recording_continuous:-0} em modo continuo)"
   else
-    warn "Gravacao habilitada parcialmente (${recording_enabled:-0}/$total)"
+    warn "Gravacao habilitada parcialmente (${recording_enabled:-0}/$total; ${recording_continuous:-0} em modo continuo)"
   fi
 
   if [ "${recording_subtype0:-0}" -eq "$total" ]; then
@@ -348,7 +380,11 @@ check_camera_profiles() {
   fi
 
   if [ "${ai_enabled:-0}" -eq 0 ]; then
-    warn "IA esta desabilitada em todas as cameras"
+    if [ "${AI_AUTO_START_ENABLED:-true}" = "false" ]; then
+      ok "IA desabilitada em todas as cameras por configuracao deste perfil"
+    else
+      warn "IA esta desabilitada em todas as cameras"
+    fi
   elif [ "$ai_enabled" -eq "$total" ]; then
     ok "IA habilitada em todas as cameras"
   else
@@ -365,6 +401,11 @@ check_redis() {
 }
 
 check_ai_service() {
+  if ! is_ai_expected; then
+    ok "Health da IA ignorado porque IA esta desativada neste perfil"
+    return
+  fi
+
   if docker exec vms-ai-service sh -lc "python - <<'PY'
 import urllib.request
 urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()
@@ -418,7 +459,13 @@ check_storage_and_backups() {
     fail "RECORDING_DISK_GUARD_ENABLED=false; producao fica sem protecao contra disco cheio"
   fi
 
-  check_recording_capacity "$storage_path"
+  local continuous_count enforce_capacity
+  continuous_count="$(psql_value 'select count(*) from "Camera" where "recordingEnabled" = true and "recordingMode" = '\''continuous'\'';')"
+  enforce_capacity="false"
+  if [ "${RECORDING_AUTO_START_ENABLED:-false}" = "true" ] || [ "${continuous_count:-0}" -gt 0 ]; then
+    enforce_capacity="true"
+  fi
+  check_recording_capacity "$storage_path" "$enforce_capacity"
 
   local backup_dir="$ROOT_DIR/infra/backups/postgres"
   local latest=""

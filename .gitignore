@@ -50,6 +50,7 @@ webrtc-implementation-guide/
 !docs/
 !docs/**/*.md
 !apps/mobile/README.md
+!apps/central/README.md
 !services/ai-service-python/README.md
 !services/camera-worker-go/README.md
 !legacy/README.md

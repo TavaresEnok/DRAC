@@ -1325,7 +1325,7 @@ export default function CameraDetailPage() {
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                   <div>
                     <h2 className="text-base font-semibold tracking-tight text-foreground">Configurações</h2>
-                    <p className="mt-1 text-xs text-muted-foreground">Ajustes principais da câmera. Detalhes técnicos ficam recolhidos.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Ajustes essenciais da câmera. Configurações técnicas ficam recolhidas.</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -1370,7 +1370,7 @@ export default function CameraDetailPage() {
 
                   <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
                     <div className="space-y-4">
-                      <SettingsCard title="Acesso">
+                      <SettingsCard title="Identificação e acesso">
                         <div className="grid gap-3 md:grid-cols-2">
                           <SettingsField label="Nome da câmera">
                             <SettingsInput value={form.name} onChange={(event) => updateField('name', event.target.value)} />
@@ -1384,12 +1384,12 @@ export default function CameraDetailPage() {
                           <SettingsField label="Senha" hint="Deixe em branco para manter a senha atual.">
                             <SettingsInput type="password" value={form.password} onChange={(event) => updateField('password', event.target.value)} />
                           </SettingsField>
-                          <SettingsField label="Porta RTSP">
+                          <SettingsField label="Porta de vídeo">
                             <SettingsInput type="number" min={1} value={form.rtspPort} onChange={(event) => updateField('rtspPort', event.target.value)} className="font-mono" />
                           </SettingsField>
                         </div>
                         <details className="rounded-lg border border-border/70 bg-card/60 px-3 py-2">
-                          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Avançado</summary>
+                          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Controle e descoberta</summary>
                           <div className="mt-3 grid gap-3 border-t border-border/70 pt-3 md:grid-cols-2">
                             <SettingsField label="Porta de controle">
                               <SettingsInput type="number" min={1} value={form.onvifPort} onChange={(event) => updateField('onvifPort', event.target.value)} className="font-mono" />
@@ -1409,22 +1409,22 @@ export default function CameraDetailPage() {
                             <div className="mt-1 text-sm font-medium text-foreground">Principal H.265</div>
                           </div>
                           <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
-                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">IA</div>
-                            <div className="mt-1 text-sm font-medium text-foreground">Substream leve</div>
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Análise</div>
+                            <div className="mt-1 text-sm font-medium text-foreground">Perfil reservado</div>
                           </div>
                         </div>
                       </SettingsCard>
 
                       <SettingsCard title="Live">
                         <div className="grid gap-3 md:grid-cols-3">
-                          <SettingsField label="Fonte da imagem">
+                          <SettingsField label="Fonte da imagem" hint="Original usa o perfil principal entregue pela câmera. Econômico usa substream.">
                             <SettingsSelect value={liveSourceMode} onChange={(event) => applyLiveSourceMode(event.target.value as LiveSourceMode)}>
                               <option value="original">Original da câmera (principal)</option>
                               <option value="economical">Substream econômico</option>
                               {liveSourceMode === 'advanced' ? <option value="advanced">Subtype personalizado</option> : null}
                             </SettingsSelect>
                           </SettingsField>
-                          <SettingsField label="Resolução em Live">
+                          <SettingsField label="Resolução em live" hint="Original mantém a resolução real do perfil escolhido.">
                             <SettingsSelect
                               value={getResolutionPresetValue(form.streamWidth, form.streamHeight) || 'custom'}
                               onChange={(event) => applyResolutionPreset('stream', event.target.value)}
@@ -1443,9 +1443,9 @@ export default function CameraDetailPage() {
                             <div className="mt-1 text-sm font-medium text-foreground">WebRTC</div>
                           </div>
                           <details className="md:col-span-3 rounded-lg border border-border/70 bg-card/60 px-3 py-2">
-                            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Avançado</summary>
+                            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Codec, protocolo e rede</summary>
                             <div className="mt-3 grid gap-3 border-t border-border/70 pt-3 md:grid-cols-2">
-                              <SettingsField label="Codec da origem">
+                              <SettingsField label="Codec recebido">
                                 <SettingsSelect value={form.streamVideoCodec} onChange={(event) => updateField('streamVideoCodec', event.target.value as CameraConfig['streamVideoCodec'])}>
                                   <option value="original">Detectar no perfil live</option>
                                   <option value="h264">H.264</option>
@@ -1453,7 +1453,7 @@ export default function CameraDetailPage() {
                                   <option value="mjpeg">MJPEG</option>
                                 </SettingsSelect>
                               </SettingsField>
-                              <SettingsField label="Protocolo">
+                              <SettingsField label="Protocolo ao vivo">
                                 <SettingsSelect value={form.preferredLiveProtocol} onChange={(event) => updateField('preferredLiveProtocol', event.target.value as CameraConfig['preferredLiveProtocol'])}>
                                   <option value="webrtc">WebRTC</option>
                                   <option value="llhls">LL-HLS</option>
@@ -1467,10 +1467,10 @@ export default function CameraDetailPage() {
                                   <option value="udp">UDP</option>
                                 </SettingsSelect>
                               </SettingsField>
-                              <SettingsField label="FPS em Live">
+                              <SettingsField label="FPS da live">
                                 <SettingsInput type="number" min={1} value={form.streamFps} onChange={(event) => updateField('streamFps', event.target.value)} className="font-mono" />
                               </SettingsField>
-                              <SettingsField label="Bitrate em Live">
+                              <SettingsField label="Bitrate da live">
                                 <SettingsInput type="number" min={1} value={form.streamBitrateKbps} onChange={(event) => updateField('streamBitrateKbps', event.target.value)} className="font-mono" />
                               </SettingsField>
                             </div>

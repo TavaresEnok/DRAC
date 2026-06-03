@@ -1,0 +1,1178 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DRAC Central</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --page: #f3f5f7;
+        --surface: #ffffff;
+        --surface-soft: #f8fafc;
+        --ink: #17202c;
+        --muted: #667085;
+        --quiet: #98a2b3;
+        --line: #d9dee7;
+        --line-soft: #eef1f5;
+        --brand: #155b75;
+        --brand-strong: #0f465d;
+        --brand-soft: #e7f4f8;
+        --green: #18794e;
+        --green-soft: #e7f7ee;
+        --amber: #9a6700;
+        --amber-soft: #fff5d6;
+        --red: #b42318;
+        --red-soft: #fff0ed;
+        --violet: #6f4bd8;
+        --violet-soft: #f2edff;
+        --shadow: 0 8px 20px rgba(16, 24, 40, .055);
+      }
+
+      * { box-sizing: border-box; }
+      html, body { min-height: 100%; }
+      body { margin: 0; background: var(--page); color: var(--ink); }
+      button, input, select, textarea { font: inherit; }
+      button {
+        min-height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+        color: var(--ink); padding: 0 13px; font-weight: 700; cursor: pointer;
+      }
+      button:hover { border-color: #b7c0ce; background: #fbfcfd; }
+      button.primary { border-color: var(--brand); background: var(--brand); color: #ffffff; }
+      button.primary:hover { background: var(--brand-strong); }
+      button.danger { border-color: #f4b8b0; background: var(--red-soft); color: var(--red); }
+      button.ghost { background: transparent; }
+      input, select, textarea {
+        min-height: 38px; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+        color: var(--ink); padding: 0 12px; outline: none;
+      }
+      textarea { min-height: 88px; padding: 10px 12px; resize: vertical; line-height: 1.45; }
+      input:focus, select:focus, textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(21, 91, 117, .12); }
+      .hidden { display: none !important; }
+
+      .login-screen { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) 430px; background: var(--page); }
+      .login-visual {
+        padding: 54px; background:
+          linear-gradient(120deg, rgba(21,91,117,.88), rgba(23,32,44,.94)),
+          radial-gradient(circle at 30% 20%, rgba(255,255,255,.22), transparent 35%);
+        color: #fff; display: flex; flex-direction: column; justify-content: space-between;
+      }
+      .login-brand { font-size: 22px; font-weight: 850; letter-spacing: 0; }
+      .login-claim { max-width: 680px; }
+      .login-claim h1 { margin: 0; font-size: 42px; line-height: 1.04; letter-spacing: 0; }
+      .login-claim p { margin: 18px 0 0; max-width: 560px; color: rgba(255,255,255,.78); font-size: 16px; line-height: 1.6; }
+      .login-points { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+      .login-point { border: 1px solid rgba(255,255,255,.18); border-radius: 8px; padding: 14px; background: rgba(255,255,255,.08); }
+      .login-point strong { display: block; font-size: 18px; }
+      .login-point span { display: block; color: rgba(255,255,255,.72); font-size: 12px; margin-top: 5px; }
+      .login-panel { display: flex; align-items: center; justify-content: center; padding: 32px; }
+      .login-card { width: 100%; max-width: 360px; }
+      .login-card h2 { margin: 0 0 8px; font-size: 24px; }
+      .login-card p { margin: 0 0 22px; color: var(--muted); line-height: 1.55; }
+      .login-form { display: grid; gap: 12px; }
+      .field label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 750; color: var(--muted); }
+      .login-error { min-height: 20px; color: var(--red); font-size: 12px; }
+
+      .shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+      .topbar {
+        min-height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 18px;
+        padding: 0 24px; background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20;
+      }
+      .brand { display: flex; align-items: center; gap: 12px; min-width: 240px; }
+      .brand-mark { width: 34px; height: 34px; border-radius: 10px; background: var(--brand); color: #fff; display: grid; place-items: center; font-weight: 900; }
+      .brand-title { font-weight: 850; }
+      .brand-subtitle { color: var(--muted); font-size: 12px; margin-top: 2px; }
+      .nav { display: flex; align-items: center; gap: 4px; border: 1px solid var(--line); background: var(--surface-soft); padding: 4px; border-radius: 8px; }
+      .nav button { border: 0; min-height: 34px; background: transparent; color: var(--muted); }
+      .nav button.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(16,24,40,.08); }
+      .top-actions { display: flex; align-items: center; gap: 10px; }
+      .user-chip { border: 1px solid var(--line); background: var(--surface-soft); border-radius: 999px; padding: 8px 12px; color: var(--muted); font-size: 12px; }
+      .content { padding: 22px 24px 30px; max-width: 1560px; width: 100%; margin: 0 auto; }
+
+      .view { display: none; }
+      .view.active { display: block; }
+      .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+      .page-head h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
+      .page-head p { margin: 6px 0 0; color: var(--muted); }
+      .last-update { color: var(--muted); font-size: 12px; }
+
+      .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+      .metric-card {
+        background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; padding: 16px; box-shadow: var(--shadow);
+      }
+      .metric-card label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+      .metric-card strong { display: block; font-size: 30px; line-height: 1; }
+      .metric-card span { display: block; color: var(--quiet); font-size: 12px; margin-top: 10px; }
+
+      .workgrid { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 16px; align-items: start; }
+      .panel {
+        background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden;
+      }
+      .panel-head { padding: 16px 18px; border-bottom: 1px solid var(--line-soft); display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+      .panel-title { font-weight: 850; }
+      .panel-subtitle { color: var(--muted); font-size: 12px; margin-top: 3px; }
+      .filters { display: grid; grid-template-columns: minmax(240px, 1fr) 170px 190px 170px; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line-soft); background: #fcfdfe; }
+      .table-wrap { overflow: auto; }
+      table { width: 100%; min-width: 980px; border-collapse: collapse; }
+      th, td { padding: 14px 18px; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: middle; font-size: 13px; }
+      th { color: var(--muted); background: #fcfdfe; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+      tbody tr { cursor: pointer; transition: background .14s ease; }
+      tbody tr:hover, tbody tr.selected { background: #f7fafc; }
+      tbody tr:last-child td { border-bottom: 0; }
+      .client-name { font-weight: 850; }
+      .subtext { color: var(--muted); font-size: 12px; margin-top: 4px; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .badge {
+        display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; border: 1px solid transparent; padding: 5px 9px; font-size: 12px; font-weight: 800; white-space: nowrap;
+      }
+      .badge::before { content: ""; width: 7px; height: 7px; border-radius: 99px; background: currentColor; }
+      .ok { color: var(--green); background: var(--green-soft); border-color: #b8e8ca; }
+      .warn { color: var(--amber); background: var(--amber-soft); border-color: #f3d47b; }
+      .bad { color: var(--red); background: var(--red-soft); border-color: #f5b7ae; }
+      .neutral { color: var(--muted); background: #f2f4f7; border-color: #e4e7ec; }
+      .contract { color: var(--violet); background: var(--violet-soft); border-color: #dccdff; }
+      .mono { font-variant-numeric: tabular-nums; }
+      .progress { width: 134px; }
+      .progress-line { height: 8px; border-radius: 99px; background: #eef2f6; overflow: hidden; margin-top: 7px; }
+      .progress-fill { height: 100%; border-radius: inherit; background: var(--green); }
+      .progress-fill.mid { background: var(--amber); }
+      .progress-fill.high { background: var(--red); }
+
+      .detail { position: sticky; top: 86px; }
+      .detail-body { padding: 18px; }
+      .empty { min-height: 360px; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 24px; }
+      .detail-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+      .detail-title h2 { margin: 0; font-size: 20px; }
+      .quick-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .quick-stat { border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; background: #fcfdfe; }
+      .quick-stat label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+      .quick-stat strong { font-size: 20px; }
+      .section { border-top: 1px solid var(--line-soft); margin-top: 18px; padding-top: 16px; }
+      .section-title { font-weight: 850; margin-bottom: 12px; }
+      .kv { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 14px; font-size: 13px; }
+      .kv div:nth-child(odd) { color: var(--muted); }
+      .kv div:nth-child(even) { text-align: right; font-weight: 700; }
+      .resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .resource { border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12px; background: #fcfdfe; }
+      .resource.allowed { border-color: #b8e8ca; background: var(--green-soft); color: var(--green); }
+      .resource.blocked { border-color: #f5b7ae; background: var(--red-soft); color: var(--red); }
+      .spark { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; align-items: end; height: 54px; }
+      .spark span { display: block; min-height: 4px; border-radius: 4px 4px 0 0; background: var(--brand); opacity: .85; }
+      .license-form { display: grid; gap: 10px; }
+      .license-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .cards-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+      .policy-card { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; padding: 18px; box-shadow: var(--shadow); }
+      .policy-card h3 { margin: 0 0 8px; }
+      .policy-card p { color: var(--muted); margin: 0; line-height: 1.55; font-size: 13px; }
+      .alert-list, .timeline { display: grid; gap: 10px; }
+      .alert-item, .timeline-item { border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; background: var(--surface); }
+      .toast {
+        position: fixed; right: 20px; bottom: 20px; z-index: 50; min-width: 280px; max-width: 430px; background: #17202c; color: #fff;
+        border-radius: 12px; padding: 13px 15px; box-shadow: 0 20px 50px rgba(16,24,40,.25); display: none; font-size: 13px;
+      }
+      .toast.show { display: block; }
+      dialog { border: 0; border-radius: 16px; padding: 0; width: min(520px, calc(100vw - 32px)); box-shadow: 0 26px 80px rgba(16,24,40,.32); }
+      dialog::backdrop { background: rgba(16,24,40,.45); }
+      .modal-head, .modal-body, .modal-actions { padding: 18px; }
+      .modal-head { font-weight: 900; border-bottom: 1px solid var(--line-soft); }
+      .modal-body { color: var(--muted); line-height: 1.55; }
+      .modal-actions { border-top: 1px solid var(--line-soft); display: flex; justify-content: flex-end; gap: 10px; }
+
+      @media (max-width: 1240px) {
+        .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .workgrid { grid-template-columns: 1fr; }
+        .detail { position: static; }
+        .cards-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (max-width: 820px) {
+        .login-screen { grid-template-columns: 1fr; }
+        .login-visual { display: none; }
+        .topbar { align-items: flex-start; flex-direction: column; padding: 16px; }
+        .nav { width: 100%; overflow-x: auto; justify-content: flex-start; }
+        .top-actions { width: 100%; justify-content: space-between; }
+        .content { padding: 16px; }
+        .metrics, .cards-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .filters { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <section id="login-screen" class="login-screen">
+      <div class="login-visual">
+        <div class="login-brand">DRAC Central</div>
+        <div class="login-claim">
+          <h1>Controle claro das instalações em campo.</h1>
+          <p>Acompanhe saúde operacional, comunicação dos servidores, câmeras, alarmes, armazenamento e política comercial sem entrar em cada cliente.</p>
+        </div>
+        <div class="login-points">
+          <div class="login-point"><strong>Operação</strong><span>saúde dos servidores e câmeras</span></div>
+          <div class="login-point"><strong>Contratos</strong><span>política aplicada por instalação</span></div>
+          <div class="login-point"><strong>Alertas</strong><span>prioridade consolidada da frota</span></div>
+        </div>
+      </div>
+      <div class="login-panel">
+        <div class="login-card">
+          <h2>Entrar</h2>
+          <p>Use seu usuário administrativo para acessar a central.</p>
+          <div class="login-form">
+            <div class="field">
+              <label for="login-email">E-mail</label>
+              <input id="login-email" type="email" autocomplete="username" />
+            </div>
+            <div class="field">
+              <label for="login-password">Senha</label>
+              <input id="login-password" type="password" autocomplete="current-password" />
+            </div>
+            <button id="login-button" class="primary">Entrar no painel</button>
+            <div id="login-error" class="login-error"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="app-shell" class="shell hidden">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">D</div>
+          <div>
+            <div class="brand-title">DRAC Central</div>
+            <div class="brand-subtitle">Operação, contratos e saúde da frota</div>
+          </div>
+        </div>
+        <nav class="nav">
+          <button data-view-button="operacao" class="active">Operação</button>
+          <button data-view-button="clientes">Clientes</button>
+          <button data-view-button="instalacao">Instalação</button>
+          <button data-view-button="contratos">Contratos</button>
+          <button data-view-button="alertas">Alertas</button>
+          <button data-view-button="auditoria">Auditoria</button>
+        </nav>
+        <div class="top-actions">
+          <span id="user-chip" class="user-chip">Administrador</span>
+          <button id="refresh" class="primary">Atualizar</button>
+          <button id="logout">Sair</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <section id="operacao-view" class="view active">
+          <div class="page-head">
+            <div>
+              <h1>Visão operacional</h1>
+              <p>Priorize clientes sem comunicação, risco de gravação, alarmes e contratos em atenção.</p>
+            </div>
+            <div id="last-update" class="last-update">-</div>
+          </div>
+          <div class="metrics">
+            <div class="metric-card"><label>Clientes monitorados</label><strong id="m-total">0</strong><span id="m-total-sub">no filtro atual</span></div>
+            <div class="metric-card"><label>Com comunicação</label><strong id="m-online">0</strong><span>últimos minutos</span></div>
+            <div class="metric-card"><label>Exigem atenção</label><strong id="m-attention">0</strong><span>operação ou contrato</span></div>
+            <div class="metric-card"><label>Câmeras ativas</label><strong id="m-cameras">0</strong><span id="m-cameras-sub">total da frota</span></div>
+            <div class="metric-card"><label>Alarmes abertos</label><strong id="m-alarms">0</strong><span>reportados pelos servidores</span></div>
+            <div class="metric-card"><label>Maior uso de disco</label><strong id="m-disk">-%</strong><span>entre todos os clientes</span></div>
+          </div>
+          <div class="workgrid">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <div class="panel-title">Clientes em campo</div>
+                  <div id="list-summary" class="panel-subtitle">-</div>
+                </div>
+                <span id="fleet-status" class="badge ok">Frota estável</span>
+              </div>
+              <div class="filters">
+                <input id="search" type="search" placeholder="Buscar cliente, instalação ou servidor" />
+                <select id="communication-filter">
+                  <option value="all">Comunicação</option>
+                  <option value="ONLINE">Conectado</option>
+                  <option value="OFFLINE">Sem comunicação</option>
+                  <option value="PENDING_INSTALL">Aguardando instalação</option>
+                </select>
+                <select id="contract-filter">
+                  <option value="all">Todos os contratos</option>
+                  <option value="ACTIVE">Regular</option>
+                  <option value="GRACE">Em tolerância</option>
+                  <option value="RESTRICTED">Restrito</option>
+                  <option value="SUSPENDED">Suspenso</option>
+                </select>
+                <select id="sort-filter">
+                  <option value="priority">Maior atenção</option>
+                  <option value="name">Cliente</option>
+                  <option value="recent">Sinal recente</option>
+                  <option value="disk">Uso de disco</option>
+                  <option value="alarms">Alarmes</option>
+                </select>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Cliente</th>
+                      <th>Comunicação</th>
+                      <th>Contrato</th>
+                      <th>Câmeras</th>
+                      <th>Disco</th>
+                      <th>Alarmes</th>
+                      <th>Servidor</th>
+                      <th>Último sinal</th>
+                    </tr>
+                  </thead>
+                  <tbody id="rows"></tbody>
+                </table>
+              </div>
+            </section>
+            <aside id="detail-panel" class="panel detail"></aside>
+          </div>
+        </section>
+
+        <section id="clientes-view" class="view">
+          <div class="page-head">
+            <div>
+              <h1>Clientes e servidores</h1>
+              <p>Inventário técnico recebido automaticamente de cada instalação DRAC.</p>
+            </div>
+          </div>
+          <section class="panel">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Cliente</th><th>Servidor</th><th>Processador</th><th>Memória</th><th>Armazenamento</th><th>Versão</th><th>Último sinal</th></tr>
+                </thead>
+                <tbody id="inventory-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section id="instalacao-view" class="view">
+          <div class="page-head">
+            <div>
+              <h1>Instalação rápida</h1>
+              <p>Cadastre o cliente e gere um comando único para instalar o DRAC no servidor dele.</p>
+            </div>
+          </div>
+          <div class="workgrid">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <div class="panel-title">Dados do cliente</div>
+                  <div class="panel-subtitle">A central cria a instalação, guarda a licença e entrega um comando pronto</div>
+                </div>
+              </div>
+              <div class="detail-body">
+                <div class="license-form">
+                  <div class="field">
+                    <label for="install-customer">Nome do cliente</label>
+                    <input id="install-customer" placeholder="Ex.: Condomínio Alfa" />
+                  </div>
+                  <div class="field">
+                    <label for="install-id">Código da instalação</label>
+                    <input id="install-id" placeholder="Ex.: condominio-alfa-001" />
+                  </div>
+                  <div class="field">
+                    <label for="install-server">IP ou domínio do servidor do cliente</label>
+                    <input id="install-server" placeholder="Ex.: 192.168.1.10" />
+                  </div>
+                  <div class="field">
+                    <label for="install-license">Chave do cliente</label>
+                    <input id="install-license" readonly placeholder="Gerada pela central" />
+                  </div>
+                  <div class="field">
+                    <label for="install-notes">Observação interna</label>
+                    <textarea id="install-notes" placeholder="Opcional: técnico responsável, endereço, observações da implantação"></textarea>
+                  </div>
+                  <div class="license-actions">
+                    <button id="generate-installation">Gerar instalação oficial</button>
+                    <button id="copy-install" class="primary">Copiar comando</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <aside class="panel detail">
+              <div class="panel-head">
+                <div>
+                  <div class="panel-title">Comando oficial</div>
+                  <div class="panel-subtitle">Execute no terminal do servidor Linux do cliente</div>
+                </div>
+              </div>
+              <div class="detail-body">
+                <textarea id="install-command" readonly style="min-height:260px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px"></textarea>
+                <div id="install-status" class="subtext" style="margin-top:10px">Preencha os dados, gere a instalação e copie o comando.</div>
+                <div class="section">
+                  <div class="section-title">Depois da execução</div>
+                  <div class="kv">
+                    <div>Painel local</div><div id="install-local-url">-</div>
+                    <div>Central</div><div id="install-central-url">-</div>
+                    <div>Tempo para aparecer</div><div>até 60s</div>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="contratos-view" class="view">
+          <div class="page-head">
+            <div>
+              <h1>Política de contratos</h1>
+              <p>Estados comerciais com impacto operacional previsível e sem mensagens constrangedoras ao operador final.</p>
+            </div>
+          </div>
+          <div class="cards-grid">
+            <div class="policy-card"><h3>Regular</h3><p>Todos os recursos liberados. Operação normal.</p></div>
+            <div class="policy-card"><h3>Em tolerância</h3><p>Usado para pendência administrativa sem corte de operação.</p></div>
+            <div class="policy-card"><h3>Restrito</h3><p>Bloqueia expansão e IA avançada, mantendo ao vivo, gravação e reprodução.</p></div>
+            <div class="policy-card"><h3>Suspenso</h3><p>Bloqueia ao vivo, novas gravações e IA. Mantém acesso administrativo e evidências.</p></div>
+          </div>
+          <section class="panel" style="margin-top:16px">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">Contrato selecionado</div>
+                <div class="panel-subtitle">Selecione um cliente na operação para alterar a política</div>
+              </div>
+            </div>
+            <div id="contract-board" class="detail-body"></div>
+          </section>
+        </section>
+
+        <section id="alertas-view" class="view">
+          <div class="page-head">
+            <div>
+              <h1>Alertas da frota</h1>
+              <p>Fila consolidada de atenção operacional e comercial.</p>
+            </div>
+          </div>
+          <section class="panel">
+            <div id="alerts-board" class="detail-body"></div>
+          </section>
+        </section>
+
+        <section id="auditoria-view" class="view">
+          <div class="page-head">
+            <div>
+              <h1>Auditoria</h1>
+              <p>Registro das ações administrativas e tentativas de acesso da central.</p>
+            </div>
+          </div>
+          <section class="panel">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Data</th><th>Ação</th><th>Usuário</th><th>Resultado</th><th>Instalação</th><th>Origem</th></tr>
+                </thead>
+                <tbody id="audit-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </main>
+    </section>
+
+    <dialog id="confirm-dialog">
+      <div id="confirm-title" class="modal-head">Confirmar alteração</div>
+      <div id="confirm-copy" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="confirm-cancel">Cancelar</button>
+        <button id="confirm-apply" class="danger">Aplicar</button>
+      </div>
+    </dialog>
+    <div id="toast" class="toast"></div>
+
+    <script>
+      const state = {
+        installations: [],
+        selectedId: localStorage.getItem('drac-central-selected') || '',
+        view: localStorage.getItem('drac-central-view') || 'operacao',
+        user: null,
+        pendingContract: null,
+        auditEvents: [],
+        provision: null,
+      };
+      if (!['operacao', 'clientes', 'instalacao', 'contratos', 'alertas', 'auditoria'].includes(state.view)) state.view = 'operacao';
+
+      const els = {
+        loginScreen: document.querySelector('#login-screen'),
+        appShell: document.querySelector('#app-shell'),
+        email: document.querySelector('#login-email'),
+        password: document.querySelector('#login-password'),
+        loginButton: document.querySelector('#login-button'),
+        loginError: document.querySelector('#login-error'),
+        userChip: document.querySelector('#user-chip'),
+        search: document.querySelector('#search'),
+        communication: document.querySelector('#communication-filter'),
+        contract: document.querySelector('#contract-filter'),
+        sort: document.querySelector('#sort-filter'),
+        rows: document.querySelector('#rows'),
+        detail: document.querySelector('#detail-panel'),
+        inventoryRows: document.querySelector('#inventory-rows'),
+        contractBoard: document.querySelector('#contract-board'),
+        alertsBoard: document.querySelector('#alerts-board'),
+        auditRows: document.querySelector('#audit-rows'),
+        installCustomer: document.querySelector('#install-customer'),
+        installId: document.querySelector('#install-id'),
+        installServer: document.querySelector('#install-server'),
+        installLicense: document.querySelector('#install-license'),
+        installNotes: document.querySelector('#install-notes'),
+        installCommand: document.querySelector('#install-command'),
+        toast: document.querySelector('#toast'),
+        dialog: document.querySelector('#confirm-dialog'),
+      };
+      els.email.value = localStorage.getItem('drac-central-email') || 'admin@drac.local';
+
+      const fmt = new Intl.NumberFormat('pt-BR');
+      const dtf = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+
+      const contractLabels = {
+        ACTIVE: 'Regular',
+        GRACE: 'Em tolerância',
+        RESTRICTED: 'Restrito',
+        SUSPENDED: 'Suspenso',
+      };
+      const contractClasses = {
+        ACTIVE: 'ok',
+        GRACE: 'warn',
+        RESTRICTED: 'warn',
+        SUSPENDED: 'bad',
+      };
+      const resources = {
+        localLive: 'Ao vivo',
+        localRecording: 'Gravação',
+        localPlayback: 'Reprodução',
+        addCameras: 'Cadastrar câmeras',
+        aiAdvanced: 'IA avançada',
+        exports: 'Exportações',
+        adminAccess: 'Administração',
+        cloudSupport: 'Suporte central',
+        updates: 'Atualizações',
+      };
+      const platformLabels = {
+        linux: 'Linux',
+        win32: 'Windows',
+        darwin: 'macOS',
+        freebsd: 'FreeBSD',
+      };
+      const alertCodeLabels = {
+        recording_disabled_all: 'Gravação desativada',
+        recording_storage_capacity_insufficient: 'Storage insuficiente',
+        recording_storage_capacity_attention: 'Storage em atenção',
+        recording_without_last_segment: 'Gravação sem segmento',
+        disk_usage_high: 'Uso de disco alto',
+        disk_usage_attention: 'Uso de disco em atenção',
+        cameras_unavailable: 'Câmeras indisponíveis',
+        no_online_cameras: 'Nenhuma câmera online',
+      };
+      const auditLabels = {
+        'auth.login_success': 'Login realizado',
+        'auth.login_failed': 'Falha de login',
+        'auth.login_blocked': 'Login bloqueado',
+        'auth.logout': 'Saída do painel',
+        'agent.heartbeat_denied': 'Heartbeat recusado',
+        'installation.license_changed': 'Contrato alterado',
+        'installation.provision_created': 'Instalação gerada',
+        'installation.provision_regenerated': 'Instalação regerada',
+        'installation.provision_deleted': 'Instalação cancelada',
+        'installation.installer_downloaded': 'Instalador baixado',
+        'installation.installer_denied': 'Instalador recusado',
+      };
+      const auditResultLabels = {
+        accepted: 'concluído',
+        denied: 'negado',
+        blocked: 'bloqueado',
+      };
+
+      function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[char]);
+      }
+      function slugify(value) {
+        return String(value || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .replace(/-+/g, '-');
+      }
+      function number(value, fallback = 0) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+      }
+      function metric(item, key, fallback = 0) {
+        const m = item.metrics || {};
+        if (m[key] !== undefined && m[key] !== null) return m[key];
+        if (key === 'cameraTotal') return m.cameras?.total ?? fallback;
+        if (key === 'cameraOnline') return m.cameras?.online ?? fallback;
+        if (key === 'cameraOffline') return m.cameras?.offline ?? fallback;
+        if (key === 'cameraError') return m.cameras?.error ?? fallback;
+        if (key === 'diskUsagePercent') return m.disk?.usagePercent ?? fallback;
+        return fallback;
+      }
+      function bytes(value) {
+        let size = number(value, 0);
+        if (!size) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let unit = 0;
+        while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+        return `${size.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+      }
+      function timeAgo(seconds) {
+        if (seconds == null) return '-';
+        if (seconds < 60) return `${seconds}s`;
+        if (seconds < 3600) return `${Math.round(seconds / 60)}min`;
+        if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
+        return `${Math.round(seconds / 86400)}d`;
+      }
+      function showToast(message) {
+        els.toast.textContent = message;
+        els.toast.classList.add('show');
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => els.toast.classList.remove('show'), 3200);
+      }
+      function setAuthenticated(user) {
+        state.user = user;
+        els.loginScreen.classList.toggle('hidden', Boolean(user));
+        els.appShell.classList.toggle('hidden', !user);
+        els.userChip.textContent = user ? user.email : 'Não autenticado';
+      }
+      function selectedItem() {
+        return state.installations.find((item) => item.id === state.selectedId) || state.installations[0] || null;
+      }
+      function communicationLabel(item) {
+        if (item.status === 'PENDING_INSTALL') return 'Aguardando instalação';
+        return item.status === 'ONLINE' ? 'Conectado' : 'Sem comunicação';
+      }
+      function platformLabel(value) {
+        const key = String(value || '').toLowerCase();
+        return platformLabels[key] || value || '-';
+      }
+      function alertTitle(alert) {
+        return alertCodeLabels[alert.code] || alert.message || alert.level || 'Alerta operacional';
+      }
+      function alertMessage(alert) {
+        if (alert.message) return alert.message;
+        if (alert.code === 'disk_usage_high') return 'O armazenamento está acima do limite recomendado.';
+        if (alert.code === 'cameras_unavailable') return 'Uma ou mais câmeras estão sem comunicação.';
+        return 'A instalação reportou uma condição que precisa de análise.';
+      }
+      function auditLabel(type) {
+        return auditLabels[type] || type || 'Evento';
+      }
+      function auditResultLabel(result) {
+        return auditResultLabels[result] || result || '-';
+      }
+      function restrictionMap(status, item = null) {
+        const defaults = {
+          localLive: status !== 'SUSPENDED',
+          localRecording: status !== 'SUSPENDED',
+          localPlayback: true,
+          addCameras: status !== 'RESTRICTED' && status !== 'SUSPENDED',
+          aiAdvanced: status === 'ACTIVE' || status === 'GRACE',
+          exports: true,
+        };
+        return { ...defaults, ...(item?.restrictions || {}) };
+      }
+      function readinessStatus(item) {
+        return item.metrics?.productionReadiness || item.metrics?.status || 'unknown';
+      }
+      function readinessLabel(item) {
+        const status = readinessStatus(item);
+        if (status === 'ready' || status === 'ok') return 'Pronto';
+        if (status === 'blocked') return 'Bloqueado';
+        if (status === 'attention') return 'Atenção';
+        return 'Sem leitura';
+      }
+      function readinessClass(item) {
+        const status = readinessStatus(item);
+        if (status === 'ready' || status === 'ok') return 'ok';
+        if (status === 'blocked') return 'bad';
+        if (status === 'attention') return 'warn';
+        return 'neutral';
+      }
+      function riskScore(item) {
+        let score = 0;
+        if (item.status !== 'ONLINE') score += 100;
+        if (item.status === 'PENDING_INSTALL') score -= 45;
+        if (readinessStatus(item) === 'blocked') score += 80;
+        if (readinessStatus(item) === 'attention') score += 30;
+        if (item.licenseStatus === 'SUSPENDED') score += 90;
+        if (item.licenseStatus === 'RESTRICTED') score += 45;
+        if (number(metric(item, 'cameraOffline', 0)) || number(metric(item, 'cameraError', 0))) score += 35;
+        if (number(metric(item, 'diskUsagePercent', 0)) >= 85) score += 30;
+        if (number(metric(item, 'openAlarms', 0)) > 0) score += 10;
+        return score;
+      }
+      function filteredItems() {
+        const query = els.search.value.trim().toLowerCase();
+        const items = state.installations.filter((item) => {
+          if (els.communication.value !== 'all' && item.status !== els.communication.value) return false;
+          if (els.contract.value !== 'all' && item.licenseStatus !== els.contract.value) return false;
+          if (!query) return true;
+          return [item.id, item.name, item.customerName, item.server?.hostname, item.version].join(' ').toLowerCase().includes(query);
+        });
+        return items.sort((a, b) => {
+          if (els.sort.value === 'name') return String(a.customerName || a.id).localeCompare(String(b.customerName || b.id));
+          if (els.sort.value === 'recent') return number(a.ageSeconds, 999999) - number(b.ageSeconds, 999999);
+          if (els.sort.value === 'disk') return number(metric(b, 'diskUsagePercent', 0)) - number(metric(a, 'diskUsagePercent', 0));
+          if (els.sort.value === 'alarms') return number(metric(b, 'openAlarms', 0)) - number(metric(a, 'openAlarms', 0));
+          return riskScore(b) - riskScore(a);
+        });
+      }
+      function progress(value) {
+        const pct = Math.max(0, Math.min(100, number(value, 0)));
+        const cls = pct >= 90 ? 'high' : pct >= 75 ? 'mid' : '';
+        return `<div class="progress"><div class="mono">${pct}%</div><div class="progress-line"><div class="progress-fill ${cls}" style="width:${pct}%"></div></div></div>`;
+      }
+      function renderSpark(item) {
+        const history = (item.heartbeatHistory || []).slice(-28);
+        if (!history.length) return '<div class="subtext">Sem histórico suficiente.</div>';
+        const max = Math.max(1, ...history.map(h => number(h.cameraTotal, 0)));
+        return `<div class="spark">${history.map(h => {
+          const online = number(h.cameraOnline, 0);
+          const hgt = Math.max(5, Math.round((online / max) * 54));
+          return `<span style="height:${hgt}px" title="${escapeHtml(`${h.at} - ${online}/${h.cameraTotal || 0}`)}"></span>`;
+        }).join('')}</div>`;
+      }
+      function renderResources(status, item = null) {
+        const map = restrictionMap(status, item);
+        return `<div class="resource-grid">${Object.entries(map).map(([key, allowed]) => `
+          <div class="resource ${allowed ? 'allowed' : 'blocked'}">${resources[key]}<br><strong>${allowed ? 'liberado' : 'bloqueado'}</strong></div>
+        `).join('')}</div>`;
+      }
+      function renderMetrics(items) {
+        const online = state.installations.filter(i => i.status === 'ONLINE').length;
+        const attention = state.installations.filter(i => riskScore(i) > 0).length;
+        const camOnline = state.installations.reduce((sum, i) => sum + number(metric(i, 'cameraOnline', 0)), 0);
+        const camTotal = state.installations.reduce((sum, i) => sum + number(metric(i, 'cameraTotal', 0)), 0);
+        const alarms = state.installations.reduce((sum, i) => sum + number(metric(i, 'openAlarms', 0)), 0);
+        const maxDisk = state.installations.reduce((max, i) => Math.max(max, number(metric(i, 'diskUsagePercent', 0))), 0);
+        document.querySelector('#m-total').textContent = fmt.format(state.installations.length);
+        document.querySelector('#m-total-sub').textContent = `${fmt.format(items.length)} no filtro atual`;
+        document.querySelector('#m-online').textContent = fmt.format(online);
+        document.querySelector('#m-attention').textContent = fmt.format(attention);
+        document.querySelector('#m-cameras').textContent = fmt.format(camOnline);
+        document.querySelector('#m-cameras-sub').textContent = `${fmt.format(camTotal)} cadastradas`;
+        document.querySelector('#m-alarms').textContent = fmt.format(alarms);
+        document.querySelector('#m-disk').textContent = state.installations.length ? `${maxDisk}%` : '-%';
+        document.querySelector('#list-summary').textContent = `${fmt.format(items.length)} cliente(s) exibido(s)`;
+        const fleet = document.querySelector('#fleet-status');
+        fleet.textContent = attention ? `${attention} em atenção` : 'Frota estável';
+        fleet.className = `badge ${attention ? 'warn' : 'ok'}`;
+      }
+      function renderRows(items) {
+        if (!items.length) {
+          els.rows.innerHTML = '<tr><td colspan="8">Nenhum cliente encontrado.</td></tr>';
+          return;
+        }
+        els.rows.innerHTML = items.map((item) => {
+          const camOnline = number(metric(item, 'cameraOnline', 0));
+          const camTotal = number(metric(item, 'cameraTotal', 0));
+          const camIssue = number(metric(item, 'cameraOffline', 0)) + number(metric(item, 'cameraError', 0));
+          const disk = metric(item, 'diskUsagePercent', null);
+          return `
+            <tr data-id="${escapeHtml(item.id)}" class="${item.id === state.selectedId ? 'selected' : ''}">
+              <td><div class="client-name">${escapeHtml(item.customerName || item.name || item.id)}</div><div class="subtext">${escapeHtml(item.id)}</div></td>
+              <td><span class="badge ${item.status === 'ONLINE' ? 'ok' : item.status === 'PENDING_INSTALL' ? 'neutral' : 'bad'}">${communicationLabel(item)}</span><div class="subtext">${item.status === 'PENDING_INSTALL' ? 'sem heartbeat ainda' : timeAgo(item.ageSeconds)}</div></td>
+              <td><span class="badge ${contractClasses[item.licenseStatus] || 'ok'}">${contractLabels[item.licenseStatus] || 'Regular'}</span></td>
+              <td><span class="mono">${camOnline}/${camTotal}</span><div class="subtext">${camIssue ? `${camIssue} em atenção` : 'sem falhas'}</div></td>
+              <td>${disk == null ? '-' : progress(disk)}</td>
+              <td><span class="mono">${fmt.format(number(metric(item, 'openAlarms', 0)))}</span></td>
+              <td>${escapeHtml(item.server?.hostname || '-')}<div class="subtext">${escapeHtml(platformLabel(item.server?.platform) || item.version || '')}</div></td>
+              <td>${item.lastHeartbeatAt ? dtf.format(new Date(item.lastHeartbeatAt)) : '-'}<div class="subtext">${timeAgo(item.ageSeconds)}</div></td>
+            </tr>`;
+        }).join('');
+        els.rows.querySelectorAll('tr[data-id]').forEach(row => row.addEventListener('click', () => {
+          state.selectedId = row.dataset.id;
+          localStorage.setItem('drac-central-selected', state.selectedId);
+          render();
+        }));
+      }
+      function renderDetail() {
+        const item = selectedItem();
+        if (!item) {
+          els.detail.innerHTML = '<div class="empty">Selecione um cliente para ver detalhes.</div>';
+          return;
+        }
+        state.selectedId = item.id;
+        const mem = item.server?.totalMemoryBytes ? Math.round(((item.server.totalMemoryBytes - item.server.freeMemoryBytes) / item.server.totalMemoryBytes) * 100) : null;
+        els.detail.innerHTML = `
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">${escapeHtml(item.customerName || item.id)}</div>
+              <div class="panel-subtitle">${escapeHtml(item.id)}</div>
+            </div>
+            <span class="badge ${item.status === 'ONLINE' ? 'ok' : item.status === 'PENDING_INSTALL' ? 'neutral' : 'bad'}">${communicationLabel(item)}</span>
+          </div>
+          <div class="detail-body">
+            ${item.policyPending ? '<div class="alert-item"><span class="badge warn">Aguardando sincronização</span><div style="margin-top:8px">A política foi alterada na central e será aplicada quando a instalação enviar o próximo sinal.</div></div>' : ''}
+            <div class="quick-stats">
+              <div class="quick-stat"><label>Câmeras</label><strong>${metric(item, 'cameraOnline', 0)}/${metric(item, 'cameraTotal', 0)}</strong></div>
+              <div class="quick-stat"><label>Produção</label><strong>${readinessLabel(item)}</strong></div>
+              <div class="quick-stat"><label>Disco</label><strong>${metric(item, 'diskUsagePercent', '-')}%</strong></div>
+              <div class="quick-stat"><label>Alarmes</label><strong>${fmt.format(number(metric(item, 'openAlarms', 0)))}</strong></div>
+            </div>
+            <div class="section">
+              <div class="section-title">Estado operacional</div>
+              <div class="kv">
+                <div>Produção</div><div><span class="badge ${readinessClass(item)}">${readinessLabel(item)}</span></div>
+                <div>Comunicação</div><div>${communicationLabel(item)}</div>
+                <div>Contrato</div><div>${contractLabels[item.licenseStatus] || 'Regular'}</div>
+                <div>Gravações</div><div>${fmt.format(number(metric(item, 'recordingCount', 0)))} segmentos</div>
+                <div>Gravação ativa</div><div>${fmt.format(number(metric(item, 'activeRecordingCount', 0)))}</div>
+              </div>
+            </div>
+            <div class="section">
+              <div class="section-title">Histórico recente</div>
+              ${renderSpark(item)}
+            </div>
+            <div class="section">
+              <div class="section-title">Servidor</div>
+              <div class="kv">
+                <div>Nome</div><div>${escapeHtml(item.server?.hostname || '-')}</div>
+                <div>Sistema</div><div>${escapeHtml(platformLabel(item.server?.platform))}</div>
+                <div>Processador</div><div>${item.server?.cpuCount ?? '-'} núcleos</div>
+                <div>Memória</div><div>${mem == null ? '-' : `${mem}% em uso`}</div>
+                <div>Armazenamento</div><div>${item.storage?.disk ? `${bytes(item.storage.disk.usedBytes)} / ${bytes(item.storage.disk.totalBytes)}` : '-'}</div>
+              </div>
+            </div>
+            <div class="section">
+              <div class="section-title">Recursos permitidos</div>
+              ${renderResources(item.licenseStatus || 'ACTIVE', item)}
+            </div>
+            <div class="section">
+              <div class="section-title">Alterar contrato</div>
+              <div class="license-form">
+                <select id="license-select">
+                  ${Object.entries(contractLabels).map(([value, label]) => `<option value="${value}" ${value === item.licenseStatus ? 'selected' : ''}>${label}</option>`).join('')}
+                </select>
+                <textarea id="license-message" placeholder="Mensagem administrativa opcional">${escapeHtml(item.licenseMessage || '')}</textarea>
+                <div class="license-actions">
+                  <button id="save-license" class="primary">Salvar política</button>
+                  <button id="suspend-license" class="danger">Suspender</button>
+                </div>
+              </div>
+            </div>
+            ${item.status === 'PENDING_INSTALL' ? `
+              <div class="section">
+                <div class="section-title">Provisionamento</div>
+                <button id="delete-pending-install" class="danger">Cancelar instalação pendente</button>
+              </div>
+            ` : ''}
+          </div>`;
+        els.detail.querySelector('#save-license').addEventListener('click', () => requestContractChange(item.id, els.detail.querySelector('#license-select').value, els.detail.querySelector('#license-message').value.trim()));
+        els.detail.querySelector('#suspend-license').addEventListener('click', () => requestContractChange(item.id, 'SUSPENDED', els.detail.querySelector('#license-message').value.trim() || 'Suspensão administrativa.'));
+        els.detail.querySelector('#delete-pending-install')?.addEventListener('click', () => deletePendingInstallation(item.id));
+      }
+      function renderInventory() {
+        const items = filteredItems();
+        els.inventoryRows.innerHTML = items.length ? items.map(item => {
+          const mem = item.server?.totalMemoryBytes ? Math.round(((item.server.totalMemoryBytes - item.server.freeMemoryBytes) / item.server.totalMemoryBytes) * 100) : null;
+          return `<tr data-id="${escapeHtml(item.id)}">
+            <td><div class="client-name">${escapeHtml(item.customerName || item.id)}</div><div class="subtext">${escapeHtml(item.id)}</div></td>
+            <td>${escapeHtml(item.server?.hostname || '-')}<div class="subtext">${escapeHtml(platformLabel(item.server?.platform))}</div></td>
+            <td>${item.server?.cpuCount ?? '-'} núcleos</td>
+            <td>${mem == null ? '-' : progress(mem)}</td>
+            <td>${progress(metric(item, 'diskUsagePercent', 0))}</td>
+            <td>${escapeHtml(item.version || '-')}</td>
+            <td>${item.lastHeartbeatAt ? dtf.format(new Date(item.lastHeartbeatAt)) : '-'}</td>
+          </tr>`;
+        }).join('') : '<tr><td colspan="7">Nenhum cliente encontrado.</td></tr>';
+      }
+      function renderContractBoard() {
+        const item = selectedItem();
+        if (!item) {
+          els.contractBoard.innerHTML = '<div class="empty">Selecione um cliente na operação.</div>';
+          return;
+        }
+        els.contractBoard.innerHTML = `
+          <div class="detail-title">
+            <div>
+              <h2>${escapeHtml(item.customerName || item.id)}</h2>
+              <div class="subtext">${escapeHtml(item.id)}${item.policyPending ? ' · aguardando sincronização' : ''}</div>
+            </div>
+            <span class="badge ${contractClasses[item.licenseStatus] || 'ok'}">${contractLabels[item.licenseStatus] || 'Regular'}</span>
+          </div>
+          ${renderResources(item.licenseStatus || 'ACTIVE', item)}
+          <div class="section">
+            <div class="section-title">Histórico de contrato</div>
+            <div class="timeline">
+              ${(item.licenseHistory || []).slice().reverse().slice(0, 10).map(event => `
+                <div class="timeline-item"><strong>${contractLabels[event.from] || event.from} → ${contractLabels[event.to] || event.to}</strong><div class="subtext">${event.at ? dtf.format(new Date(event.at)) : '-'}${event.by ? ` por ${escapeHtml(event.by)}` : ''}</div><div>${escapeHtml(event.message || 'Sem mensagem.')}</div></div>
+              `).join('') || '<div class="subtext">Nenhuma alteração registrada.</div>'}
+            </div>
+          </div>`;
+      }
+      function collectAlerts() {
+        const alerts = [];
+        for (const item of state.installations) {
+          if (item.status === 'PENDING_INSTALL') alerts.push({ title: 'Instalação aguardando execução', message: `${item.customerName || item.id} foi provisionado, mas ainda não enviou heartbeat.`, item, tone: 'neutral' });
+          else if (item.status !== 'ONLINE') alerts.push({ title: 'Cliente sem comunicação', message: `${item.customerName || item.id} não enviou sinal recente.`, item, tone: 'bad' });
+          if (['RESTRICTED', 'SUSPENDED'].includes(item.licenseStatus)) alerts.push({ title: `Contrato ${contractLabels[item.licenseStatus]}`, message: item.licenseMessage || 'Política comercial exige atenção.', item, tone: item.licenseStatus === 'SUSPENDED' ? 'bad' : 'warn' });
+          if (number(metric(item, 'diskUsagePercent', 0)) >= 85) alerts.push({ title: 'Armazenamento alto', message: `${metric(item, 'diskUsagePercent', 0)}% de uso em ${item.customerName || item.id}.`, item, tone: 'warn' });
+          const camIssue = number(metric(item, 'cameraOffline', 0)) + number(metric(item, 'cameraError', 0));
+          if (camIssue) alerts.push({ title: 'Câmeras em atenção', message: `${camIssue} câmera(s) com falha em ${item.customerName || item.id}.`, item, tone: 'warn' });
+          for (const alert of item.alerts || []) alerts.push({ title: alertTitle(alert), message: alertMessage(alert), item, tone: alert.level === 'critical' ? 'bad' : 'warn' });
+        }
+        return alerts;
+      }
+      function renderAlerts() {
+        const alerts = collectAlerts();
+        els.alertsBoard.innerHTML = alerts.length ? `<div class="alert-list">${alerts.map(alert => `
+          <div class="alert-item">
+            <span class="badge ${alert.tone}">${escapeHtml(alert.title)}</span>
+            <div class="subtext">${escapeHtml(alert.item.customerName || alert.item.id)}</div>
+            <div style="margin-top:8px">${escapeHtml(alert.message)}</div>
+          </div>`).join('')}</div>` : '<div class="empty">Nenhum alerta ativo.</div>';
+      }
+      function renderAudit() {
+        const events = state.auditEvents || [];
+        els.auditRows.innerHTML = events.length ? events.map(event => `
+          <tr>
+            <td>${event.at ? dtf.format(new Date(event.at)) : '-'}</td>
+            <td><span class="badge ${event.result === 'denied' || event.result === 'blocked' ? 'bad' : 'neutral'}">${escapeHtml(auditLabel(event.type))}</span></td>
+            <td>${escapeHtml(event.actor || '-')}</td>
+            <td>${escapeHtml(auditResultLabel(event.result))}</td>
+            <td>${escapeHtml(event.installationId || '-')}</td>
+            <td>${escapeHtml(event.ip || '-')}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="6">Nenhum evento registrado.</td></tr>';
+      }
+      function renderInstallCommand() {
+        if (!els.installId.value && els.installCustomer.value) els.installId.value = slugify(els.installCustomer.value);
+        const server = els.installServer.value.trim() || 'IP_DO_SERVIDOR';
+        if (!state.provision) {
+          els.installCommand.value = 'Clique em "Gerar instalação oficial" para criar o comando único do cliente.';
+          els.installLicense.value = '';
+        } else {
+          els.installCommand.value = state.provision.installCommand || '';
+          els.installLicense.value = state.provision.licenseKey || '';
+        }
+        document.querySelector('#install-local-url').textContent = server === 'IP_DO_SERVIDOR' ? '-' : `http://${server}:5173`;
+        document.querySelector('#install-central-url').textContent = state.provision?.centralUrl || window.location.origin;
+      }
+      function resetProvisionIfEditing() {
+        state.provision = null;
+        document.querySelector('#install-status').textContent = 'Dados alterados. Gere a instalação oficial novamente.';
+        renderInstallCommand();
+      }
+      function setView(view) {
+        state.view = view;
+        localStorage.setItem('drac-central-view', view);
+        document.querySelectorAll('[data-view-button]').forEach(button => button.classList.toggle('active', button.dataset.viewButton === view));
+        document.querySelectorAll('.view').forEach(viewNode => viewNode.classList.remove('active'));
+        document.querySelector(`#${view}-view`)?.classList.add('active');
+      }
+      function render() {
+        setView(state.view);
+        const items = filteredItems();
+        renderMetrics(items);
+        renderRows(items);
+        renderDetail();
+        renderInventory();
+        renderContractBoard();
+        renderAlerts();
+        renderAudit();
+        renderInstallCommand();
+      }
+      async function login() {
+        const email = els.email.value.trim();
+        const password = els.password.value;
+        if (!email || !password) {
+          els.loginError.textContent = 'Informe e-mail e senha.';
+          return;
+        }
+        els.loginButton.disabled = true;
+        els.loginButton.textContent = 'Entrando...';
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+          });
+          if (!res.ok) {
+            els.password.value = '';
+            els.loginError.textContent = 'E-mail ou senha inválidos.';
+            return;
+          }
+          const data = await res.json();
+          state.user = data.user;
+          localStorage.setItem('drac-central-email', email);
+          els.password.value = '';
+          setAuthenticated(state.user);
+          await load();
+        } catch {
+          els.loginError.textContent = 'Não foi possível conectar ao servidor central.';
+        } finally {
+          els.loginButton.disabled = false;
+          els.loginButton.textContent = 'Entrar no painel';
+        }
+      }
+      async function load() {
+        try {
+          if (!state.user) {
+            const me = await fetch('/api/auth/me', { credentials: 'include' }).catch(() => null);
+            if (me?.ok) {
+              const data = await me.json();
+              state.user = data.authenticated ? data.user : null;
+            }
+          }
+          if (!state.user) {
+            setAuthenticated(null);
+            return;
+          }
+          setAuthenticated(state.user);
+          const res = await fetch('/api/admin/installations', { credentials: 'include' });
+          if (!res.ok) {
+            state.user = null;
+            state.installations = [];
+            setAuthenticated(null);
+            showToast('Sessão expirada. Entre novamente.');
+            return;
+          }
+          const data = await res.json();
+          state.installations = Array.isArray(data.items) ? data.items : [];
+          if (state.view === 'auditoria') {
+            const auditRes = await fetch('/api/admin/audit', { credentials: 'include' });
+            if (auditRes.ok) {
+              const auditData = await auditRes.json();
+              state.auditEvents = Array.isArray(auditData.items) ? auditData.items : [];
+            }
+          }
+          if (!state.installations.some(item => item.id === state.selectedId)) {
+            state.selectedId = state.installations[0]?.id || '';
+          }
+          localStorage.setItem('drac-central-selected', state.selectedId);
+          document.querySelector('#last-update').textContent = `Atualizado ${new Date().toLocaleTimeString('pt-BR')}`;
+          render();
+        } catch {
+          showToast('Falha ao atualizar a central.');
+          return;
+        }
+      }
+      function requestContractChange(id, status, message) {
+        const item = state.installations.find(entry => entry.id === id);
+        state.pendingContract = { id, status, message };
+        document.querySelector('#confirm-title').textContent = status === 'SUSPENDED' ? 'Suspender cliente' : 'Alterar política';
+        document.querySelector('#confirm-copy').innerHTML = `<strong>${escapeHtml(item?.customerName || id)}</strong><br>A política será alterada para <strong>${contractLabels[status]}</strong>. ${status === 'SUSPENDED' ? 'Ao vivo, novas gravações e IA serão bloqueados após a próxima sincronização.' : 'A nova política será aplicada na próxima sincronização.'}`;
+        document.querySelector('#confirm-apply').className = status === 'SUSPENDED' ? 'danger' : 'primary';
+        document.querySelector('#confirm-dialog').showModal();
+      }
+      async function applyContractChange() {
+        const pending = state.pendingContract;
+        if (!pending) return;
+        const res = await fetch(`/api/admin/installations/${encodeURIComponent(pending.id)}/license`, {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ licenseStatus: pending.status, licenseMessage: pending.message || null }),
+        });
+        if (!res.ok) {
+          showToast('Não foi possível salvar a política.');
+          return;
+        }
+        document.querySelector('#confirm-dialog').close();
+        state.pendingContract = null;
+        await load();
+        showToast('Política atualizada.');
+      }
+      async function generateProvision() {
+        const customerName = els.installCustomer.value.trim();
+        const installationId = els.installId.value.trim() || slugify(customerName);
+        const serverAddress = els.installServer.value.trim();
+        const notes = els.installNotes.value.trim();
+        if (!customerName || !serverAddress) {
+          showToast('Informe cliente e servidor.');
+          return;
+        }
+        document.querySelector('#generate-installation').disabled = true;
+        document.querySelector('#generate-installation').textContent = 'Gerando...';
+        try {
+          const res = await fetch('/api/admin/provision', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ customerName, installationId, serverAddress, notes }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            showToast(data.message || 'Não foi possível gerar a instalação.');
+            return;
+          }
+          state.provision = data;
+          els.installId.value = data.installation?.id || installationId;
+          els.installLicense.value = data.licenseKey || '';
+          document.querySelector('#install-status').textContent = 'Instalação oficial criada. Copie este comando e execute no servidor do cliente.';
+          await load();
+          renderInstallCommand();
+          showToast('Instalação oficial gerada.');
+        } finally {
+          document.querySelector('#generate-installation').disabled = false;
+          document.querySelector('#generate-installation').textContent = 'Gerar instalação oficial';
+        }
+      }
+      async function deletePendingInstallation(id) {
+        if (!confirm('Cancelar esta instalação pendente?')) return;
+        const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          showToast('Não foi possível cancelar a instalação.');
+          return;
+        }
+        if (state.selectedId === id) state.selectedId = '';
+        await load();
+        showToast('Instalação pendente cancelada.');
+      }
+
+      els.loginButton.addEventListener('click', login);
+      [els.email, els.password].forEach(input => input.addEventListener('keydown', event => { if (event.key === 'Enter') login(); }));
+      document.querySelector('#refresh').addEventListener('click', load);
+      document.querySelector('#logout').addEventListener('click', async () => {
+        await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined);
+        state.user = null;
+        state.installations = [];
+        setAuthenticated(null);
+      });
+      document.querySelectorAll('[data-view-button]').forEach(button => button.addEventListener('click', () => {
+        setView(button.dataset.viewButton);
+        if (state.view === 'auditoria') void load();
+        render();
+      }));
+      [els.search, els.communication, els.contract, els.sort].forEach(input => input.addEventListener('input', render));
+      [els.communication, els.contract, els.sort].forEach(input => input.addEventListener('change', render));
+      document.querySelector('#confirm-cancel').addEventListener('click', () => document.querySelector('#confirm-dialog').close());
+      document.querySelector('#confirm-apply').addEventListener('click', applyContractChange);
+      [els.installCustomer, els.installId, els.installServer, els.installNotes].forEach(input => input.addEventListener('input', resetProvisionIfEditing));
+      els.installCustomer.addEventListener('blur', () => {
+        if (!els.installId.value.trim()) els.installId.value = slugify(els.installCustomer.value);
+        renderInstallCommand();
+      });
+      document.querySelector('#generate-installation').addEventListener('click', generateProvision);
+      document.querySelector('#copy-install').addEventListener('click', async () => {
+        renderInstallCommand();
+        if (!state.provision?.installCommand) {
+          showToast('Gere a instalação oficial antes de copiar.');
+          return;
+        }
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(els.installCommand.value);
+          } else {
+            throw new Error('clipboard_unavailable');
+          }
+          showToast('Comando copiado.');
+        } catch {
+          els.installCommand.focus();
+          els.installCommand.select();
+          document.execCommand('copy');
+          showToast('Comando selecionado para cópia.');
+        }
+      });
+
+      setView(state.view);
+      renderInstallCommand();
+      load();
+      setInterval(load, 30000);
+    </script>
+  </body>
+</html>
