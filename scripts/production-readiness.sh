@@ -238,6 +238,45 @@ psql_value() {
   docker exec -e PGPASSWORD="$pass" vms-postgres psql -U "$user" -d "$db" -Atc "$query" 2>/dev/null | head -n 1
 }
 
+check_recording_capacity() {
+  local storage_path="$1"
+  local df_line total_kb retention_days safe_capacity_gb hist_line hist_bytes hist_seconds required_gb source
+
+  df_line="$(df -Pk "$storage_path" 2>/dev/null | awk 'NR==2 {print $2}')"
+  if [ -z "$df_line" ]; then
+    warn "Nao foi possivel calcular capacidade total de storage para gravacao"
+    return
+  fi
+
+  total_kb="$df_line"
+  retention_days="${RECORDING_RETENTION_DAYS:-${RETENTION_DAYS:-7}}"
+  safe_capacity_gb="$(awk -v kb="$total_kb" 'BEGIN { printf "%.1f", (kb * 1024 * 0.80) / 1024 / 1024 / 1024 }')"
+
+  hist_line="$(psql_value 'select coalesce(sum("sizeBytes"),0)::text || '\''|'\'' || coalesce(extract(epoch from (max("startedAt") - min("startedAt"))),0)::text from "Recording";')"
+  IFS='|' read -r hist_bytes hist_seconds <<< "$hist_line"
+
+  if awk -v bytes="${hist_bytes:-0}" -v seconds="${hist_seconds:-0}" 'BEGIN { exit !(bytes > 0 && seconds >= 900) }'; then
+    required_gb="$(awk -v bytes="$hist_bytes" -v seconds="$hist_seconds" -v days="$retention_days" 'BEGIN { printf "%.1f", ((bytes / seconds) * 86400 * days) / 1024 / 1024 / 1024 }')"
+    source="historico real de gravacao"
+  else
+    local bitrate_line known_kbps known_count total_cameras fallback_kbps estimated_kbps
+    bitrate_line="$(psql_value 'select coalesce(sum(coalesce("recordingBitrateKbps",0)),0)::text || '\''|'\'' || count(*) filter (where coalesce("recordingBitrateKbps",0) > 0)::text || '\''|'\'' || count(*)::text from "Camera";')"
+    IFS='|' read -r known_kbps known_count total_cameras <<< "$bitrate_line"
+    fallback_kbps="${RECORDING_CAPACITY_FALLBACK_CAMERA_KBPS:-4096}"
+    estimated_kbps="$(awk -v known="${known_kbps:-0}" -v known_count="${known_count:-0}" -v total="${total_cameras:-0}" -v fallback="$fallback_kbps" 'BEGIN { missing = total - known_count; if (missing < 0) missing = 0; printf "%.0f", known + (missing * fallback) }')"
+    required_gb="$(awk -v kbps="$estimated_kbps" -v days="$retention_days" 'BEGIN { printf "%.1f", ((kbps * 1000 / 8) * 86400 * days) / 1024 / 1024 / 1024 }')"
+    source="bitrate configurado/fallback ${fallback_kbps}kbps"
+  fi
+
+  if awk -v required="$required_gb" -v safe="$safe_capacity_gb" 'BEGIN { exit !(required > safe) }'; then
+    fail "Storage insuficiente para retencao de ${retention_days}d: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+  elif awk -v required="$required_gb" -v safe="$safe_capacity_gb" 'BEGIN { exit !(required > safe * 0.70) }'; then
+    warn "Storage apertado para retencao de ${retention_days}d: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+  else
+    ok "Storage dimensionado para retencao de ${retention_days}d: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+  fi
+}
+
 check_camera_profiles() {
   local total online live_webrtc live_subtype0 live_720p recording_enabled recording_subtype0 recording_h265 ai_enabled analytics_subtype_set
   total="$(psql_value 'select count(*) from "Camera";')"
@@ -378,6 +417,8 @@ check_storage_and_backups() {
   else
     fail "RECORDING_DISK_GUARD_ENABLED=false; producao fica sem protecao contra disco cheio"
   fi
+
+  check_recording_capacity "$storage_path"
 
   local backup_dir="$ROOT_DIR/infra/backups/postgres"
   local latest=""

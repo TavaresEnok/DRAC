@@ -192,11 +192,25 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
       String(process.env.MEDIAMTX_HLS_ALLOW_ORIGIN ?? '*') !== '*' &&
       String(process.env.MEDIAMTX_WEBRTC_ALLOW_ORIGIN ?? '*') !== '*';
     const recordingRuntime = this.getRecordingRuntimeSummary();
+    const recordingCapacity = await this.getRecordingCapacityEstimate(disk);
     if (cameraCounts.total > 0 && cameraOperational.recordingEnabled === 0) {
       alerts.push({
         level: 'warning',
         code: 'recording_disabled_all',
         message: 'Nenhuma camera esta com gravacao continua habilitada.',
+      });
+    }
+    if (recordingCapacity.status === 'blocked') {
+      alerts.push({
+        level: 'critical',
+        code: 'recording_storage_capacity_insufficient',
+        message: `Storage insuficiente para ${recordingCapacity.retentionDays}d de retencao: estimado ${recordingCapacity.estimatedRequiredGb}GB, capacidade segura ${recordingCapacity.safeCapacityGb}GB.`,
+      });
+    } else if (recordingCapacity.status === 'attention') {
+      alerts.push({
+        level: 'warning',
+        code: 'recording_storage_capacity_attention',
+        message: `Storage apertado para ${recordingCapacity.retentionDays}d de retencao: estimado ${recordingCapacity.estimatedRequiredGb}GB, capacidade segura ${recordingCapacity.safeCapacityGb}GB.`,
       });
     }
     const appReadinessStatus = alerts.some((alert) => alert.level === 'critical')
@@ -224,6 +238,7 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         lastRecordingStartedAt: recordings._max.startedAt,
         recentRecordingCountLastHour: recentRecordings,
         activeRecordingCount: recordingRuntime?.activeCount ?? activeRecordings,
+        recordingCapacityStatus: recordingCapacity.status,
         activeUsers,
         diskUsagePercent: disk?.usagePercent ?? null,
         alerts,
@@ -258,6 +273,7 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
           recentCountLastHour: recentRecordings,
           lastStartedAt: recordings._max.startedAt,
           runtime: recordingRuntime,
+          capacity: recordingCapacity,
         },
         ai: {
           autoStartEnabled: String(process.env.AI_AUTO_START_ENABLED ?? 'true') !== 'false',
@@ -351,6 +367,59 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         return [key, row._count.id];
       }),
     );
+  }
+
+  private async getRecordingCapacityEstimate(disk: { totalBytes: number | null }) {
+    const retentionDays = this.getPositiveInt(process.env.RECORDING_RETENTION_DAYS ?? process.env.RETENTION_DAYS, 7);
+    const safeCapacityBytes = disk.totalBytes == null ? null : disk.totalBytes * 0.8;
+    let estimatedRequiredBytes = 0;
+    let source = 'indisponivel';
+
+    const recordingStats = await this.prisma.recording.aggregate({
+      _sum: { sizeBytes: true },
+      _min: { startedAt: true },
+      _max: { startedAt: true },
+    });
+    const totalRecordingBytes = Number(recordingStats._sum.sizeBytes ?? 0);
+    const minStartedAt = recordingStats._min.startedAt?.getTime() ?? null;
+    const maxStartedAt = recordingStats._max.startedAt?.getTime() ?? null;
+    const historySeconds = minStartedAt != null && maxStartedAt != null ? Math.max((maxStartedAt - minStartedAt) / 1000, 0) : 0;
+
+    if (totalRecordingBytes > 0 && historySeconds >= 900) {
+      estimatedRequiredBytes = (totalRecordingBytes / historySeconds) * 86400 * retentionDays;
+      source = 'historical_recording_rate';
+    } else {
+      const [cameraCount, knownBitrateCount, bitrate] = await Promise.all([
+        this.prisma.camera.count(),
+        this.prisma.camera.count({ where: { recordingBitrateKbps: { gt: 0 } } }),
+        this.prisma.camera.aggregate({ _sum: { recordingBitrateKbps: true } }),
+      ]);
+      const fallbackKbps = this.getPositiveInt(process.env.RECORDING_CAPACITY_FALLBACK_CAMERA_KBPS, 4096);
+      const knownKbps = Number(bitrate._sum.recordingBitrateKbps ?? 0);
+      const missingCount = Math.max(cameraCount - knownBitrateCount, 0);
+      const estimatedKbps = knownKbps + missingCount * fallbackKbps;
+      estimatedRequiredBytes = (estimatedKbps * 1000 * 86400 * retentionDays) / 8;
+      source = `configured_bitrate_with_${fallbackKbps}kbps_fallback`;
+    }
+
+    const status =
+      safeCapacityBytes == null || safeCapacityBytes <= 0
+        ? 'unknown'
+        : estimatedRequiredBytes > safeCapacityBytes
+          ? 'blocked'
+          : estimatedRequiredBytes > safeCapacityBytes * 0.7
+            ? 'attention'
+            : 'ready';
+
+    return {
+      status,
+      source,
+      retentionDays,
+      estimatedRequiredBytes: Math.round(estimatedRequiredBytes),
+      estimatedRequiredGb: Math.round((estimatedRequiredBytes / 1024 / 1024 / 1024) * 10) / 10,
+      safeCapacityBytes: safeCapacityBytes == null ? null : Math.round(safeCapacityBytes),
+      safeCapacityGb: safeCapacityBytes == null ? null : Math.round((safeCapacityBytes / 1024 / 1024 / 1024) * 10) / 10,
+    };
   }
 
   private async getDiskStats(path: string) {
