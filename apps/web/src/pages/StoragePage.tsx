@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { HardDrive, ShieldAlert, Thermometer, Server, RefreshCw, FileText, Cpu, MemoryStick, Activity } from 'lucide-react';
+import { HardDrive, ShieldAlert, Thermometer, Server, RefreshCw, FileText, Cpu, MemoryStick, Activity, Trash2 } from 'lucide-react';
 import { useVmsDataStore } from '../store/vmsDataStore';
 import { useAuthStore } from '../store/authStore';
 import { getApiBaseUrl } from '../lib/api-base';
@@ -26,9 +26,12 @@ export default function MonitoramentoPage() {
   const accessToken = useAuthStore((state) => state.accessToken);
   const cameras = useVmsDataStore((state) => state.cameras);
   const system = useVmsDataStore((state) => state.system);
+  const load = useVmsDataStore((state) => state.load);
   const [policyDays, setPolicyDays] = useState(90);
   const [fromDate, setFromDate] = useState(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
   const [toDate, setToDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const [deletingVideos, setDeletingVideos] = useState(false);
   const [analytics, setAnalytics] = useState<{
     summary: { rows: number; totalRecordingsBytes: string; totalClipsBytes: string; totalBytes: string };
     items: Array<{
@@ -67,7 +70,26 @@ export default function MonitoramentoPage() {
       if (!cancelled) setAnalyticsLoading(false);
     });
     return () => { cancelled = true; };
-  }, [API_URL, accessToken, fromDate, toDate]);
+  }, [API_URL, accessToken, fromDate, toDate, reloadNonce]);
+
+  async function handleDeleteAllVideos() {
+    if (!accessToken) return;
+    const confirmed = window.confirm('Apagar todas as gravações e clips exportados do storage? Esta ação não pode ser desfeita.');
+    if (!confirmed) return;
+    setDeletingVideos(true);
+    try {
+      await axios.delete(`${API_URL}/recordings`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      setReloadNonce((value) => value + 1);
+      await load();
+    } catch (error) {
+      const msg = axios.isAxiosError(error) ? (error.response?.data?.message || error.message) : 'Falha ao apagar vídeos.';
+      window.alert(Array.isArray(msg) ? msg.join(' | ') : String(msg));
+    } finally {
+      setDeletingVideos(false);
+    }
+  }
 
   const toGB = (raw: string | number | bigint) => (Number(raw) / 1024 / 1024 / 1024).toFixed(2);
   const volumes = useMemo(() => system ? [
@@ -95,9 +117,18 @@ export default function MonitoramentoPage() {
           <h2 className="text-lg font-semibold">Armazenamento</h2>
           <p className="text-xs text-[hsl(var(--muted-foreground))]">Espaço disponível, retenção e saúde das gravações.</p>
         </div>
-        <button className="flex items-center gap-2 px-3 py-2 rounded border border-border bg-card text-xs hover:bg-[hsl(var(--accent))] transition-colors">
-          <FileText className="w-3.5 h-3.5" /> Política de Retenção
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleDeleteAllVideos}
+            disabled={deletingVideos}
+            className="flex items-center gap-2 px-3 py-2 rounded border border-[hsl(var(--destructive)_/_0.35)] bg-card text-[hsl(var(--destructive))] text-xs hover:bg-[hsl(var(--destructive)_/_0.08)] transition-colors disabled:opacity-50"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> {deletingVideos ? 'Apagando...' : 'Apagar vídeos'}
+          </button>
+          <button className="flex items-center gap-2 px-3 py-2 rounded border border-border bg-card text-xs hover:bg-[hsl(var(--accent))] transition-colors">
+            <FileText className="w-3.5 h-3.5" /> Política de Retenção
+          </button>
+        </div>
       </div>
       <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
         <div className="bg-card border border-card-border rounded-xl p-5 flex items-center justify-center">

@@ -383,6 +383,14 @@ export class CamerasController {
     return result;
   }
 
+  @Roles(UserRole.ADMIN)
+  @Delete('alarms')
+  async deleteAllAlarms(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    const result = await this.alarmsService.deleteAll();
+    await this.auditService.log(user.id, 'alarm.delete_all', 'AlarmInstance', null, result, req);
+    return result;
+  }
+
   @Roles(UserRole.OPERATOR)
   @Post('incidents/ack/bulk')
   async acknowledgeIncidentsBulk(

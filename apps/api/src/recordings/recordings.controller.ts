@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { type Request, type Response } from 'express';
 import { AccessControlService } from '../access-control/access-control.service';
@@ -199,6 +199,15 @@ export class RecordingsController {
     }
     const ids = await this.accessControlService.getAccessibleCameraIds(user);
     return this.recordingsService.list(query, ids);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Delete('recordings')
+  async deleteAllRecordings(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    await this.recordingManager.stopAll();
+    const result = await this.recordingsService.deleteAllRecordings();
+    await this.auditService.log(user.id, 'recording.delete_all', 'Recording', null, result, req);
+    return result;
   }
 
   @Roles(UserRole.VIEWER)

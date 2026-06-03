@@ -1,6 +1,6 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, NotFoundException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
-import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -1298,5 +1298,53 @@ export class RecordingsService {
     }
 
     return tokenMap;
+  }
+
+  async deleteAllRecordings() {
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
+    const [recordings, clips] = await Promise.all([
+      this.prisma.recording.findMany({ select: { id: true, filePath: true, sizeBytes: true } }),
+      this.prisma.exportedClip.findMany({ select: { id: true, filePath: true, sizeBytes: true } }),
+    ]);
+
+    let deletedFiles = 0;
+    let failedFiles = 0;
+    let deletedBytes = BigInt(0);
+    const paths = [...recordings, ...clips].map((item) => ({ filePath: item.filePath, sizeBytes: item.sizeBytes }));
+
+    for (const item of paths) {
+      try {
+        const fullPath = ensureFileUnderRoot(recordingsRoot, item.filePath);
+        if (existsSync(fullPath)) {
+          rmSync(fullPath, { force: true });
+          deletedFiles += 1;
+          deletedBytes += item.sizeBytes ?? BigInt(0);
+        }
+      } catch {
+        failedFiles += 1;
+      }
+    }
+
+    for (const cacheDir of ['.playback-compatible', '.diagnostics-cache']) {
+      try {
+        const fullPath = ensureFileUnderRoot(recordingsRoot, cacheDir);
+        if (existsSync(fullPath)) rmSync(fullPath, { recursive: true, force: true });
+      } catch {
+        failedFiles += 1;
+      }
+    }
+
+    const [clipsDeleted, recordingsDeleted] = await this.prisma.$transaction([
+      this.prisma.exportedClip.deleteMany({}),
+      this.prisma.recording.deleteMany({}),
+    ]);
+
+    return {
+      recordingsDeleted: recordingsDeleted.count,
+      clipsDeleted: clipsDeleted.count,
+      filesDeleted: deletedFiles,
+      fileDeleteFailures: failedFiles,
+      bytesDeleted: deletedBytes.toString(),
+    };
   }
 }

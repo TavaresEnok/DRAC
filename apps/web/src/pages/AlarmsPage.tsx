@@ -5,7 +5,7 @@ import { format } from 'date-fns';
 import {
   Bell, BellOff, CheckCheck, ChevronUp, ChevronDown,
   AlertTriangle, Flame, DoorOpen, Shield, MapPin,
-  Volume2, VolumeX, ArrowRight, X, Clock, Settings2, Plus, Play, Pencil
+  Volume2, VolumeX, ArrowRight, X, Clock, Settings2, Plus, Play, Pencil, Trash2
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip as ReTooltip, ResponsiveContainer } from 'recharts';
 import { useAlarmStore } from '../store/alarmStore';
@@ -315,6 +315,7 @@ export default function AlertasPage() {
   const [showRuleForm, setShowRuleForm] = useState(false);
   const [ruleForm, setRuleForm] = useState<RuleFormState>(EMPTY_RULE_FORM);
   const [savingRule, setSavingRule] = useState(false);
+  const [deletingAllAlarms, setDeletingAllAlarms] = useState(false);
   const [simCameraId, setSimCameraId] = useState('');
   const [simSeverity, setSimSeverity] = useState('WARNING');
   const [runningSimulationId, setRunningSimulationId] = useState<string | null>(null);
@@ -445,6 +446,23 @@ export default function AlertasPage() {
     await load();
   }
 
+  async function handleDeleteAllAlarms() {
+    const confirmed = window.confirm('Apagar todos os alertas do sistema? Esta ação não pode ser desfeita.');
+    if (!confirmed) return;
+    setDeletingAllAlarms(true);
+    try {
+      await client.delete('/cameras/alarms');
+      setAlarmItems([]);
+      await loadAlarmsList();
+      await load();
+    } catch (error) {
+      const msg = axios.isAxiosError(error) ? (error.response?.data?.message || error.message) : 'Falha ao apagar alertas.';
+      window.alert(Array.isArray(msg) ? msg.join(' | ') : String(msg));
+    } finally {
+      setDeletingAllAlarms(false);
+    }
+  }
+
   function openCreateRule() {
     setRuleForm(EMPTY_RULE_FORM);
     setShowRuleForm(true);
@@ -544,17 +562,27 @@ export default function AlertasPage() {
               {activeAlertas.length > 0 ? `${activeAlertas.length} Alarme${activeAlertas.length !== 1 ? 's' : ''} Ativo${activeAlertas.length !== 1 ? 's' : ''}` : 'Tudo normal'}
             </span>
           </div>
-          <button
-            onClick={() => setMuted((m) => !m)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded border text-[11px] transition-colors ${
-              muted
-                ? 'border-[hsl(38_58%_54%_/_0.4)] text-[hsl(38,58%,62%)] bg-[hsl(38_58%_54%_/_0.07)]'
-                : 'border-border text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]'
-            }`}
-          >
-            {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-            {muted ? 'Ativar som dos alertas' : 'Silenciar alertas'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleDeleteAllAlarms}
+              disabled={deletingAllAlarms || visibleAlarms.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[hsl(var(--destructive)_/_0.35)] text-[hsl(var(--destructive))] text-[11px] transition-colors hover:bg-[hsl(var(--destructive)_/_0.08)] disabled:opacity-45"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              {deletingAllAlarms ? 'Apagando...' : 'Apagar todos'}
+            </button>
+            <button
+              onClick={() => setMuted((m) => !m)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded border text-[11px] transition-colors ${
+                muted
+                  ? 'border-[hsl(38_58%_54%_/_0.4)] text-[hsl(38,58%,62%)] bg-[hsl(38_58%_54%_/_0.07)]'
+                  : 'border-border text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]'
+              }`}
+            >
+              {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+              {muted ? 'Ativar som dos alertas' : 'Silenciar alertas'}
+            </button>
+          </div>
         </div>
 
         <details className="bg-card border border-card-border rounded-lg p-4 space-y-3">

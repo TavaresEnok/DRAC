@@ -508,6 +508,13 @@ export class AlarmsService {
     };
   }
 
+  async deleteAll() {
+    const result = await this.prisma.alarmInstance.deleteMany({});
+    return {
+      deleted: result.count,
+    };
+  }
+
   async listRules() {
     const items = await this.prisma.alarmRule.findMany({
       orderBy: [{ source: 'asc' }, { eventType: 'asc' }],
