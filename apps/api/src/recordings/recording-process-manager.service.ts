@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   OnApplicationShutdown,
+  OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -42,7 +43,7 @@ type WorkerRecordingCommand = {
 };
 
 @Injectable()
-export class RecordingProcessManagerService implements OnApplicationShutdown {
+export class RecordingProcessManagerService implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(RecordingProcessManagerService.name);
   private readonly active = new Map<string, RecordingProcessState>();
   private readonly recordingsRoot: string;
@@ -57,6 +58,7 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
   private readonly minFreePercent: number;
   private redisPublisher: Redis | null = null;
   private readonly motionStopTimers = new Map<string, NodeJS.Timeout>();
+  private diskGuardTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly configService: ConfigService,
@@ -77,15 +79,96 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
     this.minFreePercent = Number(this.configService.get<number>('recordingMinFreePercent') ?? 5);
   }
 
+  onModuleInit() {
+    const diskGuardEnabled = String(process.env.RECORDING_DISK_GUARD_ENABLED ?? 'true') !== 'false';
+    if (diskGuardEnabled) {
+      const intervalMs = Math.max(10_000, Number(process.env.RECORDING_DISK_GUARD_INTERVAL_MS ?? 30000));
+      this.diskGuardTimer = setInterval(() => void this.enforceDiskGuard(), intervalMs);
+      if (typeof this.diskGuardTimer.unref === 'function') this.diskGuardTimer.unref();
+    }
+
+    const autoStart = String(process.env.RECORDING_AUTO_START_ENABLED ?? 'false') === 'true';
+    if (!autoStart) {
+      this.logger.log('Auto-start de gravacao continua desativado. Defina RECORDING_AUTO_START_ENABLED=true para religar no boot.');
+      return;
+    }
+
+    const delayMs = Math.max(0, Number(process.env.RECORDING_AUTO_START_DELAY_MS ?? 10000));
+    const timer = setTimeout(() => void this.startEnabledContinuousRecordings(), delayMs);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+
+  private async startEnabledContinuousRecordings() {
+    const cameras = await this.prisma.camera.findMany({
+      where: {
+        recordingEnabled: true,
+        recordingMode: 'continuous',
+      },
+      select: { id: true, name: true },
+      take: 500,
+    });
+
+    if (!cameras.length) {
+      this.logger.log('Auto-start de gravacao continua: nenhuma camera habilitada.');
+      return;
+    }
+
+    const defaultSegment = Number(process.env.RECORDING_SEGMENT_SECONDS ?? 300);
+    this.logger.log(`Auto-start de gravacao continua para ${cameras.length} camera(s).`);
+    for (const camera of cameras) {
+      try {
+        await this.start(camera.id, defaultSegment);
+      } catch (error) {
+        this.logger.warn(`Auto-start de gravacao falhou camera=${camera.name} (${camera.id}): ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
   private async assertMinimumStorageFree() {
-    const disk = await statfs(this.recordingsRoot);
-    const totalBytes = Number(disk.blocks) * Number(disk.bsize);
-    const freeBytes = Number(disk.bavail) * Number(disk.bsize);
-    const freePercent = totalBytes > 0 ? (freeBytes / totalBytes) * 100 : 0;
+    const { totalBytes, freeBytes, freePercent } = await this.getStorageUsage();
     if (freeBytes < this.minFreeBytes || freePercent < this.minFreePercent) {
       throw new ServiceUnavailableException(
         `Espaço livre insuficiente para iniciar gravação (livre=${Math.round(freeBytes / (1024 * 1024))}MB, mínimo=${Math.round(this.minFreeBytes / (1024 * 1024))}MB, livre%=${freePercent.toFixed(2)}%, mínimo%=${this.minFreePercent}%).`,
       );
+    }
+  }
+
+  private async getStorageUsage() {
+    const disk = await statfs(this.recordingsRoot);
+    const totalBytes = Number(disk.blocks) * Number(disk.bsize);
+    const freeBytes = Number(disk.bavail) * Number(disk.bsize);
+    const freePercent = totalBytes > 0 ? (freeBytes / totalBytes) * 100 : 0;
+    const usedPercent = totalBytes > 0 ? 100 - freePercent : 100;
+    return { totalBytes, freeBytes, freePercent, usedPercent };
+  }
+
+  private async enforceDiskGuard() {
+    if (this.active.size === 0 || this.controlMode !== 'local') return;
+
+    try {
+      const { freeBytes, freePercent, usedPercent } = await this.getStorageUsage();
+      const maxUsedPercent = Number(process.env.RECORDING_DISK_GUARD_MAX_USED_PERCENT ?? 92);
+      const critical =
+        freeBytes < this.minFreeBytes ||
+        freePercent < this.minFreePercent ||
+        (Number.isFinite(maxUsedPercent) && usedPercent >= maxUsedPercent);
+
+      if (!critical) return;
+
+      const activeCameraIds = [...this.active.keys()];
+      this.logger.error(
+        `Guarda de disco parou ${activeCameraIds.length} gravacao(oes): usado=${usedPercent.toFixed(2)}%, livre=${Math.round(
+          freeBytes / (1024 * 1024),
+        )}MB.`,
+      );
+
+      for (const cameraId of activeCameraIds) {
+        await this.stop(cameraId).catch((error) => {
+          this.logger.warn(`Falha ao parar gravacao por guarda de disco camera=${cameraId}: ${(error as Error).message}`);
+        });
+      }
+    } catch (error) {
+      this.logger.warn(`Falha ao executar guarda de disco de gravacao: ${(error as Error).message}`);
     }
   }
 
@@ -700,6 +783,18 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
     };
   }
 
+  getRuntimeSummary() {
+    return {
+      activeCount: this.active.size,
+      activeCameraIds: Array.from(this.active.keys()),
+      controlMode: this.controlMode,
+      storageBackend: this.storageBackend,
+      recordingFormat: this.recordingFormat,
+      copyCodec: this.copyCodec,
+      diskGuardEnabled: String(process.env.RECORDING_DISK_GUARD_ENABLED ?? 'true') !== 'false',
+    };
+  }
+
   async stopAll() {
     const cameraIds = [...this.active.keys()];
     for (const cameraId of cameraIds) {
@@ -722,6 +817,10 @@ export class RecordingProcessManagerService implements OnApplicationShutdown {
       clearTimeout(timer);
     }
     this.motionStopTimers.clear();
+    if (this.diskGuardTimer) {
+      clearInterval(this.diskGuardTimer);
+      this.diskGuardTimer = null;
+    }
     if (this.controlMode === 'local') {
       await this.stopAll();
     }

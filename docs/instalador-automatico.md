@@ -12,7 +12,8 @@ O tecnico deve executar um unico script no servidor do cliente. O script:
 - conecta a instalacao com a DRAC Central;
 - sobe os containers;
 - aplica migrations Prisma;
-- valida API local e central.
+- valida API local e central;
+- executa o checklist automatico de producao.
 
 ## Comando interativo
 
@@ -121,6 +122,7 @@ Ao final, o instalador mostra:
 - URL da API local;
 - central configurada;
 - ID da instalacao enviada.
+- resultado do checklist automatico de producao.
 
 Na DRAC Central, a instalacao deve aparecer em ate 60 segundos com:
 
@@ -130,6 +132,35 @@ Na DRAC Central, a instalacao deve aparecer em ate 60 segundos com:
 - disco;
 - alarmes;
 - contrato `Regular`.
+
+## Checklist automatico de producao
+
+O instalador executa:
+
+```bash
+./scripts/production-readiness.sh
+```
+
+O script retorna:
+
+- `Pronto`: todos os checks obrigatorios passaram.
+- `Atencao`: sistema opera, mas existe pendencia nao critica.
+- `Bloqueado`: existe falha critica que impede considerar producao pronta.
+
+Por seguranca, o instalador nao liga gravacao continua automaticamente em todos os boots. A ativacao de gravacao continua deve ocorrer depois que o storage estiver dimensionado para quantidade de cameras, bitrate e retencao desejada. A guarda de disco das gravacoes fica habilitada por padrao para interromper processos antes de afetar banco, Redis ou API.
+
+Tambem e possivel rodar manualmente:
+
+```bash
+cd /home/flashnet/Drac
+./scripts/production-readiness.sh
+```
+
+Saida em JSON:
+
+```bash
+./scripts/production-readiness.sh --json
+```
 
 ## Observacoes importantes
 

@@ -151,21 +151,28 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
     const recordingsRoot = process.env.RECORDINGS_ROOT ?? '/storage';
     const now = new Date();
 
-    const [disk, cameraCounts, recordings, openAlarms, activeUsers] = await Promise.all([
+    const [disk, cameraCounts, cameraOperational, recordings, recentRecordings, activeRecordings, openAlarms, activeUsers] = await Promise.all([
       this.getDiskStats(recordingsRoot),
       this.getCameraCounts(),
+      this.getCameraOperationalStats(),
       this.prisma.recording.aggregate({
         _count: { id: true },
         _sum: { sizeBytes: true },
         _max: { startedAt: true },
       }),
+      this.prisma.recording.count({
+        where: { startedAt: { gte: new Date(now.getTime() - 60 * 60 * 1000) } },
+      }),
+      this.prisma.recording.count({ where: { endedAt: null } }),
       this.prisma.alarmInstance.count({ where: { status: AlarmStatus.OPEN } }),
       this.prisma.user.count({ where: { isActive: true } }),
     ]);
 
     const alerts: Array<{ level: 'warning' | 'critical'; code: string; message: string }> = [];
-    if (disk?.usagePercent !== null && disk?.usagePercent !== undefined && disk.usagePercent >= 90) {
+    if (disk?.usagePercent !== null && disk?.usagePercent !== undefined && disk.usagePercent >= 85) {
       alerts.push({ level: 'critical', code: 'disk_usage_high', message: `Uso de disco em ${disk.usagePercent}%.` });
+    } else if (disk?.usagePercent !== null && disk?.usagePercent !== undefined && disk.usagePercent >= 75) {
+      alerts.push({ level: 'warning', code: 'disk_usage_attention', message: `Uso de disco em ${disk.usagePercent}%.` });
     }
     if (cameraCounts.offline + cameraCounts.error > 0) {
       alerts.push({
@@ -174,6 +181,29 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         message: `${cameraCounts.offline + cameraCounts.error} camera(s) indisponivel(is).`,
       });
     }
+    if (cameraCounts.total > 0 && cameraCounts.online === 0) {
+      alerts.push({ level: 'critical', code: 'no_online_cameras', message: 'Nenhuma camera online.' });
+    }
+    if (recordings._count.id > 0 && !recordings._max.startedAt) {
+      alerts.push({ level: 'warning', code: 'recording_without_last_segment', message: 'Gravacoes sem ultimo segmento detectado.' });
+    }
+
+    const mediamtxOriginsRestricted =
+      String(process.env.MEDIAMTX_HLS_ALLOW_ORIGIN ?? '*') !== '*' &&
+      String(process.env.MEDIAMTX_WEBRTC_ALLOW_ORIGIN ?? '*') !== '*';
+    const recordingRuntime = this.getRecordingRuntimeSummary();
+    if (cameraCounts.total > 0 && cameraOperational.recordingEnabled === 0) {
+      alerts.push({
+        level: 'warning',
+        code: 'recording_disabled_all',
+        message: 'Nenhuma camera esta com gravacao continua habilitada.',
+      });
+    }
+    const appReadinessStatus = alerts.some((alert) => alert.level === 'critical')
+      ? 'blocked'
+      : alerts.length > 0 || !mediamtxOriginsRestricted
+        ? 'attention'
+        : 'ready';
 
     return {
       installation: {
@@ -182,7 +212,8 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         version: process.env.DRAC_VERSION || process.env.npm_package_version || 'local',
       },
       summary: {
-        status: alerts.some((alert) => alert.level === 'critical') ? 'attention' : 'ok',
+        status: appReadinessStatus === 'blocked' ? 'blocked' : appReadinessStatus === 'attention' ? 'attention' : 'ok',
+        productionReadiness: appReadinessStatus,
         cameraTotal: cameraCounts.total,
         cameraOnline: cameraCounts.online,
         cameraOffline: cameraCounts.offline,
@@ -191,6 +222,8 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         recordingCount: recordings._count.id,
         recordingBytes: Number(recordings._sum.sizeBytes ?? 0),
         lastRecordingStartedAt: recordings._max.startedAt,
+        recentRecordingCountLastHour: recentRecordings,
+        activeRecordingCount: recordingRuntime?.activeCount ?? activeRecordings,
         activeUsers,
         diskUsagePercent: disk?.usagePercent ?? null,
         alerts,
@@ -209,6 +242,36 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
       storage: {
         recordingsRoot,
         disk,
+      },
+      production: {
+        readiness: {
+          status: appReadinessStatus,
+          generatedAt: now.toISOString(),
+          alerts,
+        },
+        cameras: cameraOperational,
+        recordings: {
+          totalCount: recordings._count.id,
+          totalBytes: Number(recordings._sum.sizeBytes ?? 0),
+          activeCount: recordingRuntime?.activeCount ?? activeRecordings,
+          activeDatabaseSegments: activeRecordings,
+          recentCountLastHour: recentRecordings,
+          lastStartedAt: recordings._max.startedAt,
+          runtime: recordingRuntime,
+        },
+        ai: {
+          autoStartEnabled: String(process.env.AI_AUTO_START_ENABLED ?? 'true') !== 'false',
+          usesMediamtx: String(process.env.AI_USE_MEDIAMTX ?? 'false') === 'true',
+          rtspSubtype: process.env.AI_RTSP_SUBTYPE ?? 'auto',
+          analyticsSource: process.env.AI_ANALYTICS_SOURCE ?? 'direct_camera',
+        },
+        security: {
+          cameraTestAllowPublicIp: String(process.env.CAMERA_TEST_ALLOW_PUBLIC_IP ?? 'false') === 'true',
+          mediamtxOriginsRestricted,
+          hlsAllowOrigin: process.env.MEDIAMTX_HLS_ALLOW_ORIGIN ?? '*',
+          webrtcAllowOrigin: process.env.MEDIAMTX_WEBRTC_ALLOW_ORIGIN ?? '*',
+          dockerSocketMountedInApi: false,
+        },
       },
       time: now.toISOString(),
     };
@@ -231,6 +294,63 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
     }
 
     return counts;
+  }
+
+  private getRecordingRuntimeSummary() {
+    try {
+      const manager = this.moduleRef.get(RecordingProcessManagerService, { strict: false }) as RecordingProcessManagerService & {
+        getRuntimeSummary?: () => unknown;
+      };
+      return typeof manager.getRuntimeSummary === 'function' ? manager.getRuntimeSummary() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getCameraOperationalStats() {
+    const [
+      total,
+      recordingEnabled,
+      aiEnabled,
+      audioEnabled,
+      byLiveProtocol,
+      byLiveSubtype,
+      byRecordingSubtype,
+      byAnalyticsSubtype,
+      byDetectedCodec,
+    ] = await Promise.all([
+      this.prisma.camera.count(),
+      this.prisma.camera.count({ where: { recordingEnabled: true } }),
+      this.prisma.camera.count({ where: { aiEnabled: true } }),
+      this.prisma.camera.count({ where: { audioEnabled: true } }),
+      this.prisma.camera.groupBy({ by: ['preferredLiveProtocol'], _count: { id: true } }),
+      this.prisma.camera.groupBy({ by: ['liveSubtype'], _count: { id: true } }),
+      this.prisma.camera.groupBy({ by: ['recordingSubtype'], _count: { id: true } }),
+      this.prisma.camera.groupBy({ by: ['analyticsSubtype'], _count: { id: true } }),
+      this.prisma.camera.groupBy({ by: ['detectedVideoCodec'], _count: { id: true } }),
+    ]);
+
+    return {
+      total,
+      recordingEnabled,
+      aiEnabled,
+      audioEnabled,
+      byLiveProtocol: this.groupRowsToRecord(byLiveProtocol, 'preferredLiveProtocol'),
+      byLiveSubtype: this.groupRowsToRecord(byLiveSubtype, 'liveSubtype'),
+      byRecordingSubtype: this.groupRowsToRecord(byRecordingSubtype, 'recordingSubtype'),
+      byAnalyticsSubtype: this.groupRowsToRecord(byAnalyticsSubtype, 'analyticsSubtype'),
+      byDetectedCodec: this.groupRowsToRecord(byDetectedCodec, 'detectedVideoCodec'),
+    };
+  }
+
+  private groupRowsToRecord(rows: Array<Record<string, unknown> & { _count: { id: number } }>, field: string) {
+    return Object.fromEntries(
+      rows.map((row) => {
+        const rawValue = row[field];
+        const key = rawValue === null || rawValue === undefined || rawValue === '' ? 'unset' : String(rawValue);
+        return [key, row._count.id];
+      }),
+    );
   }
 
   private async getDiskStats(path: string) {

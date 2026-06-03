@@ -1,0 +1,503 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+ROOT_DIR="${DRAC_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+ENV_FILE="${DRAC_ENV_FILE:-$ROOT_DIR/infra/.env}"
+OUTPUT_MODE="${1:-text}"
+
+WARNINGS=0
+FAILURES=0
+CHECKS=0
+
+RED='\033[1;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[1;32m'
+CYAN='\033[1;36m'
+NC='\033[0m'
+
+log() {
+  printf "${CYAN}[DRAC readiness]${NC} %s\n" "$*"
+}
+
+ok() {
+  CHECKS=$((CHECKS + 1))
+  printf "${GREEN}[OK]${NC} %s\n" "$*"
+}
+
+warn() {
+  CHECKS=$((CHECKS + 1))
+  WARNINGS=$((WARNINGS + 1))
+  printf "${YELLOW}[ATENCAO]${NC} %s\n" "$*"
+}
+
+fail() {
+  CHECKS=$((CHECKS + 1))
+  FAILURES=$((FAILURES + 1))
+  printf "${RED}[BLOQUEADO]${NC} %s\n" "$*"
+}
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+load_env() {
+  if [ ! -f "$ENV_FILE" ]; then
+    fail "Arquivo infra/.env nao encontrado em $ENV_FILE"
+    return
+  fi
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+      local key="${BASH_REMATCH[1]}"
+      local value="${BASH_REMATCH[2]}"
+      if [[ "$value" =~ ^\"(.*)\"$ ]] || [[ "$value" =~ ^\'(.*)\'$ ]]; then
+        value="${BASH_REMATCH[1]}"
+      fi
+      export "$key=$value"
+    fi
+  done < "$ENV_FILE"
+  ok "infra/.env encontrado"
+
+  local perms
+  perms="$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%Lp' "$ENV_FILE" 2>/dev/null || true)"
+  if [ "$perms" = "600" ] || [ "$perms" = "640" ]; then
+    ok "infra/.env com permissao restrita ($perms)"
+  else
+    warn "infra/.env deveria usar chmod 600 ou 640; permissao atual: ${perms:-desconhecida}"
+  fi
+}
+
+check_required_commands() {
+  for cmd in docker curl awk sed grep date; do
+    if have "$cmd"; then
+      ok "Comando disponivel: $cmd"
+    else
+      fail "Comando ausente: $cmd"
+    fi
+  done
+
+  if docker compose version >/dev/null 2>&1; then
+    ok "Docker Compose plugin disponivel"
+  else
+    fail "Docker Compose plugin indisponivel"
+  fi
+}
+
+is_placeholder_secret() {
+  local value="$1"
+  [ -z "$value" ] && return 0
+  printf '%s' "$value" | grep -Eiq 'change_me|replace_with|changeme|password|secret|min_'
+}
+
+check_env_security() {
+  local required=(
+    POSTGRES_PASSWORD
+    JWT_SECRET
+    CAMERA_SECRET_KEY
+    INTERNAL_SERVICE_TOKEN
+    EVIDENCE_HMAC_SECRET
+    MEDIAMTX_API_USER
+    MEDIAMTX_API_PASS
+  )
+
+  for key in "${required[@]}"; do
+    local value="${!key:-}"
+    if is_placeholder_secret "$value"; then
+      fail "$key ausente ou ainda com valor placeholder"
+    else
+      ok "$key configurado"
+    fi
+  done
+
+  if [ "${CLOUD_CONNECTOR_ENABLED:-false}" = "true" ]; then
+    for key in CLOUD_API_URL CLOUD_INSTALLATION_ID CLOUD_LICENSE_KEY CLOUD_CUSTOMER_NAME; do
+      if [ -n "${!key:-}" ]; then
+        ok "$key configurado para conector central"
+      else
+        fail "$key obrigatorio quando CLOUD_CONNECTOR_ENABLED=true"
+      fi
+    done
+  else
+    warn "CLOUD_CONNECTOR_ENABLED=false; instalacao nao envia heartbeat para a Central"
+  fi
+}
+
+container_status() {
+  docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null || true
+}
+
+container_health() {
+  docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$1" 2>/dev/null || true
+}
+
+check_container() {
+  local name="$1"
+  local required="${2:-true}"
+  local status health
+  status="$(container_status "$name")"
+  health="$(container_health "$name")"
+
+  if [ -z "$status" ]; then
+    if [ "$required" = "true" ]; then
+      fail "Container $name nao existe"
+    else
+      warn "Container opcional $name nao existe"
+    fi
+    return
+  fi
+
+  if [ "$status" != "running" ]; then
+    fail "Container $name esta em estado $status"
+    return
+  fi
+
+  case "$health" in
+    healthy)
+      ok "Container $name rodando e healthy"
+      ;;
+    starting)
+      warn "Container $name rodando, healthcheck ainda starting"
+      ;;
+    unhealthy)
+      fail "Container $name unhealthy"
+      ;;
+    none)
+      ok "Container $name rodando"
+      ;;
+    *)
+      warn "Container $name rodando com health desconhecido: $health"
+      ;;
+  esac
+}
+
+check_containers() {
+  check_container vms-postgres
+  check_container vms-redis
+  check_container vms-mediamtx
+  check_container vms-api
+  check_container vms-web
+  check_container vms-ai-service
+  check_container vms-postgres-backup
+}
+
+curl_ok() {
+  curl -fsS --max-time "${2:-8}" "$1" >/dev/null 2>&1
+}
+
+check_http() {
+  local name="$1"
+  local url="$2"
+  if curl_ok "$url" 8; then
+    ok "$name respondeu: $url"
+  else
+    fail "$name nao respondeu: $url"
+  fi
+}
+
+check_endpoints() {
+  check_http "API health" "http://127.0.0.1:3000/health"
+  check_http "Web local" "http://127.0.0.1:5173/"
+
+  if [ "${CLOUD_CONNECTOR_ENABLED:-false}" = "true" ] && [ -n "${CLOUD_API_URL:-}" ]; then
+    if curl_ok "${CLOUD_API_URL%/}/api/health" 8; then
+      ok "DRAC Central respondeu: ${CLOUD_API_URL%/}/api/health"
+    else
+      warn "DRAC Central nao respondeu agora: ${CLOUD_API_URL%/}/api/health"
+    fi
+  fi
+}
+
+check_database() {
+  local user="${POSTGRES_USER:-vms}"
+  local db="${POSTGRES_DB:-vms_db}"
+  local pass="${POSTGRES_PASSWORD:-}"
+
+  if docker exec -e PGPASSWORD="$pass" vms-postgres pg_isready -U "$user" -d "$db" >/dev/null 2>&1; then
+    ok "Postgres aceitando conexoes"
+  else
+    fail "Postgres nao respondeu ao pg_isready"
+    return
+  fi
+
+  if docker exec -e PGPASSWORD="$pass" vms-postgres psql -U "$user" -d "$db" -Atc 'select count(*) from "Camera";' >/dev/null 2>&1; then
+    ok "Banco DRAC acessivel e schema principal disponivel"
+  else
+    fail "Banco DRAC nao permitiu consulta em Camera"
+  fi
+}
+
+psql_value() {
+  local query="$1"
+  local user="${POSTGRES_USER:-vms}"
+  local db="${POSTGRES_DB:-vms_db}"
+  local pass="${POSTGRES_PASSWORD:-}"
+  docker exec -e PGPASSWORD="$pass" vms-postgres psql -U "$user" -d "$db" -Atc "$query" 2>/dev/null | head -n 1
+}
+
+check_camera_profiles() {
+  local total online live_webrtc live_subtype0 live_720p recording_enabled recording_subtype0 recording_h265 ai_enabled analytics_subtype_set
+  total="$(psql_value 'select count(*) from "Camera";')"
+  total="${total:-0}"
+
+  if [ "$total" -eq 0 ]; then
+    warn "Nenhuma camera cadastrada; provisionamento ainda nao foi validado"
+    return
+  fi
+
+  online="$(psql_value 'select count(*) from "Camera" where status = '\''ONLINE'\'';')"
+  live_webrtc="$(psql_value 'select count(*) from "Camera" where "preferredLiveProtocol" = '\''webrtc'\'';')"
+  live_subtype0="$(psql_value 'select count(*) from "Camera" where coalesce("liveSubtype", subtype) = 0;')"
+  live_720p="$(psql_value 'select count(*) from "Camera" where "streamWidth" = 1280 and "streamHeight" = 720;')"
+  recording_enabled="$(psql_value 'select count(*) from "Camera" where "recordingEnabled" = true;')"
+  recording_subtype0="$(psql_value 'select count(*) from "Camera" where coalesce("recordingSubtype", subtype) = 0;')"
+  recording_h265="$(psql_value 'select count(*) from "Camera" where lower(coalesce("recordingVideoCodec", '\''h265'\'')) in ('\''h265'\'','\''hevc'\'','\''h.265'\'');')"
+  ai_enabled="$(psql_value 'select count(*) from "Camera" where "aiEnabled" = true;')"
+  analytics_subtype_set="$(psql_value 'select count(*) from "Camera" where "analyticsSubtype" is not null;')"
+
+  if [ "${online:-0}" -eq "$total" ]; then
+    ok "Todas as cameras cadastradas estao online ($online/$total)"
+  else
+    warn "Cameras online: ${online:-0}/$total"
+  fi
+
+  if [ "${live_webrtc:-0}" -eq "$total" ]; then
+    ok "Todas as cameras usam WebRTC como protocolo live"
+  else
+    fail "Nem todas as cameras usam WebRTC (${live_webrtc:-0}/$total)"
+  fi
+
+  if [ "${live_subtype0:-0}" -eq "$total" ]; then
+    ok "Todas as cameras usam liveSubtype/main stream para live"
+  else
+    warn "Algumas cameras nao usam main stream na live (${live_subtype0:-0}/$total)"
+  fi
+
+  if [ "${live_720p:-0}" -eq "$total" ]; then
+    ok "Todas as cameras estao configuradas para live 1280x720"
+  else
+    warn "Live 720p nao esta aplicada em todas as cameras (${live_720p:-0}/$total)"
+  fi
+
+  if [ "${recording_enabled:-0}" -eq 0 ]; then
+    warn "Nenhuma camera esta com gravacao continua habilitada; habilite apos validar capacidade de storage"
+  elif [ "$recording_enabled" -eq "$total" ]; then
+    ok "Todas as cameras estao com gravacao habilitada"
+  else
+    warn "Gravacao habilitada parcialmente (${recording_enabled:-0}/$total)"
+  fi
+
+  if [ "${recording_subtype0:-0}" -eq "$total" ]; then
+    ok "Todas as cameras usam main stream para gravacao"
+  else
+    fail "Nem todas as cameras usam main stream para gravacao (${recording_subtype0:-0}/$total)"
+  fi
+
+  if [ "${recording_h265:-0}" -eq "$total" ]; then
+    ok "Todas as cameras preferem H.265/HEVC para gravacao"
+  else
+    warn "Nem todas as cameras preferem H.265/HEVC para gravacao (${recording_h265:-0}/$total)"
+  fi
+
+  if [ "${analytics_subtype_set:-0}" -eq "$total" ]; then
+    ok "Todas as cameras possuem analyticsSubtype separado"
+  else
+    warn "analyticsSubtype ausente em algumas cameras (${analytics_subtype_set:-0}/$total)"
+  fi
+
+  if [ "${ai_enabled:-0}" -eq 0 ]; then
+    warn "IA esta desabilitada em todas as cameras"
+  elif [ "$ai_enabled" -eq "$total" ]; then
+    ok "IA habilitada em todas as cameras"
+  else
+    warn "IA habilitada parcialmente (${ai_enabled:-0}/$total)"
+  fi
+}
+
+check_redis() {
+  if docker exec vms-redis redis-cli ping 2>/dev/null | grep -q PONG; then
+    ok "Redis respondeu PONG"
+  else
+    fail "Redis nao respondeu PONG"
+  fi
+}
+
+check_ai_service() {
+  if docker exec vms-ai-service sh -lc "python - <<'PY'
+import urllib.request
+urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()
+PY" >/dev/null 2>&1; then
+    ok "AI service respondeu /health internamente"
+  else
+    warn "AI service nao respondeu /health internamente; validar logs do vms-ai-service"
+  fi
+}
+
+check_mediamtx() {
+  local auth=()
+  if [ -n "${MEDIAMTX_API_USER:-}" ] && [ -n "${MEDIAMTX_API_PASS:-}" ]; then
+    auth=(-u "${MEDIAMTX_API_USER}:${MEDIAMTX_API_PASS}")
+  fi
+
+  if curl -fsS --max-time 8 "${auth[@]}" "http://127.0.0.1:9997/v3/config/global/get" >/dev/null 2>&1; then
+    ok "MediaMTX API respondeu em localhost"
+  else
+    warn "MediaMTX API nao respondeu em localhost; validar credenciais/health"
+  fi
+}
+
+check_storage_and_backups() {
+  local storage_path="$ROOT_DIR/infra/storage"
+  [ -d "$storage_path" ] || storage_path="$ROOT_DIR/infra"
+
+  local usage
+  usage="$(df -P "$storage_path" 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}')"
+  if [ -z "$usage" ]; then
+    warn "Nao foi possivel medir uso de disco em $storage_path"
+  elif [ "$usage" -ge 85 ]; then
+    fail "Disco critico: ${usage}% usado"
+  elif [ "$usage" -ge 75 ]; then
+    warn "Disco em atencao: ${usage}% usado"
+  else
+    ok "Disco saudavel: ${usage}% usado"
+  fi
+
+  if [ "${RECORDING_AUTO_START_ENABLED:-false}" = "true" ] && [ "${usage:-100}" -ge 75 ]; then
+    fail "RECORDING_AUTO_START_ENABLED=true com disco acima de 75%; risco de esgotar storage no boot"
+  elif [ "${RECORDING_AUTO_START_ENABLED:-false}" = "true" ]; then
+    warn "Gravacao continua inicia automaticamente no boot; use apenas com storage dimensionado"
+  else
+    ok "Auto-start de gravacao continua desativado por padrao seguro"
+  fi
+
+  if [ "${RECORDING_DISK_GUARD_ENABLED:-true}" = "true" ]; then
+    ok "Guarda de disco das gravacoes habilitada"
+  else
+    fail "RECORDING_DISK_GUARD_ENABLED=false; producao fica sem protecao contra disco cheio"
+  fi
+
+  local backup_dir="$ROOT_DIR/infra/backups/postgres"
+  local latest=""
+  if [ -d "$backup_dir" ]; then
+    latest="$(find "$backup_dir" -type f -name 'drac-postgres-*.dump' -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR==1 {print $2}')"
+  fi
+
+  if [ -z "$latest" ]; then
+    warn "Nenhum backup Postgres encontrado em $backup_dir"
+    return
+  fi
+
+  local now mtime age_hours
+  now="$(date +%s)"
+  mtime="$(stat -c '%Y' "$latest" 2>/dev/null || echo 0)"
+  age_hours=$(( (now - mtime) / 3600 ))
+
+  if [ "$age_hours" -le 36 ]; then
+    ok "Backup Postgres recente encontrado (${age_hours}h): $(basename "$latest")"
+  else
+    warn "Backup Postgres antigo (${age_hours}h): $(basename "$latest")"
+  fi
+}
+
+check_exposure() {
+  if docker ps --format '{{.Names}} {{.Ports}}' | grep -E 'vms-(postgres|redis).*0\.0\.0\.0:' >/dev/null; then
+    fail "Postgres ou Redis exposto em 0.0.0.0"
+  else
+    ok "Postgres/Redis nao expostos publicamente pelo Docker"
+  fi
+
+  if docker inspect vms-api 2>/dev/null | grep -q '/var/run/docker.sock'; then
+    fail "API monta /var/run/docker.sock; risco critico de escalada"
+  else
+    ok "API nao monta Docker socket"
+  fi
+
+  if [ "${MEDIAMTX_HLS_ALLOW_ORIGIN:-*}" = "*" ] || [ "${MEDIAMTX_WEBRTC_ALLOW_ORIGIN:-*}" = "*" ]; then
+    warn "MediaMTX HLS/WebRTC com allow origin '*'; em producao use dominio HTTPS real"
+  else
+    ok "MediaMTX com allow origin restrito"
+  fi
+}
+
+check_cloud_settings() {
+  [ "${CLOUD_CONNECTOR_ENABLED:-false}" = "true" ] || return
+
+  local user="${POSTGRES_USER:-vms}"
+  local db="${POSTGRES_DB:-vms_db}"
+  local pass="${POSTGRES_PASSWORD:-}"
+  local status last_sync last_error
+
+  status="$(docker exec -e PGPASSWORD="$pass" vms-postgres psql -U "$user" -d "$db" -Atc "select value from \"SystemSetting\" where key='cloud.licenseStatus' limit 1;" 2>/dev/null || true)"
+  last_sync="$(docker exec -e PGPASSWORD="$pass" vms-postgres psql -U "$user" -d "$db" -Atc "select value from \"SystemSetting\" where key='cloud.lastSyncAt' limit 1;" 2>/dev/null || true)"
+  last_error="$(docker exec -e PGPASSWORD="$pass" vms-postgres psql -U "$user" -d "$db" -Atc "select value from \"SystemSetting\" where key='cloud.lastError' limit 1;" 2>/dev/null || true)"
+
+  if [ -n "$last_sync" ]; then
+    ok "Central heartbeat registrado em $last_sync"
+  else
+    warn "Central heartbeat ainda nao registrado no banco"
+  fi
+
+  case "$status" in
+    ACTIVE|GRACE)
+      ok "Licenca central em estado $status"
+      ;;
+    RESTRICTED|SUSPENDED)
+      fail "Licenca central em estado $status"
+      ;;
+    *)
+      warn "Licenca central em estado ${status:-UNKNOWN}"
+      ;;
+  esac
+
+  if [ -n "$last_error" ]; then
+    warn "Ultimo erro da Central: $last_error"
+  else
+    ok "Sem erro recente registrado da Central"
+  fi
+}
+
+print_summary() {
+  local status="Pronto"
+  local exit_code=0
+
+  if [ "$FAILURES" -gt 0 ]; then
+    status="Bloqueado"
+    exit_code=2
+  elif [ "$WARNINGS" -gt 0 ]; then
+    status="Atencao"
+    exit_code=1
+  fi
+
+  printf '\n'
+  log "Resultado: $status"
+  printf 'Checks: %s | Atencoes: %s | Bloqueios: %s\n' "$CHECKS" "$WARNINGS" "$FAILURES"
+
+  if [ "$OUTPUT_MODE" = "--json" ] || [ "$OUTPUT_MODE" = "json" ]; then
+    printf '{"status":"%s","checks":%s,"warnings":%s,"failures":%s}\n' "$status" "$CHECKS" "$WARNINGS" "$FAILURES"
+  fi
+
+  return "$exit_code"
+}
+
+main() {
+  log "Executando checklist automatico de producao"
+  load_env
+  check_required_commands
+  check_env_security
+  check_containers
+  check_endpoints
+  check_database
+  check_camera_profiles
+  check_redis
+  check_ai_service
+  check_mediamtx
+  check_storage_and_backups
+  check_exposure
+  check_cloud_settings
+  print_summary
+}
+
+main "$@"

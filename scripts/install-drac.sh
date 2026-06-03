@@ -256,6 +256,15 @@ validate_installation() {
   else
     warn "Nao foi possivel validar a central agora. Confira rede/firewall e CLOUD_API_URL."
   fi
+
+  if [ -x "$DRAC_INSTALL_DIR/scripts/production-readiness.sh" ]; then
+    log "Executando checklist automatico de producao"
+    if run_as_user "$DRAC_OPERATING_USER" bash -lc "cd '$DRAC_INSTALL_DIR' && ./scripts/production-readiness.sh"; then
+      log "Checklist automatico retornou Pronto."
+    else
+      warn "Checklist automatico encontrou pendencias. Revise os itens ATENCAO/BLOQUEADO acima."
+    fi
+  fi
 }
 
 print_summary() {
