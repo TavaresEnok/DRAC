@@ -129,6 +129,22 @@ A central registra em `data/installations.json`:
 
 O painel exibe os ultimos eventos na aba `Auditoria`.
 
+## Historico operacional
+
+A Central guarda historico por instalacao para operacao real:
+
+- ultimas amostras de heartbeat com cameras online/offline, disco, memoria, carga, alarmes e gravacoes;
+- graficos compactos de tendencia da frota na tela principal;
+- graficos por cliente no detalhe da instalacao;
+- historico persistente de alertas com primeiro visto, ultimo visto, resolucao e quantidade de ocorrencias.
+
+O tamanho do historico pode ser ajustado por:
+
+```bash
+DRAC_CENTRAL_HISTORY_LIMIT=100
+DRAC_CENTRAL_ALERT_HISTORY_LIMIT=500
+```
+
 ## Seguranca minima para producao
 
 - Usar HTTPS na frente da central.

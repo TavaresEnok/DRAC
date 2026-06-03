@@ -36,6 +36,7 @@ const DEFAULT_INSTALLER_URL =
 const ONLINE_THRESHOLD_SECONDS = Number(process.env.DRAC_CENTRAL_ONLINE_THRESHOLD_SECONDS || 180);
 const HEARTBEAT_HISTORY_LIMIT = Number(process.env.DRAC_CENTRAL_HISTORY_LIMIT || 100);
 const AUDIT_HISTORY_LIMIT = Number(process.env.DRAC_CENTRAL_AUDIT_HISTORY_LIMIT || 500);
+const ALERT_HISTORY_LIMIT = Number(process.env.DRAC_CENTRAL_ALERT_HISTORY_LIMIT || 500);
 const LOGIN_WINDOW_MS = Math.max(1, Number(process.env.DRAC_CENTRAL_LOGIN_WINDOW_MINUTES || 15)) * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = Math.max(1, Number(process.env.DRAC_CENTRAL_LOGIN_MAX_ATTEMPTS || 8));
 const ALLOWED_ORIGINS = String(process.env.DRAC_CENTRAL_ALLOWED_ORIGINS || '*')
@@ -383,6 +384,57 @@ function metricValue(item, key, fallback = null) {
   return fallback;
 }
 
+function alertKey(alert) {
+  const code = String(alert?.code || 'generic').trim().toLowerCase();
+  const message = String(alert?.message || '').trim().toLowerCase().slice(0, 120);
+  return `${code}:${message}`;
+}
+
+function updateAlertHistory(existing, alerts, now) {
+  const history = Array.isArray(existing.alertHistory) ? existing.alertHistory.slice() : [];
+  const activeKeys = new Set(alerts.map(alertKey));
+  const indexByKey = new Map(history.map((entry, index) => [entry.key, index]));
+
+  for (const alert of alerts) {
+    const key = alertKey(alert);
+    const previousIndex = indexByKey.get(key);
+    if (previousIndex == null) {
+      history.push({
+        id: crypto.randomUUID(),
+        key,
+        status: 'ACTIVE',
+        level: alert.level || 'warning',
+        code: alert.code || 'generic',
+        message: alert.message || 'Alerta operacional.',
+        firstSeenAt: now,
+        lastSeenAt: now,
+        resolvedAt: null,
+        occurrences: 1,
+      });
+      continue;
+    }
+    const entry = history[previousIndex];
+    entry.status = 'ACTIVE';
+    entry.level = alert.level || entry.level || 'warning';
+    entry.code = alert.code || entry.code || 'generic';
+    entry.message = alert.message || entry.message || 'Alerta operacional.';
+    entry.lastSeenAt = now;
+    entry.resolvedAt = null;
+    entry.occurrences = Number(entry.occurrences || 0) + 1;
+  }
+
+  for (const entry of history) {
+    if (entry.status === 'ACTIVE' && !activeKeys.has(entry.key)) {
+      entry.status = 'RESOLVED';
+      entry.resolvedAt = now;
+    }
+  }
+
+  return history
+    .sort((a, b) => new Date(b.lastSeenAt || b.firstSeenAt || 0).getTime() - new Date(a.lastSeenAt || a.firstSeenAt || 0).getTime())
+    .slice(0, ALERT_HISTORY_LIMIT);
+}
+
 function publicInstallation(item) {
   const lastHeartbeatAt = item.lastHeartbeatAt ? new Date(item.lastHeartbeatAt).getTime() : 0;
   const updatedAt = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
@@ -404,6 +456,7 @@ function publicInstallation(item) {
     lastHeartbeatAt: item.lastHeartbeatAt || null,
     metrics: item.metrics || {},
     alerts: item.alerts || [],
+    alertHistory: Array.isArray(item.alertHistory) ? item.alertHistory : [],
     server: item.server || null,
     storage: item.storage || null,
     heartbeatHistory: Array.isArray(item.heartbeatHistory) ? item.heartbeatHistory : [],
@@ -455,6 +508,9 @@ async function handleHeartbeat(req, res) {
   const now = new Date().toISOString();
   const metrics = body.summary || body.metrics || {};
   const alerts = Array.isArray(metrics.alerts) ? metrics.alerts : Array.isArray(body.alerts) ? body.alerts : [];
+  const memoryUsagePercent = body.server?.totalMemoryBytes
+    ? Math.round(((Number(body.server.totalMemoryBytes) - Number(body.server.freeMemoryBytes || 0)) / Number(body.server.totalMemoryBytes)) * 100)
+    : null;
   const heartbeatHistory = Array.isArray(existing.heartbeatHistory) ? existing.heartbeatHistory : [];
   heartbeatHistory.push({
     at: now,
@@ -465,8 +521,14 @@ async function handleHeartbeat(req, res) {
     cameraError: Number(metricValue({ metrics }, 'cameraError', 0)),
     openAlarms: Number(metrics.openAlarms || 0),
     diskUsagePercent: metrics.diskUsagePercent ?? metrics.disk?.usagePercent ?? null,
+    memoryUsagePercent,
+    load1: Array.isArray(body.server?.loadAverage) ? body.server.loadAverage[0] ?? null : null,
+    recordingCount: Number(metrics.recordingCount || 0),
+    activeRecordingCount: Number(metrics.activeRecordingCount || 0),
+    activeUsers: Number(metrics.activeUsers || 0),
   });
   while (heartbeatHistory.length > HEARTBEAT_HISTORY_LIMIT) heartbeatHistory.shift();
+  const alertHistory = updateAlertHistory(existing, alerts, now);
   const item = {
     ...existing,
     id: installationId,
@@ -479,6 +541,7 @@ async function handleHeartbeat(req, res) {
     updatedAt: now,
     metrics,
     alerts: alerts.slice(0, 100),
+    alertHistory,
     server: body.server || existing.server || null,
     storage: body.storage || existing.storage || null,
     heartbeatHistory,
@@ -534,6 +597,7 @@ async function handleProvision(req, res, db, actor) {
     provisionNotes: notes || null,
     metrics: existing?.metrics || {},
     alerts: existing?.alerts || [],
+    alertHistory: Array.isArray(existing?.alertHistory) ? existing.alertHistory : [],
     heartbeatHistory: Array.isArray(existing?.heartbeatHistory) ? existing.heartbeatHistory : [],
     licenseHistory: Array.isArray(existing?.licenseHistory) ? existing.licenseHistory : [],
   };

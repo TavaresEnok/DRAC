@@ -158,6 +158,16 @@
       .resource.blocked { border-color: #f5b7ae; background: var(--red-soft); color: var(--red); }
       .spark { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; align-items: end; height: 54px; }
       .spark span { display: block; min-height: 4px; border-radius: 4px 4px 0 0; background: var(--brand); opacity: .85; }
+      .trend-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .trend-card { border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; background: #fcfdfe; }
+      .trend-card label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+      .trend-card strong { display: block; font-size: 20px; }
+      .trend-card svg { display: block; width: 100%; height: 54px; margin-top: 8px; overflow: visible; }
+      .trend-card path { fill: none; stroke: var(--brand); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+      .trend-card .area { fill: rgba(21, 91, 117, .08); stroke: none; }
+      .history-grid { display: grid; gap: 10px; }
+      .history-item { border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; background: var(--surface); }
+      .history-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 12px; }
       .deploy-steps { display: grid; gap: 8px; }
       .deploy-step { display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; background: #fcfdfe; }
       .deploy-dot { width: 24px; height: 24px; border-radius: 999px; display: grid; place-items: center; font-size: 11px; font-weight: 900; color: #fff; background: var(--quiet); }
@@ -201,6 +211,7 @@
         .content { padding: 16px; }
         .metrics, .cards-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .filters { grid-template-columns: 1fr; }
+        .trend-grid { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -279,6 +290,15 @@
             <div class="metric-card"><label>Alarmes abertos</label><strong id="m-alarms">0</strong><span>reportados pelos servidores</span></div>
             <div class="metric-card"><label>Maior uso de disco</label><strong id="m-disk">-%</strong><span>entre todos os clientes</span></div>
           </div>
+          <section class="panel" style="margin-bottom:16px">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">Tendência da frota</div>
+                <div class="panel-subtitle">Últimas amostras recebidas pela Central</div>
+              </div>
+            </div>
+            <div id="fleet-trends" class="detail-body"></div>
+          </section>
           <div class="workgrid">
             <section class="panel">
               <div class="panel-head">
@@ -745,6 +765,89 @@
           return `<span style="height:${hgt}px" title="${escapeHtml(`${h.at} - ${online}/${h.cameraTotal || 0}`)}"></span>`;
         }).join('')}</div>`;
       }
+      function renderTrendCard(item, key, label, suffix = '', fixedMax = null) {
+        const history = (item.heartbeatHistory || []).slice(-48);
+        const values = history.map(point => number(point[key], 0));
+        const current = values.length ? values.at(-1) : number(metric(item, key, 0));
+        if (!values.length) {
+          return `<div class="trend-card"><label>${escapeHtml(label)}</label><strong>-</strong><div class="subtext">Sem histórico suficiente.</div></div>`;
+        }
+        const max = fixedMax ?? Math.max(1, ...values);
+        const width = 220;
+        const height = 54;
+        const points = values.map((value, index) => {
+          const x = values.length === 1 ? width : Math.round((index / (values.length - 1)) * width);
+          const y = Math.round(height - (Math.max(0, Math.min(max, value)) / max) * height);
+          return [x, y];
+        });
+        const line = points.map(([x, y], index) => `${index ? 'L' : 'M'}${x},${y}`).join(' ');
+        const area = `${line} L${points.at(-1)[0]},${height} L${points[0][0]},${height} Z`;
+        return `
+          <div class="trend-card">
+            <label>${escapeHtml(label)}</label>
+            <strong>${escapeHtml(current)}${suffix}</strong>
+            <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+              <path class="area" d="${area}"></path>
+              <path d="${line}"></path>
+            </svg>
+          </div>`;
+      }
+      function renderTrends(item) {
+        return `<div class="trend-grid">
+          ${renderTrendCard(item, 'cameraOnline', 'Câmeras online')}
+          ${renderTrendCard(item, 'diskUsagePercent', 'Uso de disco', '%', 100)}
+          ${renderTrendCard(item, 'memoryUsagePercent', 'Memória do servidor', '%', 100)}
+          ${renderTrendCard(item, 'openAlarms', 'Alarmes abertos')}
+        </div>`;
+      }
+      function fleetSeries(items, key, mode = 'sum') {
+        const depth = Math.max(1, ...items.map(item => (item.heartbeatHistory || []).length));
+        const limit = Math.min(48, depth);
+        const values = [];
+        for (let offset = limit - 1; offset >= 0; offset -= 1) {
+          const sample = [];
+          for (const item of items) {
+            const history = item.heartbeatHistory || [];
+            const point = history[history.length - 1 - offset];
+            if (!point) continue;
+            sample.push(number(point[key], 0));
+          }
+          if (!sample.length) values.push(0);
+          else if (mode === 'max') values.push(Math.max(...sample));
+          else values.push(sample.reduce((sum, value) => sum + value, 0));
+        }
+        return values;
+      }
+      function renderSeriesCard(label, values, suffix = '', fixedMax = null) {
+        const current = values.length ? values.at(-1) : 0;
+        const max = fixedMax ?? Math.max(1, ...values);
+        const width = 220;
+        const height = 54;
+        const points = values.length ? values.map((value, index) => {
+          const x = values.length === 1 ? width : Math.round((index / (values.length - 1)) * width);
+          const y = Math.round(height - (Math.max(0, Math.min(max, value)) / max) * height);
+          return [x, y];
+        }) : [[0, height], [width, height]];
+        const line = points.map(([x, y], index) => `${index ? 'L' : 'M'}${x},${y}`).join(' ');
+        const area = `${line} L${points.at(-1)[0]},${height} L${points[0][0]},${height} Z`;
+        return `
+          <div class="trend-card">
+            <label>${escapeHtml(label)}</label>
+            <strong>${escapeHtml(current)}${suffix}</strong>
+            <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+              <path class="area" d="${area}"></path>
+              <path d="${line}"></path>
+            </svg>
+          </div>`;
+      }
+      function renderFleetTrends(items) {
+        document.querySelector('#fleet-trends').innerHTML = `<div class="trend-grid">
+          ${renderSeriesCard('Câmeras online', fleetSeries(items, 'cameraOnline'))}
+          ${renderSeriesCard('Maior disco', fleetSeries(items, 'diskUsagePercent', 'max'), '%', 100)}
+          ${renderSeriesCard('Maior memória', fleetSeries(items, 'memoryUsagePercent', 'max'), '%', 100)}
+          ${renderSeriesCard('Alarmes abertos', fleetSeries(items, 'openAlarms'))}
+        </div>`;
+      }
       function renderResources(status, item = null) {
         const map = restrictionMap(status, item);
         return `<div class="resource-grid">${Object.entries(map).map(([key, allowed]) => `
@@ -837,6 +940,10 @@
             <div class="section">
               <div class="section-title">Histórico recente</div>
               ${renderSpark(item)}
+            </div>
+            <div class="section">
+              <div class="section-title">Tendências</div>
+              ${renderTrends(item)}
             </div>
             <div class="section">
               <div class="section-title">Servidor</div>
@@ -942,14 +1049,47 @@
         }
         return alerts;
       }
+      function collectAlertHistory() {
+        const rows = [];
+        for (const item of state.installations) {
+          for (const entry of item.alertHistory || []) {
+            rows.push({ ...entry, item });
+          }
+        }
+        return rows.sort((a, b) => {
+          if (a.status !== b.status) return a.status === 'ACTIVE' ? -1 : 1;
+          return new Date(b.lastSeenAt || b.firstSeenAt || 0).getTime() - new Date(a.lastSeenAt || a.firstSeenAt || 0).getTime();
+        });
+      }
       function renderAlerts() {
         const alerts = collectAlerts();
-        els.alertsBoard.innerHTML = alerts.length ? `<div class="alert-list">${alerts.map(alert => `
-          <div class="alert-item">
-            <span class="badge ${alert.tone}">${escapeHtml(alert.title)}</span>
-            <div class="subtext">${escapeHtml(alert.item.customerName || alert.item.id)}</div>
-            <div style="margin-top:8px">${escapeHtml(alert.message)}</div>
-          </div>`).join('')}</div>` : '<div class="empty">Nenhum alerta ativo.</div>';
+        const history = collectAlertHistory();
+        els.alertsBoard.innerHTML = `
+          <div class="section" style="border-top:0;margin-top:0;padding-top:0">
+            <div class="section-title">Alertas ativos</div>
+            ${alerts.length ? `<div class="alert-list">${alerts.map(alert => `
+              <div class="alert-item">
+                <span class="badge ${alert.tone}">${escapeHtml(alert.title)}</span>
+                <div class="subtext">${escapeHtml(alert.item.customerName || alert.item.id)}</div>
+                <div style="margin-top:8px">${escapeHtml(alert.message)}</div>
+              </div>`).join('')}</div>` : '<div class="empty">Nenhum alerta ativo.</div>'}
+          </div>
+          <div class="section">
+            <div class="section-title">Histórico persistente</div>
+            ${history.length ? `<div class="history-grid">${history.slice(0, 80).map(entry => `
+              <div class="history-item">
+                <span class="badge ${entry.status === 'ACTIVE' ? (entry.level === 'critical' ? 'bad' : 'warn') : 'neutral'}">${entry.status === 'ACTIVE' ? 'Ativo' : 'Resolvido'}</span>
+                <strong style="display:block;margin-top:8px">${escapeHtml(alertCodeLabels[entry.code] || entry.code || 'Alerta operacional')}</strong>
+                <div class="subtext">${escapeHtml(entry.item.customerName || entry.item.id)}</div>
+                <div style="margin-top:8px">${escapeHtml(entry.message || 'Sem mensagem.')}</div>
+                <div class="history-meta">
+                  <span>primeiro: ${entry.firstSeenAt ? dtf.format(new Date(entry.firstSeenAt)) : '-'}</span>
+                  <span>último: ${entry.lastSeenAt ? dtf.format(new Date(entry.lastSeenAt)) : '-'}</span>
+                  ${entry.resolvedAt ? `<span>resolvido: ${dtf.format(new Date(entry.resolvedAt))}</span>` : ''}
+                  <span>${fmt.format(number(entry.occurrences, 1))} ocorrência(s)</span>
+                </div>
+              </div>`).join('')}</div>` : '<div class="empty">Nenhum histórico de alerta persistente.</div>'}
+          </div>`;
       }
       function renderAudit() {
         const events = state.auditEvents || [];
@@ -993,6 +1133,7 @@
         setView(state.view);
         const items = filteredItems();
         renderMetrics(items);
+        renderFleetTrends(items);
         renderRows(items);
         renderDetail();
         renderInventory();
