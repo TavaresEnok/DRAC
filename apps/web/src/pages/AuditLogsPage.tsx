@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ClipboardList, Download, Filter } from 'lucide-react';
+import { ClipboardList, Filter } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -47,7 +47,7 @@ export default function AuditLogsPage() {
               <SelectValue placeholder="Usuário" />
             </SelectTrigger>
             <SelectContent>
-              {users.map(u => <SelectItem key={u} value={u} className="text-xs font-mono">{u === 'all' ? 'Todos usuários' : u}</SelectItem>)}
+              {users.map(u => <SelectItem key={u} value={u} className="text-xs">{u === 'all' ? 'Todos usuários' : u === 'system' ? 'Sistema' : u}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={filterAction} onValueChange={setFilterAction}>
@@ -59,9 +59,6 @@ export default function AuditLogsPage() {
               {actionTypes.map(a => <SelectItem key={a} value={a} className="text-xs">{a}</SelectItem>)}
             </SelectContent>
           </Select>
-          <button className="flex items-center gap-1.5 h-7 px-3 rounded border border-border bg-card text-xs hover:bg-accent">
-            <Download className="h-3.5 w-3.5" />Exportar
-          </button>
         </div>
       </div>
 
@@ -82,7 +79,7 @@ export default function AuditLogsPage() {
                 false
               )}>
                 <td className="px-4 py-2 font-mono text-muted-foreground whitespace-nowrap">{log.createdAt.replace('T', ' ').substring(0, 19)}</td>
-                <td className="px-4 py-2 font-mono font-medium">{log.userId ?? 'system'}</td>
+                <td className="px-4 py-2 font-medium">{log.userId ?? 'Sistema'}</td>
                 <td className="px-4 py-2">{log.action}</td>
                 <td className="px-4 py-2 font-mono text-muted-foreground max-w-xs truncate">{log.entityType}{log.entityId ? ` / ${log.entityId}` : ''}</td>
                 <td className="px-4 py-2 font-mono text-muted-foreground">{log.ipAddress ?? '-'}</td>

@@ -1172,7 +1172,7 @@ export default function CamerasPage() {
                 ))}
               </div>
               <details className="rounded-lg border border-border bg-background/60 px-3 py-2 text-xs">
-                <summary className="cursor-pointer font-medium text-[hsl(var(--muted-foreground))]">Detalhes técnicos</summary>
+                <summary className="cursor-pointer font-medium text-[hsl(var(--muted-foreground))]">Informações da câmera</summary>
                 <div className="mt-2 space-y-2 border-t border-border pt-2">
                   {[
                     ['Endereço IP', selectedCam.ipAddress],

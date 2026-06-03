@@ -1,4 +1,4 @@
-import { FileText, Download, BarChart3, HardDrive, Camera, Activity } from 'lucide-react';
+import { FileText, BarChart3, HardDrive, Camera, Activity } from 'lucide-react';
 import { useVmsDataStore } from '../store/vmsDataStore';
 
 function formatBytesToGb(value: number) {
@@ -19,11 +19,6 @@ export default function RelatóriosPage() {
           <FileText className="h-4 w-4 text-primary" />
           <h1 className="text-lg font-semibold">Relatórios</h1>
         </div>
-        <div className="flex items-center gap-2">
-          <button className="flex items-center gap-1.5 h-7 px-3 rounded border border-border bg-card text-xs hover:bg-accent">
-            <Download className="h-3.5 w-3.5" />Exportar Resumo
-          </button>
-        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
@@ -34,7 +29,7 @@ export default function RelatóriosPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="bg-card rounded-lg border border-border p-4">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Camera className="h-3.5 w-3.5" />
               Câmeras
             </div>
@@ -43,7 +38,7 @@ export default function RelatóriosPage() {
           </div>
 
           <div className="bg-card rounded-lg border border-border p-4">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Activity className="h-3.5 w-3.5" />
               Eventos
             </div>
@@ -52,7 +47,7 @@ export default function RelatóriosPage() {
           </div>
 
           <div className="bg-card rounded-lg border border-border p-4">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <FileText className="h-3.5 w-3.5" />
               Gravações
             </div>
@@ -63,7 +58,7 @@ export default function RelatóriosPage() {
           </div>
 
           <div className="bg-card rounded-lg border border-border p-4">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <HardDrive className="h-3.5 w-3.5" />
               Disco
             </div>
@@ -75,17 +70,17 @@ export default function RelatóriosPage() {
         </div>
 
         <div className="bg-card rounded-lg border border-border p-5">
-          <div className="text-sm font-semibold">Escopo Atual do Relatório</div>
+          <div className="text-sm font-semibold">Resumo disponível</div>
           <div className="mt-2 text-sm text-muted-foreground">
-            Esta página agora exibe apenas dados reais do ambiente atual. Relatórios analíticos avançados ainda dependem de agregações específicas no backend.
+            Esta tela usa apenas dados reais do servidor atual. Exportações e relatórios analíticos avançados entram como próxima camada, sem simular informação.
           </div>
           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
             <div className="rounded-lg border border-border bg-background px-4 py-3">
-              <div className="text-muted-foreground uppercase tracking-wider text-[10px]">Host</div>
+              <div className="text-muted-foreground text-[10px]">Servidor</div>
               <div className="mt-1 font-mono">{system?.server.hostname ?? 'N/D'}</div>
             </div>
             <div className="rounded-lg border border-border bg-background px-4 py-3">
-              <div className="text-muted-foreground uppercase tracking-wider text-[10px]">Pasta Raiz das Gravações</div>
+              <div className="text-muted-foreground text-[10px]">Pasta das gravações</div>
               <div className="mt-1 font-mono">{system?.recordingsRoot ?? 'N/D'}</div>
             </div>
           </div>

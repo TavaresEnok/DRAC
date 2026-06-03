@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { HardDrive, ShieldAlert, Thermometer, Server, RefreshCw, FileText, Cpu, MemoryStick, Activity, Trash2 } from 'lucide-react';
+import { HardDrive, Thermometer, RefreshCw, Cpu, MemoryStick, Activity, Trash2 } from 'lucide-react';
 import { useVmsDataStore } from '../store/vmsDataStore';
 import { useAuthStore } from '../store/authStore';
 import { getApiBaseUrl } from '../lib/api-base';
@@ -125,9 +125,6 @@ export default function MonitoramentoPage() {
           >
             <Trash2 className="w-3.5 h-3.5" /> {deletingVideos ? 'Apagando...' : 'Apagar vídeos'}
           </button>
-          <button className="flex items-center gap-2 px-3 py-2 rounded border border-border bg-card text-xs hover:bg-[hsl(var(--accent))] transition-colors">
-            <FileText className="w-3.5 h-3.5" /> Política de Retenção
-          </button>
         </div>
       </div>
       <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
@@ -140,12 +137,12 @@ export default function MonitoramentoPage() {
           <div className="bg-card border border-card-border rounded-xl p-4"><div className="text-[10px] uppercase text-[hsl(var(--muted-foreground))]">Livre</div><div className="mt-2 text-2xl font-semibold">{free.toFixed(1)} TB</div></div>
         </div>
       </div>
-      <details className="rounded-2xl border border-border bg-card shadow-sm">
-        <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">Diagnóstico do servidor</summary>
+      <details className="rounded-lg border border-border bg-card shadow-sm">
+        <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">Saúde do servidor</summary>
         <div className="flex items-start justify-between gap-4 border-b border-border/70 px-5 py-4">
           <div className="min-w-0">
-            <h3 className="text-[15px] font-semibold tracking-tight text-foreground">Telemetria</h3>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">Carga atual consolidada do servidor.</p>
+            <h3 className="text-[15px] font-semibold text-foreground">Uso atual</h3>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">Carga consolidada do servidor neste momento.</p>
           </div>
         </div>
         <div className="px-5 py-4">
@@ -185,19 +182,19 @@ export default function MonitoramentoPage() {
           </div>
         </div>
       </details>
-      <details className="bg-card border border-card-border rounded-xl">
-        <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">Discos e volumes</summary>
+      <details className="bg-card border border-card-border rounded-lg">
+        <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">Volumes</summary>
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <div>
-            <div className="text-xs font-semibold text-[hsl(var(--muted-foreground))]">Detalhes técnicos de armazenamento</div>
+            <div className="text-xs font-semibold text-[hsl(var(--muted-foreground))]">Detalhes de armazenamento</div>
           </div>
           <button className="text-xs flex items-center gap-2 text-[hsl(var(--muted-foreground))] hover:text-foreground transition-colors"><RefreshCw className="w-3.5 h-3.5" /> Atualizar</button>
         </div>
         <table className="w-full text-sm">
-          <thead className="text-[10px] uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">
+          <thead className="text-[10px] text-[hsl(var(--muted-foreground))]">
             <tr className="border-b border-border">
               <th className="text-left px-5 py-3">Servidor</th>
-              <th className="text-left px-5 py-3">Disco / Volume</th>
+              <th className="text-left px-5 py-3">Volume</th>
               <th className="text-left px-5 py-3">Tipo</th>
               <th className="text-left px-5 py-3">Uso</th>
               <th className="text-left px-5 py-3">Saúde</th>
@@ -230,17 +227,17 @@ export default function MonitoramentoPage() {
           </div>
         </div>
         <div className="px-5 py-3 text-xs text-[hsl(var(--muted-foreground))]">
-          {analyticsLoading && 'Carregando analytics...'}
+          {analyticsLoading && 'Carregando uso por câmera...'}
           {!analyticsLoading && analyticsError && analyticsError}
           {!analyticsLoading && analytics && (
             <span>
-              linhas: {analytics.summary.rows} · gravações: {toGB(analytics.summary.totalRecordingsBytes)} GB · clips: {toGB(analytics.summary.totalClipsBytes)} GB · total: {toGB(analytics.summary.totalBytes)} GB
+              {analytics.summary.rows} linha(s) · gravações: {toGB(analytics.summary.totalRecordingsBytes)} GB · clips: {toGB(analytics.summary.totalClipsBytes)} GB · total: {toGB(analytics.summary.totalBytes)} GB
             </span>
           )}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="text-[10px] uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">
+            <thead className="text-[10px] text-[hsl(var(--muted-foreground))]">
               <tr className="border-b border-border">
                 <th className="text-left px-5 py-3">Dia</th>
                 <th className="text-left px-5 py-3">Câmera</th>

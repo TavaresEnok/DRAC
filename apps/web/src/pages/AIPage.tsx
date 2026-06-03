@@ -106,7 +106,7 @@ export default function AIPage() {
             </p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight">Detecção inteligente</h1>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              Controle quais câmeras participam da análise e qual tipo de detecção fica ativo.
+              Controle o módulo de análise visual. No perfil standard, a IA pode permanecer desligada sem afetar live, gravação e reprodução.
             </p>
           </div>
           <button
@@ -120,26 +120,31 @@ export default function AIPage() {
         </header>
 
         {message && <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">{message}</div>}
+        {settings && !settings.enabled && (
+          <div className="rounded-lg border border-border bg-card/80 px-4 py-3 text-sm text-muted-foreground">
+            IA desligada neste servidor. O sistema continua operando normalmente com câmeras, WebRTC, gravação e playback.
+          </div>
+        )}
         {health?.model_registry?.lastError && <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">{health.model_registry.lastError}</div>}
 
         <section className="grid gap-4 lg:grid-cols-[1.4fr_0.9fr]">
           <Card className="border-card-border bg-card/90">
             <CardHeader>
               <CardTitle>Modo ativo</CardTitle>
-              <CardDescription>Escolha o tipo de análise usado pelo sistema.</CardDescription>
+              <CardDescription>Escolha o comportamento quando a IA estiver ligada.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between rounded-lg border border-border bg-background/60 p-4">
                 <div>
                   <div className="text-sm font-semibold">IA do sistema</div>
-                  <div className="text-xs text-muted-foreground">Estado atual: {settings?.enabled ? 'ativo' : 'desligado'}</div>
+                  <div className="text-xs text-muted-foreground">Estado atual: {settings?.enabled ? 'ligada' : 'desligada'}</div>
                 </div>
                 <button
                   onClick={() => saveSettings({ enabled: !settings?.enabled })}
                   disabled={!settings || saving}
                   className={`rounded-xl px-4 py-2 text-xs font-semibold ${settings?.enabled ? 'bg-emerald-500 text-white' : 'border border-border bg-background'}`}
                 >
-                  {settings?.enabled ? 'Ativo' : 'Desligado'}
+                  {settings?.enabled ? 'Ligada' : 'Desligada'}
                 </button>
               </div>
 
@@ -186,7 +191,7 @@ export default function AIPage() {
                 </div>
               ))}
               <div className="rounded-lg border border-border bg-background/60 p-4">
-                <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Câmeras em análise</p>
+                <p className="mb-3 text-xs font-semibold text-muted-foreground">Câmeras em análise</p>
                 <div className="space-y-2">
                   {Object.keys(processors).length === 0 ? <p className="text-xs text-muted-foreground">Nenhuma câmera em análise.</p> : null}
                   {Object.entries(processors).map(([cameraId, info]: [string, any]) => {
@@ -198,7 +203,7 @@ export default function AIPage() {
                           <span className={info.running ? 'text-emerald-400' : 'text-red-400'}>{info.running ? 'ativa' : 'parada'}</span>
                         </div>
                         <details className="mt-1 text-[10px] text-muted-foreground">
-                          <summary className="cursor-pointer">Suporte</summary>
+                          <summary className="cursor-pointer">Detalhes</summary>
                           <div className="mt-1">
                             {info.analysis_type} | modelo: {modelLabel(info)} | gatilho: {info.motion_trigger ?? 'SYSTEM'} | {info.hibernating ? 'hibernando' : 'ativo'}
                           </div>

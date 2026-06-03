@@ -19,8 +19,8 @@ const statusDot = (s: string) => {
 };
 
 const statusOverlay = (s: string) => {
-  if (s === 'offline' || s === 'no_signal') return { label: s.replace('_', ' ').toUpperCase(), cls: 'bg-red-500/20 text-red-400 border-red-500/40' };
-  if (s === 'maintenance') return { label: 'MAINTENANCE', cls: 'bg-amber-500/20 text-amber-400 border-amber-500/40' };
+  if (s === 'offline' || s === 'no_signal') return { label: 'SEM SINAL', cls: 'bg-red-500/20 text-red-400 border-red-500/40' };
+  if (s === 'maintenance') return { label: 'MANUTENÇÃO', cls: 'bg-amber-500/20 text-amber-400 border-amber-500/40' };
   return null;
 };
 
@@ -67,7 +67,7 @@ export default function WallModePage() {
             {activeAlertas > 0 && (
               <div className="flex items-center gap-1.5 alarm-blink">
                 <Bell className="h-3.5 w-3.5 text-red-500" />
-                <span className="text-xs text-red-400 font-mono">{activeAlertas} Active Alertas</span>
+                <span className="text-xs text-red-400">{activeAlertas} alerta{activeAlertas === 1 ? '' : 's'} ativo{activeAlertas === 1 ? '' : 's'}</span>
               </div>
             )}
             <span className="text-xs font-mono text-slate-500">
@@ -77,7 +77,7 @@ export default function WallModePage() {
               onClick={() => setShowBar(false)}
               className="text-[10px] text-slate-600 hover:text-slate-400"
             >
-              Hide bar
+              Ocultar
             </button>
           </div>
         </div>
@@ -88,7 +88,7 @@ export default function WallModePage() {
           onClick={() => setShowBar(true)}
           className="absolute top-2 left-1/2 -translate-x-1/2 z-30 h-5 px-4 rounded-full bg-slate-900/80 border border-slate-700 text-[10px] text-slate-500 hover:text-white hover:bg-slate-800/90 transition-colors"
         >
-          Show controls
+          Mostrar controles
         </button>
       )}
 
@@ -107,7 +107,7 @@ export default function WallModePage() {
 
               <div className="absolute top-1.5 left-1.5 flex items-center gap-1.5 z-10">
                 <div className={cn('h-1.5 w-1.5 rounded-full', statusDot(cam.status))} />
-                <span className="text-[9px] font-mono text-white/80 bg-black/70 px-1 rounded">{cam.code}</span>
+                <span className="max-w-[180px] truncate rounded bg-black/70 px-1 text-[9px] text-white/80">{cam.name}</span>
               </div>
 
               {overlay && (
@@ -119,7 +119,7 @@ export default function WallModePage() {
               )}
 
               <div className="absolute bottom-1 left-1 right-1 flex justify-between items-center z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                <span className="text-[8px] font-mono text-white/60 bg-black/70 px-1 rounded">{cam.ipAddress}</span>
+                <span className="max-w-[160px] truncate rounded bg-black/70 px-1 text-[8px] text-white/60">{cam.zone}</span>
                 <span className="text-[8px] font-mono text-white/40 bg-black/70 px-1 rounded">
                   {new Date().toISOString().substring(11, 19)}
                 </span>
