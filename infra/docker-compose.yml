@@ -93,7 +93,9 @@ services:
       - CLOUD_HEARTBEAT_INTERVAL_SECONDS=${CLOUD_HEARTBEAT_INTERVAL_SECONDS:-60}
       - CLOUD_CONNECTOR_TIMEOUT_MS=${CLOUD_CONNECTOR_TIMEOUT_MS:-8000}
       - DRAC_VERSION=${DRAC_VERSION:-local}
+      - DRAC_LAUNCH_PROFILE=${DRAC_LAUNCH_PROFILE:-standard}
       - RECORDINGS_ROOT=/storage
+      - POSTGRES_BACKUP_DIR=/backups/postgres
       - RECORDING_AUTO_START_ENABLED=${RECORDING_AUTO_START_ENABLED:-false}
       - RECORDING_AUTO_START_DELAY_MS=${RECORDING_AUTO_START_DELAY_MS:-10000}
       - RECORDING_DISK_GUARD_ENABLED=${RECORDING_DISK_GUARD_ENABLED:-true}
@@ -135,6 +137,7 @@ services:
       - AI_ANALYTICS_HEVC_FALLBACK=${AI_ANALYTICS_HEVC_FALLBACK:-true}
     volumes:
       - ./storage:/storage
+      - ./backups/postgres:/backups/postgres:ro
     depends_on:
       - postgres
       - redis

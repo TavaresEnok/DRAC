@@ -148,6 +148,7 @@ O `test:e2e` e opt-in e pode testar stream token, gravacao e playback quando `DR
 - `POST /auth/login`
 - `GET /auth/me`
 - `GET /health`
+- `GET /health/operational-readiness`
 - `GET /cameras`
 - `POST /cameras`
 - `POST /cameras/:id/test-connection`
@@ -165,6 +166,10 @@ O `test:e2e` e opt-in e pode testar stream token, gravacao e playback quando `DR
 
 ## Producao
 
+O lancamento inicial recomendado usa `DRAC_LAUNCH_PROFILE=standard`: live WebRTC, cameras,
+usuarios, alertas, playback, Central, backup e operacao local. Nesse perfil, IA e gravacao
+continua sao opcionais e podem ser habilitadas depois por administrador.
+
 Antes de colocar em operacao real, siga um checklist de producao:
 
 1. HTTPS e reverse proxy.
@@ -172,11 +177,11 @@ Antes de colocar em operacao real, siga um checklist de producao:
 3. CORS restrito.
 4. Segredos fortes e rotacao definida.
 5. Backup e restore testados.
-6. Retencao de gravacoes validada.
+6. Retencao de gravacoes validada quando gravacao continua for habilitada.
 7. Storage dedicado e monitorado.
 8. MediaMTX protegido.
 9. Health checks e alertas.
-10. Teste e2e: login, cadastro de camera, RTSP, live, gravacao, playback e IA.
+10. Teste e2e: login, cadastro de camera, RTSP, live, gravacao opcional, playback e Central.
 
 Arquivos recomendados:
 
@@ -185,6 +190,7 @@ Arquivos recomendados:
 - `infra/reverse-proxy.nginx.example`: exemplo de Nginx com HTTPS, `/api` e sinalizacao WebRTC.
 - `docs/security-hardening.md`: guia de hardening, portas, MediaMTX, HTTPS/WebRTC e retencao.
 - `docs/clean-install.md`: roteiro de instalacao limpa do zero.
+- `docs/standard-launch-operations.md`: perfil standard, update, restore e diagnostico.
 
 Exemplo de deploy controlado:
 
@@ -200,5 +206,6 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml exec -w /app/ap
 
 - Guia de migracao: `docs/migracao-nova-vm.md`
 - Checklist de producao: `docs/production-readiness-checklist.md`
+- Operacao standard: `docs/standard-launch-operations.md`
 - App mobile: `apps/mobile/README.md`
 - Worker Go: `services/camera-worker-go/README.md`

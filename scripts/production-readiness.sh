@@ -94,6 +94,8 @@ is_placeholder_secret() {
 }
 
 check_env_security() {
+  ok "Perfil de lancamento: $(launch_profile)"
+
   local required=(
     POSTGRES_PASSWORD
     JWT_SECRET
@@ -257,6 +259,14 @@ psql_value() {
   docker exec -e PGPASSWORD="$pass" vms-postgres psql -U "$user" -d "$db" -Atc "$query" 2>/dev/null | head -n 1
 }
 
+launch_profile() {
+  printf '%s' "${DRAC_LAUNCH_PROFILE:-standard}" | tr '[:upper:]' '[:lower:]'
+}
+
+is_standard_launch() {
+  [ "$(launch_profile)" = "standard" ]
+}
+
 check_recording_capacity() {
   local storage_path="$1"
   local enforce_capacity="${2:-false}"
@@ -290,9 +300,17 @@ check_recording_capacity() {
 
   if [ "$enforce_capacity" != "true" ]; then
     if awk -v required="$required_gb" -v safe="$safe_capacity_gb" 'BEGIN { exit !(required > safe) }'; then
-      warn "Storage atual nao comportaria retencao continua de ${retention_days}d: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+      if is_standard_launch; then
+        ok "Storage atual nao comportaria retencao continua de ${retention_days}d, mas gravacao continua e opcional no perfil standard: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+      else
+        warn "Storage atual nao comportaria retencao continua de ${retention_days}d: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+      fi
     elif awk -v required="$required_gb" -v safe="$safe_capacity_gb" 'BEGIN { exit !(required > safe * 0.70) }'; then
-      warn "Storage apertado caso gravacao continua seja habilitada: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+      if is_standard_launch; then
+        ok "Storage apertado para gravacao continua futura, mas perfil standard nao exige continua: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+      else
+        warn "Storage apertado caso gravacao continua seja habilitada: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
+      fi
     else
       ok "Storage comporta retencao de ${retention_days}d caso gravacao continua seja habilitada: estimado ${required_gb}GB (${source}), capacidade segura ${safe_capacity_gb}GB"
     fi
@@ -354,7 +372,11 @@ check_camera_profiles() {
   fi
 
   if [ "${recording_enabled:-0}" -eq 0 ]; then
-    warn "Nenhuma camera esta com gravacao habilitada; o administrador pode ativar continua, movimento ou manual conforme o contrato"
+    if is_standard_launch; then
+      ok "Gravacao continua nao e obrigatoria no perfil standard; administrador pode ativar manual, movimento ou continua por camera"
+    else
+      warn "Nenhuma camera esta com gravacao habilitada; o administrador pode ativar continua, movimento ou manual conforme o contrato"
+    fi
   elif [ "$recording_enabled" -eq "$total" ]; then
     ok "Todas as cameras estao com gravacao habilitada (${recording_continuous:-0} em modo continuo)"
   else

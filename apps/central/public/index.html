@@ -813,6 +813,7 @@
               <div class="section-title">Estado operacional</div>
               <div class="kv">
                 <div>Produção</div><div><span class="badge ${readinessClass(item)}">${readinessLabel(item)}</span></div>
+                <div>Perfil</div><div>${escapeHtml(item.launchProfile || item.metrics?.launchProfile || 'standard')}</div>
                 <div>Comunicação</div><div>${communicationLabel(item)}</div>
                 <div>Contrato</div><div>${contractLabels[item.licenseStatus] || 'Regular'}</div>
                 <div>Gravações</div><div>${fmt.format(number(metric(item, 'recordingCount', 0)))} segmentos</div>

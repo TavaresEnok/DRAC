@@ -4,6 +4,11 @@ Objetivo: transformar o DRAC VMS em um sistema instalavel, monitoravel e validav
 
 Quando todos os itens deste checklist passarem, a instalacao pode ser marcada pela Central como **Producao pronta**.
 
+Perfil inicial aprovado: `DRAC_LAUNCH_PROFILE=standard`. Nesse perfil, gravacao continua e IA
+nao sao obrigatorias. O sistema deve ser considerado pronto quando live, cameras, usuarios,
+playback, alertas, backups, Central e seguranca passarem; storage para retencao continua vira
+capacidade futura enquanto a gravacao continua estiver desligada.
+
 ## Estados Da Instalacao
 
 - **Pronto**: todos os checks obrigatorios passaram.

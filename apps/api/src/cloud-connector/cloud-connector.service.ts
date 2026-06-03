@@ -150,6 +150,7 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
   private async collectPayload() {
     const recordingsRoot = process.env.RECORDINGS_ROOT ?? '/storage';
     const now = new Date();
+    const launchProfile = this.getLaunchProfile();
 
     const [disk, cameraCounts, cameraOperational, recordings, recentRecordings, activeRecordings, openAlarms, activeUsers] = await Promise.all([
       this.getDiskStats(recordingsRoot),
@@ -196,8 +197,9 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
     const continuousRecordingConfigured = cameraOperational.recordingContinuous > 0;
     const recordingAutoStartEnabled = String(process.env.RECORDING_AUTO_START_ENABLED ?? 'false') === 'true';
     const recordingCapacityEnforced = continuousRecordingConfigured || recordingAutoStartEnabled;
+    const recordingOptionalByProfile = launchProfile === 'standard' && !recordingCapacityEnforced;
 
-    if (cameraCounts.total > 0 && cameraOperational.recordingEnabled === 0) {
+    if (!recordingOptionalByProfile && cameraCounts.total > 0 && cameraOperational.recordingEnabled === 0) {
       alerts.push({
         level: 'warning',
         code: 'recording_disabled_all',
@@ -228,10 +230,12 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         id: process.env.CLOUD_INSTALLATION_ID,
         customerName: process.env.CLOUD_CUSTOMER_NAME || os.hostname(),
         version: process.env.DRAC_VERSION || process.env.npm_package_version || 'local',
+        launchProfile,
       },
       summary: {
         status: appReadinessStatus === 'blocked' ? 'blocked' : appReadinessStatus === 'attention' ? 'attention' : 'ok',
         productionReadiness: appReadinessStatus,
+        launchProfile,
         cameraTotal: cameraCounts.total,
         cameraOnline: cameraCounts.online,
         cameraOffline: cameraCounts.offline,
@@ -264,6 +268,7 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         disk,
       },
       production: {
+        launchProfile,
         readiness: {
           status: appReadinessStatus,
           generatedAt: now.toISOString(),
@@ -530,6 +535,11 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
   private getPositiveInt(value: string | undefined, fallback: number) {
     const parsed = Number.parseInt(String(value ?? ''), 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
+  private getLaunchProfile() {
+    const value = String(process.env.DRAC_LAUNCH_PROFILE || 'standard').trim().toLowerCase();
+    return value || 'standard';
   }
 
   private trimTrailingSlash(value: string) {

@@ -23,4 +23,10 @@ export class HealthController {
   system() {
     return this.healthService.getSystemSummary();
   }
+
+  @Roles(UserRole.ADMIN)
+  @Get('operational-readiness')
+  operationalReadiness() {
+    return this.healthService.getOperationalReadiness();
+  }
 }
