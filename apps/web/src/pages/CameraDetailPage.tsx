@@ -906,8 +906,8 @@ export default function CameraDetailPage() {
   const liveSourceLabel = liveSourceMode === 'original'
       ? 'Original da câmera'
       : liveSourceMode === 'economical'
-      ? 'Substream econômico'
-      : `Subtype ${form.liveSubtype || form.subtype || '--'}`;
+      ? 'Econômico'
+      : `Perfil personalizado ${form.liveSubtype || form.subtype || '--'}`;
   const recordingModeCopy = getRecordingModeCopy(form.recordingMode);
 
   const startManualRecording = async () => {
@@ -1419,9 +1419,9 @@ export default function CameraDetailPage() {
                         <div className="grid gap-3 md:grid-cols-3">
                           <SettingsField label="Fonte da imagem" hint="Original usa o perfil principal entregue pela câmera. Econômico usa substream.">
                             <SettingsSelect value={liveSourceMode} onChange={(event) => applyLiveSourceMode(event.target.value as LiveSourceMode)}>
-                              <option value="original">Original da câmera (principal)</option>
-                              <option value="economical">Substream econômico</option>
-                              {liveSourceMode === 'advanced' ? <option value="advanced">Subtype personalizado</option> : null}
+                              <option value="original">Original da câmera</option>
+                              <option value="economical">Econômico</option>
+                              {liveSourceMode === 'advanced' ? <option value="advanced">Perfil personalizado</option> : null}
                             </SettingsSelect>
                           </SettingsField>
                           <SettingsField label="Resolução em live" hint="Original mantém a resolução real do perfil escolhido.">

@@ -66,13 +66,17 @@ A central:
 - gera a chave/licenca no servidor;
 - grava auditoria;
 - entrega um comando unico `curl ... | bash` para executar no servidor do cliente;
+- usa `https://github.com/TavaresEnok/DRAC.git` por padrao, sem exigir chave SSH no cliente;
+- detecta automaticamente o IP local quando o campo de servidor nao for preenchido;
 - publica o instalador temporario em `/install/:installationId/:installerToken`;
+- permite copiar novamente o instalador oficial pela instalacao selecionada;
 - permite cancelar uma instalacao pendente antes do primeiro heartbeat.
 
 API usada pelo painel:
 
 ```text
 POST /api/admin/provision
+GET /api/admin/installations/:id/installer
 DELETE /api/admin/installations/:id
 ```
 

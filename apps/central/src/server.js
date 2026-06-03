@@ -260,6 +260,27 @@ ${command}
 `;
 }
 
+function buildInstallerResponse(item, centralUrl) {
+  const installerToken = item.installerToken || crypto.randomBytes(24).toString('base64url');
+  item.installerToken = installerToken;
+  const installCommand = buildQuickInstallCommand({ centralUrl, installationId: item.id, installerToken });
+  const fallbackInstallCommand = buildLegacyInstallCommand({
+    customerName: item.customerName || item.id,
+    installationId: item.id,
+    licenseKey: item.licenseKey,
+    serverAddress: item.provisionedServerAddress || '',
+    centralUrl,
+  });
+  return {
+    licenseKey: item.licenseKey,
+    centralUrl,
+    serverAddress: item.provisionedServerAddress || null,
+    installCommand,
+    fallbackInstallCommand,
+    quickInstallUrl: `${centralUrl}/install/${encodeURIComponent(item.id)}/${encodeURIComponent(installerToken)}`,
+  };
+}
+
 function cleanExpiredSessions(db) {
   const now = Date.now();
   for (const [key, session] of Object.entries(db.sessions || {})) {
@@ -482,7 +503,6 @@ async function handleProvision(req, res, db, actor) {
   const notes = String(body.notes || '').trim();
 
   if (!customerName) return json(req, res, 400, { error: 'missing_customer_name', message: 'Informe o nome do cliente.' });
-  if (!serverAddress) return json(req, res, 400, { error: 'missing_server_address', message: 'Informe o IP ou domínio do servidor.' });
 
   const installationId = slugify(requestedId || customerName);
   const existing = db.installations[installationId];
@@ -495,10 +515,7 @@ async function handleProvision(req, res, db, actor) {
 
   const now = new Date().toISOString();
   const licenseKey = existing?.licenseKey || `drac-${crypto.randomBytes(16).toString('hex')}`;
-  const installerToken = existing?.installerToken || crypto.randomBytes(24).toString('base64url');
   const centralUrl = publicBaseUrl(req);
-  const installCommand = buildQuickInstallCommand({ centralUrl, installationId, installerToken });
-  const fallbackInstallCommand = buildLegacyInstallCommand({ customerName, installationId, licenseKey, serverAddress, centralUrl });
 
   const item = {
     ...existing,
@@ -506,21 +523,22 @@ async function handleProvision(req, res, db, actor) {
     name: installationId,
     customerName,
     licenseKey,
-    installerToken,
+    installerToken: existing?.installerToken || crypto.randomBytes(24).toString('base64url'),
     licenseStatus: existing?.licenseStatus || LICENSE_ACTIVE,
     licenseMessage: existing?.licenseMessage || null,
     createdAt: existing?.createdAt || now,
     updatedAt: now,
     provisionedAt: now,
     provisionedBy: actor.email,
-    provisionedServerAddress: serverAddress,
+    provisionedServerAddress: serverAddress || null,
     provisionNotes: notes || null,
-    lastInstallerCommandHash: crypto.createHash('sha256').update(fallbackInstallCommand).digest('hex'),
     metrics: existing?.metrics || {},
     alerts: existing?.alerts || [],
     heartbeatHistory: Array.isArray(existing?.heartbeatHistory) ? existing.heartbeatHistory : [],
     licenseHistory: Array.isArray(existing?.licenseHistory) ? existing.licenseHistory : [],
   };
+  const installer = buildInstallerResponse(item, centralUrl);
+  item.lastInstallerCommandHash = crypto.createHash('sha256').update(installer.fallbackInstallCommand).digest('hex');
   db.installations[installationId] = item;
   addAuditEvent(db, req, {
     type: existing ? 'installation.provision_regenerated' : 'installation.provision_created',
@@ -532,12 +550,26 @@ async function handleProvision(req, res, db, actor) {
 
   return json(req, res, 201, {
     installation: publicInstallation(item),
-    licenseKey,
-    centralUrl,
-    serverAddress,
-    installCommand,
-    fallbackInstallCommand,
-    quickInstallUrl: `${centralUrl}/install/${encodeURIComponent(installationId)}/${encodeURIComponent(installerToken)}`,
+    ...installer,
+  });
+}
+
+async function handleGetInstallerCommand(req, res, db, actor, installationId) {
+  const item = db.installations[installationId];
+  if (!item) return json(req, res, 404, { error: 'installation_not_found' });
+  const centralUrl = publicBaseUrl(req);
+  const installer = buildInstallerResponse(item, centralUrl);
+  item.updatedAt = new Date().toISOString();
+  addAuditEvent(db, req, {
+    type: 'installation.installer_command_viewed',
+    actor: actor.email,
+    result: 'accepted',
+    installationId,
+  });
+  await saveDb(db);
+  return json(req, res, 200, {
+    installation: publicInstallation(item),
+    ...installer,
   });
 }
 
@@ -642,6 +674,10 @@ async function route(req, res) {
         });
         await saveDb(db);
         return json(req, res, 200, { ok: true });
+      }
+      const installerCommandMatch = url.pathname.match(/^\/api\/admin\/installations\/([^/]+)\/installer$/);
+      if (req.method === 'GET' && installerCommandMatch) {
+        return handleGetInstallerCommand(req, res, db, actor, decodeURIComponent(installerCommandMatch[1]));
       }
       const match = url.pathname.match(/^\/api\/admin\/installations\/([^/]+)\/license$/);
       if (req.method === 'PATCH' && match) {

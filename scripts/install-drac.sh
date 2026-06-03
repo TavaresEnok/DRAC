@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-DRAC_REPO_URL="${DRAC_REPO_URL:-git@github.com:TavaresEnok/DRAC.git}"
+DRAC_REPO_URL="${DRAC_REPO_URL:-https://github.com/TavaresEnok/DRAC.git}"
 DRAC_BRANCH="${DRAC_BRANCH:-main}"
 DRAC_INSTALL_DIR="${DRAC_INSTALL_DIR:-/home/flashnet/Drac}"
 DRAC_OPERATING_USER="${DRAC_OPERATING_USER:-flashnet}"
@@ -202,6 +202,7 @@ prepare_env() {
   env_set "$env_file" CLOUD_HEARTBEAT_INTERVAL_SECONDS "60"
   env_set "$env_file" CLOUD_CONNECTOR_TIMEOUT_MS "8000"
   env_set "$env_file" DRAC_VERSION "$DRAC_BRANCH"
+  env_set "$env_file" DRAC_LAUNCH_PROFILE "standard"
   env_set "$env_file" DRAC_API_BIND "0.0.0.0"
   env_set "$env_file" DRAC_WEB_BIND "0.0.0.0"
   env_set "$env_file" DRAC_POSTGRES_BIND "127.0.0.1"

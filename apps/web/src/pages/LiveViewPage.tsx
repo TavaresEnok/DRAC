@@ -550,7 +550,7 @@ export default function LiveViewPage() {
         {panelOpen && (
           <motion.aside
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 208, opacity: 1 }}
+            animate={{ width: 188, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 32 }}
             className="border-l border-border bg-card flex flex-col overflow-hidden shrink-0"
@@ -558,9 +558,9 @@ export default function LiveViewPage() {
             <div className="px-2 py-2.5 border-b border-border shrink-0 space-y-2.5">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-[13px] font-semibold">Câmeras</h2>
+                  <h2 className="text-[12px] font-semibold">Câmeras</h2>
                   <p className="text-[10px] text-[hsl(var(--muted-foreground))] mt-0.5">
-                    {selectedSlotIndex != null ? `Escolha para o quadro ${selectedSlotIndex + 1}` : 'Selecione para abrir na grade'}
+                    {selectedSlotIndex != null ? `Quadro ${selectedSlotIndex + 1}` : 'Abrir na grade'}
                   </p>
                 </div>
                 <ShieldCheck className="w-4 h-4 text-[hsl(var(--status-online))]" />
@@ -577,7 +577,7 @@ export default function LiveViewPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-1.5">
+              <div className="grid grid-cols-1 gap-1.5">
                 <Select value={zoneFilter} onValueChange={setZoneFilter}>
                   <SelectTrigger className="h-8 text-[10px]">
                     <Filter className="w-3 h-3 mr-1.5 text-[hsl(var(--muted-foreground))]" />
@@ -618,12 +618,12 @@ export default function LiveViewPage() {
                     <span className={`w-2 h-2 rounded-full ${statusClass}`} />
                     <span className="min-w-0">
                       <span className="block text-[12px] font-medium truncate">{cam.name}</span>
-                      <span className="block text-[10px] text-[hsl(var(--muted-foreground))] truncate">
-                        {cam.zone}
+                      <span className="block text-[9px] text-[hsl(var(--muted-foreground))] truncate">
+                        {cam.code}
                       </span>
                     </span>
-                    <span className={`max-w-[52px] truncate text-[9px] shrink-0 ${isInGrid ? 'text-[hsl(var(--primary))]' : 'text-[hsl(var(--muted-foreground)_/_0.55)]'}`}>
-                      {selectedSlotIndex != null ? 'Usar aqui' : isInGrid ? 'Na grade' : STATUS_FILTER_LABEL[cam.status as (typeof STATUS_FILTERS)[number]] ?? cam.status.replace('_', ' ')}
+                    <span className={`max-w-[42px] truncate text-[9px] shrink-0 ${isInGrid ? 'text-[hsl(var(--primary))]' : 'text-[hsl(var(--muted-foreground)_/_0.55)]'}`}>
+                      {selectedSlotIndex != null ? 'Usar' : isInGrid ? 'Grade' : STATUS_FILTER_LABEL[cam.status as (typeof STATUS_FILTERS)[number]] ?? cam.status.replace('_', ' ')}
                     </span>
                   </button>
                 );

@@ -632,7 +632,7 @@ function WizardModal({
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Local</span><span>{form.zone || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Unidade</span><span>{form.building || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Live</span><span>Imagem principal</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">IA</span><span>Substream automático</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">IA</span><span>Perfil leve reservado</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Gravação</span><span>{formatRecordingMode(form.recordingMode)}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Retenção</span><span className="font-mono">{form.retentionDays || '-'} dias</span></div>
                 {detectedMax && (

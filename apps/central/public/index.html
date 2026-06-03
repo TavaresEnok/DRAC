@@ -158,6 +158,14 @@
       .resource.blocked { border-color: #f5b7ae; background: var(--red-soft); color: var(--red); }
       .spark { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; align-items: end; height: 54px; }
       .spark span { display: block; min-height: 4px; border-radius: 4px 4px 0 0; background: var(--brand); opacity: .85; }
+      .deploy-steps { display: grid; gap: 8px; }
+      .deploy-step { display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; background: #fcfdfe; }
+      .deploy-dot { width: 24px; height: 24px; border-radius: 999px; display: grid; place-items: center; font-size: 11px; font-weight: 900; color: #fff; background: var(--quiet); }
+      .deploy-step.done .deploy-dot { background: var(--green); }
+      .deploy-step.current .deploy-dot { background: var(--brand); }
+      .deploy-step.pending .deploy-dot { background: var(--quiet); }
+      .deploy-step strong { display: block; font-size: 13px; }
+      .deploy-step span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.35; }
       .license-form { display: grid; gap: 10px; }
       .license-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
       .cards-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
@@ -371,7 +379,7 @@
                   </div>
                   <div class="field">
                     <label for="install-server">IP ou domínio do servidor do cliente</label>
-                    <input id="install-server" placeholder="Ex.: 192.168.1.10" />
+                    <input id="install-server" placeholder="Opcional: o instalador detecta sozinho" />
                   </div>
                   <div class="field">
                     <label for="install-license">Chave do cliente</label>
@@ -400,10 +408,15 @@
                 <div id="install-status" class="subtext" style="margin-top:10px">Preencha os dados, gere a instalação e copie o comando.</div>
                 <div class="section">
                   <div class="section-title">Depois da execução</div>
-                  <div class="kv">
+                  <div class="deploy-steps">
+                    <div class="deploy-step done"><div class="deploy-dot">1</div><div><strong>Gerar cliente</strong><span>A Central cria licença e comando único.</span></div></div>
+                    <div class="deploy-step current"><div class="deploy-dot">2</div><div><strong>Executar comando</strong><span>Rodar no servidor Linux do cliente. O instalador configura dependências, Docker, `.env`, containers e migrações.</span></div></div>
+                    <div class="deploy-step pending"><div class="deploy-dot">3</div><div><strong>Aguardar sinal</strong><span>A instalação aparece como conectada após o primeiro heartbeat.</span></div></div>
+                  </div>
+                  <div class="kv" style="margin-top:14px">
                     <div>Painel local</div><div id="install-local-url">-</div>
                     <div>Central</div><div id="install-central-url">-</div>
-                    <div>Tempo para aparecer</div><div>até 60s</div>
+                    <div>Tempo para aparecer</div><div>até 90s</div>
                   </div>
                 </div>
               </div>
@@ -573,6 +586,7 @@
         'installation.provision_deleted': 'Instalação cancelada',
         'installation.installer_downloaded': 'Instalador baixado',
         'installation.installer_denied': 'Instalador recusado',
+        'installation.installer_command_viewed': 'Comando de instalação aberto',
       };
       const auditResultLabels = {
         accepted: 'concluído',
@@ -854,12 +868,26 @@
             ${item.status === 'PENDING_INSTALL' ? `
               <div class="section">
                 <div class="section-title">Provisionamento</div>
-                <button id="delete-pending-install" class="danger">Cancelar instalação pendente</button>
+                <div class="deploy-steps">
+                  <div class="deploy-step done"><div class="deploy-dot">1</div><div><strong>Cliente criado</strong><span>${item.provisionedAt ? dtf.format(new Date(item.provisionedAt)) : 'Registro provisionado na Central.'}</span></div></div>
+                  <div class="deploy-step current"><div class="deploy-dot">2</div><div><strong>Aguardando execução</strong><span>Copie o instalador e execute no servidor Linux do cliente.</span></div></div>
+                  <div class="deploy-step pending"><div class="deploy-dot">3</div><div><strong>Primeiro heartbeat</strong><span>A Central muda para conectado automaticamente.</span></div></div>
+                </div>
+                <div class="license-actions" style="margin-top:12px">
+                  <button id="copy-selected-installer" class="primary">Copiar instalador</button>
+                  <button id="delete-pending-install" class="danger">Cancelar</button>
+                </div>
               </div>
-            ` : ''}
+            ` : `
+              <div class="section">
+                <div class="section-title">Manutenção</div>
+                <button id="copy-selected-installer" class="primary">Copiar reinstalador oficial</button>
+              </div>
+            `}
           </div>`;
         els.detail.querySelector('#save-license').addEventListener('click', () => requestContractChange(item.id, els.detail.querySelector('#license-select').value, els.detail.querySelector('#license-message').value.trim()));
         els.detail.querySelector('#suspend-license').addEventListener('click', () => requestContractChange(item.id, 'SUSPENDED', els.detail.querySelector('#license-message').value.trim() || 'Suspensão administrativa.'));
+        els.detail.querySelector('#copy-selected-installer')?.addEventListener('click', () => copyInstallerFor(item.id));
         els.detail.querySelector('#delete-pending-install')?.addEventListener('click', () => deletePendingInstallation(item.id));
       }
       function renderInventory() {
@@ -946,7 +974,7 @@
           els.installCommand.value = state.provision.installCommand || '';
           els.installLicense.value = state.provision.licenseKey || '';
         }
-        document.querySelector('#install-local-url').textContent = server === 'IP_DO_SERVIDOR' ? '-' : `http://${server}:5173`;
+        document.querySelector('#install-local-url').textContent = server === 'IP_DO_SERVIDOR' ? 'detectado pelo instalador' : `http://${server}:5173`;
         document.querySelector('#install-central-url').textContent = state.provision?.centralUrl || window.location.origin;
       }
       function resetProvisionIfEditing() {
@@ -1080,8 +1108,8 @@
         const installationId = els.installId.value.trim() || slugify(customerName);
         const serverAddress = els.installServer.value.trim();
         const notes = els.installNotes.value.trim();
-        if (!customerName || !serverAddress) {
-          showToast('Informe cliente e servidor.');
+        if (!customerName) {
+          showToast('Informe o nome do cliente.');
           return;
         }
         document.querySelector('#generate-installation').disabled = true;
@@ -1123,6 +1151,32 @@
         if (state.selectedId === id) state.selectedId = '';
         await load();
         showToast('Instalação pendente cancelada.');
+      }
+      async function copyInstallerFor(id) {
+        try {
+          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/installer`, {
+            method: 'GET',
+            credentials: 'include',
+          });
+          const data = await res.json();
+          if (!res.ok || !data.installCommand) {
+            showToast(data.message || 'Não foi possível gerar o instalador.');
+            return;
+          }
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(data.installCommand);
+          } else {
+            state.provision = data;
+            setView('instalacao');
+            renderInstallCommand();
+            els.installCommand.focus();
+            els.installCommand.select();
+            document.execCommand('copy');
+          }
+          showToast('Instalador copiado.');
+        } catch {
+          showToast('Falha ao copiar instalador.');
+        }
       }
 
       els.loginButton.addEventListener('click', login);
