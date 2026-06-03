@@ -112,6 +112,13 @@ const P_COLORS: Record<string, string> = {
   P4: 'hsl(213,65%,57%)',
 };
 
+const ALARM_SOURCE_LABELS: Record<AlarmRule['source'], string> = {
+  MOTION: 'Movimento',
+  STREAM: 'Vídeo',
+  HEALTH: 'Saúde',
+  ANALYTICS: 'Análise',
+};
+
 const EMPTY_RULE_FORM: RuleFormState = {
   name: '',
   source: 'MOTION',
@@ -622,9 +629,9 @@ export default function AlertasPage() {
             <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)} className="h-8 px-2 rounded border border-border bg-background text-xs">
               <option value="all">Todas as fontes</option>
               <option value="MOTION">Movimento</option>
-              <option value="STREAM">Stream</option>
+              <option value="STREAM">Vídeo</option>
               <option value="HEALTH">Saúde</option>
-              <option value="ANALYTICS">Analíticos</option>
+              <option value="ANALYTICS">Análise</option>
             </select>
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="h-8 px-2 rounded border border-border bg-background text-xs">
               {typeOptions.map((type) => (
@@ -668,9 +675,9 @@ export default function AlertasPage() {
               ))}
             </select>
             <select value={simSeverity} onChange={(e) => setSimSeverity(e.target.value)} className="h-8 px-2 rounded border border-border bg-background text-xs">
-              <option value="INFO">INFO</option>
-              <option value="WARNING">WARNING</option>
-              <option value="CRITICAL">CRITICAL</option>
+              <option value="INFO">Informativa</option>
+              <option value="WARNING">Atenção</option>
+              <option value="CRITICAL">Crítica</option>
             </select>
             <button onClick={() => void loadRules()} className="h-8 px-3 rounded border border-border text-xs">Atualizar regras</button>
             {rulesLoading && <span className="text-[11px] text-muted-foreground">Carregando...</span>}
@@ -690,8 +697,8 @@ export default function AlertasPage() {
                 {rules.map((rule) => (
                   <tr key={rule.id}>
                     <td className="px-2 py-2 font-medium">{rule.name}</td>
-                    <td className="px-2 py-2 font-mono">{rule.source}</td>
-                    <td className="px-2 py-2 font-mono">{rule.eventType}</td>
+                    <td className="px-2 py-2">{ALARM_SOURCE_LABELS[rule.source] ?? rule.source}</td>
+                    <td className="px-2 py-2 text-muted-foreground">{rule.eventType}</td>
                     <td className="px-2 py-2"><span className={`font-mono px-1.5 py-0.5 rounded border ${PRIORITY_STYLES[rule.priority].badge}`}>{rule.priority}</span></td>
                     <td className="px-2 py-2">{rule.dedupWindowSeconds}</td>
                     <td className="px-2 py-2">{rule.notifyOnOpen ? 'Ativa' : 'Desativada'}</td>
@@ -837,12 +844,12 @@ export default function AlertasPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <label className="space-y-1 text-xs"><span>Nome da regra</span><input value={ruleForm.name} onChange={(e) => setRuleForm((s) => ({ ...s, name: e.target.value }))} className="w-full h-9 px-3 rounded border border-border bg-background" /></label>
-                <label className="space-y-1 text-xs"><span>Evento</span><input value={ruleForm.eventType} onChange={(e) => setRuleForm((s) => ({ ...s, eventType: e.target.value }))} className="w-full h-9 px-3 rounded border border-border bg-background font-mono" placeholder="MOTION_DETECTED" /></label>
-                <label className="space-y-1 text-xs"><span>Origem</span><select value={ruleForm.source} onChange={(e) => setRuleForm((s) => ({ ...s, source: e.target.value as RuleFormState['source'] }))} className="w-full h-9 px-3 rounded border border-border bg-background"><option value="MOTION">MOTION</option><option value="STREAM">STREAM</option><option value="HEALTH">HEALTH</option><option value="ANALYTICS">ANALYTICS</option></select></label>
+                <label className="space-y-1 text-xs"><span>Evento</span><input value={ruleForm.eventType} onChange={(e) => setRuleForm((s) => ({ ...s, eventType: e.target.value }))} className="w-full h-9 px-3 rounded border border-border bg-background" placeholder="Ex.: movimento_detectado" /></label>
+                <label className="space-y-1 text-xs"><span>Origem</span><select value={ruleForm.source} onChange={(e) => setRuleForm((s) => ({ ...s, source: e.target.value as RuleFormState['source'] }))} className="w-full h-9 px-3 rounded border border-border bg-background"><option value="MOTION">Movimento</option><option value="STREAM">Vídeo</option><option value="HEALTH">Saúde</option><option value="ANALYTICS">Análise</option></select></label>
                 <label className="space-y-1 text-xs"><span>Prioridade</span><select value={ruleForm.priority} onChange={(e) => setRuleForm((s) => ({ ...s, priority: e.target.value as RuleFormState['priority'] }))} className="w-full h-9 px-3 rounded border border-border bg-background"><option value="P1">P1</option><option value="P2">P2</option><option value="P3">P3</option><option value="P4">P4</option></select></label>
                 <label className="space-y-1 text-xs"><span>Deduplicação (segundos)</span><input type="number" min={5} max={3600} value={ruleForm.dedupWindowSeconds} onChange={(e) => setRuleForm((s) => ({ ...s, dedupWindowSeconds: Number(e.target.value) }))} className="w-full h-9 px-3 rounded border border-border bg-background" /></label>
                 <label className="space-y-1 text-xs"><span>E-mail destino (opcional)</span><input value={ruleForm.emailTo} onChange={(e) => setRuleForm((s) => ({ ...s, emailTo: e.target.value }))} className="w-full h-9 px-3 rounded border border-border bg-background" placeholder="seguranca@empresa.com" /></label>
-                <label className="space-y-1 text-xs md:col-span-2"><span>Webhook URL (opcional)</span><input value={ruleForm.webhookUrl} onChange={(e) => setRuleForm((s) => ({ ...s, webhookUrl: e.target.value }))} className="w-full h-9 px-3 rounded border border-border bg-background" placeholder="https://seu-webhook.local/alarme" /></label>
+                <label className="space-y-1 text-xs md:col-span-2"><span>Webhook (opcional)</span><input value={ruleForm.webhookUrl} onChange={(e) => setRuleForm((s) => ({ ...s, webhookUrl: e.target.value }))} className="w-full h-9 px-3 rounded border border-border bg-background" placeholder="https://seu-webhook.local/alarme" /></label>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 text-xs">

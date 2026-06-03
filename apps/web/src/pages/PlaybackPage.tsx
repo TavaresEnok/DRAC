@@ -537,12 +537,12 @@ export default function ReproduçãoPage() {
         startSeconds: Math.floor(clipStartSeconds),
         endSeconds: Math.ceil(clipEndSeconds),
         investigationId: selectedInvestigaçãoId === '__none__' ? undefined : selectedInvestigaçãoId,
-        label: `Clip — ${selectedCam?.name ?? 'Camera'}`,
+        label: `Clipe - ${selectedCam?.name ?? 'Câmera'}`,
         notes: `Exportado do playback em ${new Date().toISOString()}`,
       });
       setLastExportedClip(data);
       toast({
-        title: 'Clip exportado',
+        title: 'Clipe exportado',
         description: data.investigationItemId ? 'O clipe foi exportado e anexado ao caso.' : 'O clipe foi exportado com sucesso.',
       });
     } catch (error) {
@@ -694,7 +694,7 @@ export default function ReproduçãoPage() {
           </SelectTrigger>
           <SelectContent className="max-h-64">
             {cameras.map((camera) => (
-              <SelectItem key={camera.id} value={camera.id} className="text-xs font-mono">
+              <SelectItem key={camera.id} value={camera.id} className="text-xs">
                 {camera.code} — {camera.name}
               </SelectItem>
             ))}
@@ -705,7 +705,7 @@ export default function ReproduçãoPage() {
           type="date"
           value={selectedDate}
           onChange={(event) => setSelectedDate(event.target.value)}
-          className="h-10 rounded-xl border border-border bg-card px-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
+          className="h-10 rounded-xl border border-border bg-card px-3 text-xs focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
         />
         <input
           value={jumpTime}
@@ -722,13 +722,13 @@ export default function ReproduçãoPage() {
         </button>
 
         <div className="ml-auto flex items-center gap-1">
-          <span className="text-xs text-[hsl(var(--muted-foreground))]">Zoom:</span>
+          <span className="text-xs text-[hsl(var(--muted-foreground))]">Janela:</span>
           {[1, 2, 4].map((value) => (
             <button
               key={value}
               type="button"
               onClick={() => setZoom(value)}
-              className={`rounded px-2.5 py-1.5 text-xs font-mono transition-colors ${zoom === value ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'border border-border text-[hsl(var(--muted-foreground))] hover:text-foreground'}`}
+              className={`rounded px-2.5 py-1.5 text-xs transition-colors ${zoom === value ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'border border-border text-[hsl(var(--muted-foreground))] hover:text-foreground'}`}
             >
               {value === 1 ? '24h' : value === 2 ? '12h' : '6h'}
             </button>
@@ -1002,7 +1002,7 @@ export default function ReproduçãoPage() {
                   <div className="mt-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{selectedGravaçãoStartLabel} — {selectedGravaçãoEndLabel}</div>
                 </div>
                 <div className="rounded border border-border px-3 py-2 text-xs">
-                  <div className="font-medium">Duração do clip</div>
+                  <div className="font-medium">Duração do clipe</div>
                   <div className="mt-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{clipStartSeconds != null && clipEndSeconds != null && clipEndSeconds > clipStartSeconds ? `${clipEndSeconds - clipStartSeconds}s` : '--'}</div>
                 </div>
                 <Select value={selectedInvestigaçãoId} onValueChange={setSelectedInvestigaçãoId}>
@@ -1018,14 +1018,14 @@ export default function ReproduçãoPage() {
                   {exportingClip ? <span className="inline-flex items-center gap-1.5"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Exportando</span> : 'Exportar'}
                 </button>
                 <button type="button" onClick={() => void saveBookmark()} disabled={!selectedGravação || selectedInvestigaçãoId === '__none__' || savingBookmark} className="rounded border border-border px-3 py-2 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45">
-                  {savingBookmark ? <span className="inline-flex items-center gap-1.5"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Salvando</span> : 'Salvar Marcador'}
+                  {savingBookmark ? <span className="inline-flex items-center gap-1.5"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Salvando</span> : 'Salvar marcador'}
                 </button>
               </div>
               {lastExportedClip && (
                 <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card/60 px-3 py-2 text-xs">
-                  <span className="font-medium">Clip pronto:</span>
+                  <span className="font-medium">Clipe pronto:</span>
                   <span className="font-mono text-[hsl(var(--muted-foreground))]">{lastExportedClip.id.slice(0, 8)}</span>
-                  <button type="button" onClick={() => void downloadClip(lastExportedClip.downloadUrl, lastExportedClip.id, accessToken!)} className="rounded border border-border px-2.5 py-1 hover:bg-[hsl(var(--accent))]">Baixar Clip</button>
+                  <button type="button" onClick={() => void downloadClip(lastExportedClip.downloadUrl, lastExportedClip.id, accessToken!)} className="rounded border border-border px-2.5 py-1 hover:bg-[hsl(var(--accent))]">Baixar clipe</button>
                   {lastExportedClip.investigationItemId && <span className="rounded bg-[hsl(var(--primary)_/_0.08)] px-2 py-1 text-[hsl(var(--primary))]">Anexado à investigação</span>}
                 </div>
               )}

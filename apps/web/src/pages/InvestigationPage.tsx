@@ -429,7 +429,7 @@ export default function InvestigationPage() {
             </SelectContent>
           </Select>
           <button onClick={() => setLocation('/evidence')} className="flex items-center gap-1.5 rounded bg-[hsl(var(--primary))] px-3 py-1.5 text-xs font-semibold text-[hsl(var(--primary-foreground))] hover:opacity-90">
-            <Archive className="h-3.5 w-3.5" /> Exportar Evidência
+            <Archive className="h-3.5 w-3.5" /> Abrir evidências
           </button>
         </div>
       </div>
@@ -474,7 +474,7 @@ export default function InvestigationPage() {
               return (
                 <button key={camId} onClick={() => setSelectedCams((items) => items.filter((id) => id !== camId))} className="flex h-7 items-center gap-2 rounded border border-border px-2 text-xs">
                   <span className="h-2 w-2 rounded-full" style={{ background: TRACK_COLORS[index % TRACK_COLORS.length] }} />
-                  <span className="font-mono">{camera.code}</span>
+                  <span>{camera.code}</span>
                   <X className="h-3 w-3 opacity-60" />
                 </button>
               );
@@ -483,17 +483,17 @@ export default function InvestigationPage() {
           <Select onValueChange={(id) => !selectedCams.includes(id) && setSelectedCams((items) => [...items, id])}>
             <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Adicionar câmera" /></SelectTrigger>
             <SelectContent>
-              {cameras.filter((camera) => !selectedCams.includes(camera.id)).map((camera) => <SelectItem key={camera.id} value={camera.id} className="text-xs font-mono">{camera.code} — {camera.name}</SelectItem>)}
+              {cameras.filter((camera) => !selectedCams.includes(camera.id)).map((camera) => <SelectItem key={camera.id} value={camera.id} className="text-xs">{camera.code} — {camera.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          <input type="datetime-local" value={timeStart} onChange={(event) => setTimeStart(event.target.value)} className="h-8 rounded border border-border bg-background px-2 text-xs font-mono" />
-          <input type="datetime-local" value={timeEnd} onChange={(event) => setTimeEnd(event.target.value)} className="h-8 rounded border border-border bg-background px-2 text-xs font-mono" />
+          <input type="datetime-local" value={timeStart} onChange={(event) => setTimeStart(event.target.value)} className="h-8 rounded border border-border bg-background px-2 text-xs" />
+          <input type="datetime-local" value={timeEnd} onChange={(event) => setTimeEnd(event.target.value)} className="h-8 rounded border border-border bg-background px-2 text-xs" />
           <div className="ml-auto flex items-center gap-2 text-xs text-[hsl(var(--muted-foreground))]">
-            <span className="font-mono">{trackEvents.length} eventos</span>
+            <span>{trackEvents.length} eventos</span>
             <span>•</span>
-            <span className="font-mono">{playbackSpeed}</span>
+            <span>{playbackSpeed}</span>
             <span>•</span>
-            <span className="font-mono">{casePriority}</span>
+            <span>{casePriority}</span>
           </div>
         </div>
         <div className="mt-3 flex items-center gap-2">
@@ -552,7 +552,7 @@ export default function InvestigationPage() {
             disabled={!investigationId || savingCaseMeta}
             className="h-8 rounded border border-border px-3 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
           >
-            {savingCaseMeta ? 'Salvando...' : 'Salvar responsável/prioridade'}
+            {savingCaseMeta ? 'Salvando...' : 'Salvar caso'}
           </button>
         </div>
         {caseParticipants.length > 0 && (
@@ -568,18 +568,18 @@ export default function InvestigationPage() {
           <div className="mt-3 flex items-center gap-2">
             <label className="flex items-center gap-2 text-xs">
               <input type="checkbox" checked={legalHoldEnabled} onChange={(event) => setLegalHoldEnabled(event.target.checked)} />
-              Legal hold ativo
+              Preservação legal ativa
             </label>
-            <input value={legalHoldReason} onChange={(event) => setLegalHoldReason(event.target.value)} className="h-8 w-56 rounded border border-border bg-background px-2 text-xs" placeholder="Motivo do legal hold" />
+            <input value={legalHoldReason} onChange={(event) => setLegalHoldReason(event.target.value)} className="h-8 w-56 rounded border border-border bg-background px-2 text-xs" placeholder="Motivo da preservação" />
             <button
               onClick={async () => {
                 if (!investigationId) return;
                 setSavingLegalHold(true);
                 try {
                   await client.post(`/investigations/${investigationId}/legal-hold`, { enabled: legalHoldEnabled, reason: legalHoldReason });
-                  toast({ title: 'Legal hold atualizado' });
+                  toast({ title: 'Preservação legal atualizada' });
                 } catch (error) {
-                  toast({ title: 'Falha no legal hold', description: error instanceof Error ? error.message : 'Erro ao atualizar', variant: 'destructive' });
+                  toast({ title: 'Falha na preservação legal', description: error instanceof Error ? error.message : 'Erro ao atualizar', variant: 'destructive' });
                 } finally {
                   setSavingLegalHold(false);
                 }
@@ -587,7 +587,7 @@ export default function InvestigationPage() {
               disabled={!investigationId || savingLegalHold}
               className="h-8 rounded border border-border px-3 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
             >
-              {savingLegalHold ? 'Salvando...' : 'Salvar Legal Hold'}
+              {savingLegalHold ? 'Salvando...' : 'Salvar preservação'}
             </button>
             <button
               onClick={async () => {
@@ -613,7 +613,7 @@ export default function InvestigationPage() {
         <div className="w-72 shrink-0 border-r border-border bg-card">
           <div className="border-b border-border px-4 py-3">
             <div className="text-xs font-semibold">Eventos no intervalo</div>
-            <div className="mt-0.5 text-[10px] font-mono text-[hsl(var(--muted-foreground))]">{trackEvents.length} ocorrências encontradas</div>
+            <div className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">{trackEvents.length} ocorrências encontradas</div>
           </div>
           <div className="divide-y divide-border overflow-y-auto">
             {trackEvents.map((event) => (
@@ -643,20 +643,20 @@ export default function InvestigationPage() {
                   <div key={camId} className="relative overflow-hidden rounded-xl border border-border bg-black/90 shadow-sm">
                     <div className="flex items-start justify-between px-3 py-2 text-[10px]">
                       <div>
-                        <div className="font-mono text-white/80">{camera.code}</div>
+                        <div className="text-white/80">{camera.code}</div>
                         <div className="text-white/55">{camera.name}</div>
                       </div>
-                      <div className="flex items-center gap-2 font-mono text-white/55">
-                        <span className="rounded border border-red-500/30 bg-red-500/10 px-1.5 py-0.5 text-red-300">REC</span>
-                        <span>{camera.ptzCapable ? 'PTZ' : 'FIXA'}</span>
+                      <div className="flex items-center gap-2 text-white/55">
+                        <span className="rounded border border-red-500/30 bg-red-500/10 px-1.5 py-0.5 text-red-300">Gravação</span>
+                        <span>{camera.ptzCapable ? 'PTZ' : 'Fixa'}</span>
                       </div>
                     </div>
                     <div className="relative h-44 border-y border-white/10 bg-black/30">
                       <div className="absolute inset-0 opacity-30" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px)', backgroundSize: '28px 28px' }} />
                       <div className="absolute inset-0 flex items-center justify-center"><Camera className="h-10 w-10 text-white/10" /></div>
-                      <div className="absolute inset-x-0 top-0 flex justify-between px-3 py-2 text-[10px] font-mono text-white/70">
+                      <div className="absolute inset-x-0 top-0 flex justify-between px-3 py-2 text-[10px] text-white/70">
                         <span>{camera.code} · {camera.name}</span>
-                        <span>{format(new Date(), 'HH:mm:ss')} UTC</span>
+                        <span>{format(new Date(), 'HH:mm:ss')}</span>
                       </div>
                       <div className="absolute inset-x-0 bottom-0 h-1 bg-white/5"><div className="h-full" style={{ width: '72%', background: color }} /></div>
                       {cameraEvents.map((event) => {
@@ -706,7 +706,7 @@ export default function InvestigationPage() {
               <div className="text-xs font-semibold">Evidência</div>
               <div className="mt-0.5 text-[10px] font-mono text-[hsl(var(--muted-foreground))]">{evidence.length} itens</div>
             </div>
-            <button onClick={() => setLocation('/evidence')} className="text-[10px] font-semibold text-[hsl(var(--primary))]">Exportar</button>
+            <button onClick={() => setLocation('/evidence')} className="text-[10px] font-semibold text-[hsl(var(--primary))]">Abrir evidências</button>
           </div>
           <div className="border-b border-border px-4 py-3 space-y-2">
             <div className="text-[11px] font-semibold">Anexar item manual</div>
@@ -876,15 +876,15 @@ export default function InvestigationPage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between border-t border-border bg-card px-5 py-2 text-[10px] font-mono text-[hsl(var(--muted-foreground))]">
+      <div className="flex items-center justify-between border-t border-border bg-card px-5 py-2 text-[10px] text-[hsl(var(--muted-foreground))]">
         <div className="flex items-center gap-5">
           <span className="text-[hsl(var(--destructive))]">{trackEvents.filter((event) => event.severity === 'critical').length} eventos críticos</span>
-          <span>CAMS: {selectedCams.length}</span>
-          <span>EVD: {evidence.length}</span>
-          <span>SPD: {playbackSpeed}</span>
-          <span>INV: {currentInvestigation?.status ?? 'DRAFT'}</span>
+          <span>Câmeras: {selectedCams.length}</span>
+          <span>Evidências: {evidence.length}</span>
+          <span>Velocidade: {playbackSpeed}</span>
+          <span>Caso: {currentInvestigation?.status ?? 'Rascunho'}</span>
         </div>
-        <div>{format(new Date(), 'yyyy-MM-dd HH:mm:ss')} UTC</div>
+        <div>{format(new Date(), 'dd/MM/yyyy HH:mm:ss')}</div>
       </div>
     </div>
   );

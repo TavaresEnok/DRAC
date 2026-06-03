@@ -53,6 +53,13 @@ const roleOptions: Array<{ value: ApiUserRole; label: string }> = [
   { value: 'ADMIN', label: 'Administrador' },
 ];
 
+const visibleRoleLabel = (role: string) => {
+  if (role === 'admin') return 'Administrador';
+  if (role === 'operator') return 'Operador';
+  if (role === 'supervisor') return 'Supervisor';
+  return 'Visualizador';
+};
+
 function apiClient() {
   const accessToken = useAuthStore.getState().accessToken;
   return axios.create({
@@ -331,7 +338,7 @@ export default function UsuariosPage() {
             <table className="w-full text-sm">
               <thead className="bg-card/80">
                 <tr>
-                  {['Nome', 'Email', 'Perfil', 'Grupos', 'Status', 'Ações'].map(h => (
+                  {['Nome', 'E-mail', 'Perfil', 'Grupos', 'Status', 'Ações'].map(h => (
                     <th key={h} className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">{h}</th>
                   ))}
                 </tr>
@@ -358,7 +365,7 @@ export default function UsuariosPage() {
                       </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">{u.email}</td>
                       <td className="px-4 py-3">
-                        <Badge variant="outline" className={cn('text-[10px]', roleColor(u.role))}>{u.role}</Badge>
+                        <Badge variant="outline" className={cn('text-[10px]', roleColor(u.role))}>{visibleRoleLabel(u.role)}</Badge>
                       </td>
                       <td className="px-4 py-3">
                         {groupPermissions.length ? (
@@ -415,7 +422,7 @@ export default function UsuariosPage() {
               <input
                 value={newGroupName}
                 onChange={(event) => setNewGroupName(event.target.value)}
-                placeholder="Ex: Mercado Sao Jose"
+                placeholder="Ex.: Mercado São José"
                 className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
               />
               <button
@@ -471,7 +478,7 @@ export default function UsuariosPage() {
                   <label key={camera.id} className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-background/55 px-3 py-2 text-xs hover:bg-accent/40">
                     <div className="min-w-0">
                       <p className="truncate font-medium">{camera.name}</p>
-                      <p className="truncate text-[11px] text-muted-foreground">{camera.ipAddress} · {camera.resolution}</p>
+                      <p className="truncate text-[11px] text-muted-foreground">{camera.zone} · {camera.resolution}</p>
                     </div>
                     <input
                       type="checkbox"
@@ -565,7 +572,7 @@ export default function UsuariosPage() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">Email</label>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">E-mail</label>
               <input
                 value={userForm.email}
                 onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))}

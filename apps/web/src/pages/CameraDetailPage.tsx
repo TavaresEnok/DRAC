@@ -1270,7 +1270,7 @@ export default function CameraDetailPage() {
             <div className="rounded-2xl border border-border bg-card/60 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Workspace de Reprodução</p>
+                  <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Reprodução</p>
                   <p className="mt-1 text-sm font-semibold">Revisão forense desta câmera</p>
                 </div>
                 <button
@@ -1278,13 +1278,13 @@ export default function CameraDetailPage() {
                   onClick={() => setLocation(`/playback?cameraId=${encodeURIComponent(cam.id)}`)}
                   className="inline-flex h-9 items-center gap-2 rounded-xl border border-border px-3 text-xs hover:bg-[hsl(var(--accent))]"
                 >
-                  Abrir Reprodução
+                  Abrir reprodução
                   <ExternalLink className="h-3.5 w-3.5" />
                 </button>
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-3">
                 <div className="rounded-xl border border-border bg-background/55 p-4">
-                  <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Modo de Gravação</div>
+                  <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Modo de gravação</div>
                   <div className={cn('mt-2 inline-flex rounded-md border px-2 py-1 text-xs font-semibold', recordingModeCopy.className)}>
                     {recordingModeCopy.label}
                   </div>
@@ -1409,7 +1409,7 @@ export default function CameraDetailPage() {
                             <div className="mt-1 text-sm font-medium text-foreground">Principal H.265</div>
                           </div>
                           <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
-                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Análise</div>
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">IA</div>
                             <div className="mt-1 text-sm font-medium text-foreground">Perfil reservado</div>
                           </div>
                         </div>
@@ -1439,7 +1439,7 @@ export default function CameraDetailPage() {
                             </SettingsSelect>
                           </SettingsField>
                           <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
-                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Entrega</div>
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Live no navegador</div>
                             <div className="mt-1 text-sm font-medium text-foreground">WebRTC</div>
                           </div>
                           <details className="md:col-span-3 rounded-lg border border-border/70 bg-card/60 px-3 py-2">
