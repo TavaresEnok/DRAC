@@ -18,6 +18,8 @@
     "ops:update": "bash scripts/update-drac.sh",
     "ops:restore": "bash scripts/restore-drac.sh",
     "ops:diagnostics": "bash scripts/collect-diagnostics.sh",
-    "ops:readiness": "bash scripts/production-readiness.sh"
+    "ops:readiness": "bash scripts/production-readiness.sh",
+    "ops:regression": "bash scripts/prod-regression.sh",
+    "ops:restore:verify": "bash scripts/verify-backup-restore.sh"
   }
 }
