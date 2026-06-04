@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { type Request, type Response } from 'express';
 import { AuditService } from '../audit/audit.service';
@@ -86,6 +86,30 @@ export class CameraStreamController {
   @Get(':cameraId/stats')
   async getCameraStats(@Param('cameraId') cameraId: string) {
     return this.ffmpegMjpegService.getStreamStats(cameraId);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @RequirePermission('liveView')
+  @Post(':cameraId/live-failure')
+  async recordLiveFailure(
+    @CurrentUser() user: AuthUser,
+    @Param('cameraId') cameraId: string,
+    @Body() body: { protocol?: string; reason?: string; stage?: string; state?: string },
+    @Req() req: Request,
+  ) {
+    await this.accessControlService.assertCanViewCamera(user, cameraId);
+    const protocol = String(body?.protocol || 'unknown').slice(0, 32);
+    const stage = String(body?.stage || 'startup').slice(0, 64);
+    const reason = String(body?.reason || 'Falha de live sem detalhe informado.').slice(0, 500);
+    const state = String(body?.state || '').slice(0, 64) || null;
+    await this.auditService.log(user.id, 'stream.live.failure', 'Camera', cameraId, {
+      protocol,
+      stage,
+      reason,
+      state,
+      userAgent: String(req.headers['user-agent'] || '').slice(0, 240),
+    }, req);
+    return { accepted: true, cameraId, protocol, stage };
   }
 
   @Roles(UserRole.VIEWER)
@@ -194,6 +218,14 @@ export class CameraStreamController {
       },
       liveDiagnostics: {
         generatedAt: new Date().toISOString(),
+        publicAppUrl: process.env.PUBLIC_APP_URL || null,
+        apiPublicUrl: process.env.API_PUBLIC_URL || null,
+        mediaMtxPublicHost: process.env.MEDIAMTX_PUBLIC_HOST || null,
+        mediaMtxPublicScheme: process.env.MEDIAMTX_PUBLIC_SCHEME || null,
+        mediaMtxPublicWebrtcUrl: process.env.MEDIAMTX_PUBLIC_WEBRTC_URL || null,
+        mediaMtxPublicHlsUrl: process.env.MEDIAMTX_PUBLIC_HLS_URL || null,
+        mediaMtxWebrtcAllowOrigin: process.env.MEDIAMTX_WEBRTC_ALLOW_ORIGIN || null,
+        mediaMtxHlsAllowOrigin: process.env.MEDIAMTX_HLS_ALLOW_ORIGIN || null,
         mediamtxEnabled: this.mediamtxProxyService.isEnabled(),
         pathReady: Boolean(safeMediaBridge.enabled && safeMediaBridge.pathName),
         pathName: safeMediaBridge.pathName ?? null,

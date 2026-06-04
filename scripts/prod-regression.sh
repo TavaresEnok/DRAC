@@ -154,6 +154,16 @@ check_mediamtx() {
   else
     fail "MediaMTX API nao respondeu com credenciais internas"
   fi
+
+  if [ -n "${PUBLIC_APP_URL:-}" ] && [ -n "${API_PUBLIC_URL:-}" ]; then
+    ok "URLs publicas de app/API configuradas"
+  else
+    warn "PUBLIC_APP_URL/API_PUBLIC_URL ausentes; WebRTC externo dependera de host inferido"
+  fi
+
+  if [[ "${PUBLIC_APP_URL:-}" =~ ^https:// ]] && [ "${MEDIAMTX_WEBRTC_ALLOW_ORIGIN:-*}" = "*" ]; then
+    warn "WebRTC em HTTPS deve restringir MEDIAMTX_WEBRTC_ALLOW_ORIGIN ao dominio real"
+  fi
 }
 
 check_central() {

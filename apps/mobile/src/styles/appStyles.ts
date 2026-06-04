@@ -19,6 +19,10 @@ export const styles = StyleSheet.create({
   dashboardStatDot:  { width: 7, height: 7, borderRadius: 4 },
   dashboardStatText: { fontSize: 12, fontWeight: '700', color: C.textSub },
   previewLimitHint:  { color: C.textMuted, fontSize: 11, lineHeight: 16, marginTop: 4, fontWeight: '700' },
+  mobileAlertsCard:  { backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa', borderRadius: 18, padding: 14, gap: 7 },
+  mobileAlertsHeader:{ flexDirection: 'row', alignItems: 'center', gap: 8 },
+  mobileAlertsTitle: { color: '#92400e', fontSize: 13, fontWeight: '900' },
+  mobileAlertsText:  { color: '#9a3412', fontSize: 12, lineHeight: 17, fontWeight: '700' },
 
   groupBlock:  { gap: 12, marginTop: 4 },
   groupHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 2 },
@@ -105,6 +109,7 @@ export const styles = StyleSheet.create({
   quickActionIcon:       { width: 56, height: 56, borderRadius: 18, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
   quickActionIconActive: { backgroundColor: C.accent, borderColor: C.accent },
   quickActionLabel:      { color: C.textSub, fontSize: 12, fontWeight: '700' },
+  quickActionMeta:       { color: C.textMuted, fontSize: 9, fontWeight: '800', marginTop: -4 },
 
   // ── Mosaico / Grid ────────────────────────────────────────
   mosaicHeader:    { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 2, marginBottom: 4 },

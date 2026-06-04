@@ -46,6 +46,7 @@ export default function App() {
   const [mosaicAreas, setMosaicAreas] = useState<MosaicArea[]>([]);
   const [mosaicAreasLoaded, setMosaicAreasLoaded] = useState(false);
   const [recordingDate, setRecordingDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [lastSyncError, setLastSyncError] = useState<string | null>(null);
   const previewLimit = 8;
   const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) ?? cameras[0] ?? null;
 
@@ -57,6 +58,14 @@ export default function App() {
     }
     return Array.from(map.entries());
   }, [cameras]);
+  const operationalMessages = useMemo(() => {
+    const messages: string[] = [];
+    const offline = cameras.filter((camera) => camera.status !== 'ONLINE').length;
+    if (lastSyncError) messages.push(lastSyncError);
+    if (offline > 0) messages.push(`${offline} câmera(s) offline ou sem comunicação.`);
+    if (session?.user.role === 'VIEWER') messages.push('Seu perfil é somente visualização. Gravação e PTZ podem estar bloqueados.');
+    return messages.slice(0, 3);
+  }, [cameras, lastSyncError, session?.user.role]);
   const mosaicCameras = useMemo(() => {
     if (selectedMosaicGroup === 'all') return cameras;
     if (selectedMosaicGroup.startsWith('area:')) {
@@ -152,10 +161,18 @@ export default function App() {
     try {
       const data = await request<Camera[]>(session.apiUrl, '/cameras', session.token);
       setCameras(data);
+      setLastSyncError(null);
       setSelectedCameraId((current) => current ?? data[0]?.id ?? null);
       void Promise.all(data.slice(0, previewLimit).map((camera) => loadStream(camera.id)));
     } catch (error) {
-      Alert.alert('Falha ao carregar', error instanceof Error ? error.message : 'Não foi possível carregar câmeras.');
+      const message = error instanceof Error ? error.message : 'Não foi possível carregar câmeras.';
+      setLastSyncError(message.includes('401') ? 'Sessão expirada. Entre novamente.' : `Servidor indisponível: ${message}`);
+      if (message.includes('401')) {
+        await logout();
+        Alert.alert('Sessão expirada', 'Entre novamente para continuar.');
+      } else {
+        Alert.alert('Falha ao carregar', message);
+      }
     } finally {
       setRefreshing(false);
     }
@@ -323,6 +340,7 @@ export default function App() {
             groupedCameras={groupedCameras}
             streamPosters={streamPosters}
             previewLimit={previewLimit}
+            operationalMessages={operationalMessages}
             onOpenCamera={(cameraId) => { setSelectedCameraId(cameraId); setShowPtz(true); setTab('live'); }}
           />
         )}

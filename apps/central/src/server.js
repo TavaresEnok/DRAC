@@ -556,6 +556,60 @@ function fleetSummary(installations) {
   };
 }
 
+function supportDiagnostics(item) {
+  const publicItem = publicInstallation(item);
+  const activeAlerts = (publicItem.alertHistory || []).filter((alert) => alert.status === 'ACTIVE').slice(0, 20);
+  return {
+    generatedAt: new Date().toISOString(),
+    installation: {
+      id: publicItem.id,
+      customerName: publicItem.customerName,
+      status: publicItem.status,
+      ageSeconds: publicItem.ageSeconds,
+      licenseStatus: publicItem.licenseStatus,
+      policyPending: publicItem.policyPending,
+      version: publicItem.version,
+      launchProfile: publicItem.launchProfile,
+      lastHeartbeatAt: publicItem.lastHeartbeatAt,
+    },
+    readiness: {
+      status: publicItem.metrics?.productionReadiness || publicItem.metrics?.status || 'unknown',
+      checks: publicItem.metrics?.readiness?.checks ?? null,
+      warnings: publicItem.metrics?.readiness?.warnings ?? null,
+      failures: publicItem.metrics?.readiness?.failures ?? null,
+      lastError: publicItem.metrics?.lastError || null,
+    },
+    cameras: {
+      total: metricValue(publicItem, 'cameraTotal', 0),
+      online: metricValue(publicItem, 'cameraOnline', 0),
+      offline: metricValue(publicItem, 'cameraOffline', 0),
+      error: metricValue(publicItem, 'cameraError', 0),
+    },
+    storage: publicItem.storage?.disk ? {
+      usedBytes: publicItem.storage.disk.usedBytes,
+      totalBytes: publicItem.storage.disk.totalBytes,
+      usagePercent: publicItem.storage.disk.usagePercent ?? metricValue(publicItem, 'diskUsagePercent', null),
+    } : null,
+    server: publicItem.server ? {
+      hostname: publicItem.server.hostname,
+      platform: publicItem.server.platform,
+      cpuCount: publicItem.server.cpuCount,
+      totalMemoryBytes: publicItem.server.totalMemoryBytes,
+      freeMemoryBytes: publicItem.server.freeMemoryBytes,
+      loadAverage: publicItem.server.loadAverage,
+    } : null,
+    alerts: activeAlerts.map((alert) => ({
+      level: alert.level,
+      code: alert.code,
+      message: alert.message,
+      firstSeenAt: alert.firstSeenAt,
+      lastSeenAt: alert.lastSeenAt,
+      occurrences: alert.occurrences,
+    })),
+    lastHeartbeats: (publicItem.heartbeatHistory || []).slice(-10),
+  };
+}
+
 function licenseResponse(item) {
   const status = item.licenseStatus || LICENSE_ACTIVE;
   const restrictions = {
@@ -834,6 +888,20 @@ async function route(req, res) {
       const installerCommandMatch = url.pathname.match(/^\/api\/admin\/installations\/([^/]+)\/installer$/);
       if (req.method === 'GET' && installerCommandMatch) {
         return handleGetInstallerCommand(req, res, db, actor, decodeURIComponent(installerCommandMatch[1]));
+      }
+      const diagnosticsMatch = url.pathname.match(/^\/api\/admin\/installations\/([^/]+)\/diagnostics$/);
+      if (req.method === 'GET' && diagnosticsMatch) {
+        const id = decodeURIComponent(diagnosticsMatch[1]);
+        const item = db.installations[id];
+        if (!item) return json(req, res, 404, { error: 'installation_not_found' });
+        addAuditEvent(db, req, {
+          type: 'installation.diagnostics_viewed',
+          actor: actor.email,
+          result: 'accepted',
+          installationId: id,
+        });
+        await saveDb(db);
+        return json(req, res, 200, supportDiagnostics(item));
       }
       const match = url.pathname.match(/^\/api\/admin\/installations\/([^/]+)\/license$/);
       if (req.method === 'PATCH' && match) {

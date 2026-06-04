@@ -371,16 +371,20 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
       .split(',')[0]
       .trim();
     const scheme = this.configService.get<string>('mediaMtxPublicScheme') || reqProto || 'http';
+    const configuredWebrtcBase = (this.configService.get<string>('mediaMtxPublicWebrtcUrl') ?? '').replace(/\/+$/, '');
+    const configuredHlsBase = (this.configService.get<string>('mediaMtxPublicHlsUrl') ?? '').replace(/\/+$/, '');
     const webrtcPort = this.configService.get<number>('mediaMtxWebrtcPort') ?? 8889;
     const hlsPort = this.configService.get<number>('mediaMtxHlsPort') ?? 8888;
+    const webrtcBase = configuredWebrtcBase || `${scheme}://${host}:${webrtcPort}`;
+    const hlsBase = configuredHlsBase || `${scheme}://${host}:${hlsPort}`;
 
     return {
       enabled: true,
       pathName,
       sourceUrl,
-      webrtcUrl: `${scheme}://${host}:${webrtcPort}/${pathName}/`,
-      whepUrl: `${scheme}://${host}:${webrtcPort}/${pathName}/whep`,
-      hlsUrl: `${scheme}://${host}:${hlsPort}/${pathName}/index.m3u8`,
+      webrtcUrl: `${webrtcBase}/${pathName}/`,
+      whepUrl: `${webrtcBase}/${pathName}/whep`,
+      hlsUrl: `${hlsBase}/${pathName}/index.m3u8`,
       rtspProxyUrl: `rtsp://${host}:8554/${pathName}`,
     };
   }

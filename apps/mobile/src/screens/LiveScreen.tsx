@@ -45,6 +45,7 @@ export function LiveScreen({
   }
 
   const online = isOnline(selectedCamera);
+  const canOpenLive = online && Boolean(streamUrl);
 
   return (
     <View style={styles.page}>
@@ -79,7 +80,7 @@ export function LiveScreen({
           {/* Badge AO VIVO + protocolo */}
           <View style={styles.singleVideoTopOverlay}>
             <Text style={styles.liveNowText}>● AO VIVO</Text>
-            <Text style={styles.videoProtocol}>HLS</Text>
+            <Text style={styles.videoProtocol}>{canOpenLive ? 'HLS' : 'SEM SINAL'}</Text>
           </View>
 
           {/* Ações flutuantes – lado direito */}
@@ -169,6 +170,7 @@ export function LiveScreen({
               <SvgIcon name="video" size={22} color="#6b7280" />
             </View>
             <Text style={styles.quickActionLabel}>Gravar</Text>
+            {!selectedCamera.canRecord ? <Text style={styles.quickActionMeta}>Sem permissão</Text> : null}
           </Pressable>
 
           {/* PTZ */}
@@ -181,6 +183,7 @@ export function LiveScreen({
               <SvgIcon name="move" size={22} color={showPtz ? '#ffffff' : '#6b7280'} />
             </View>
             <Text style={styles.quickActionLabel}>PTZ</Text>
+            {!selectedCamera.canControl ? <Text style={styles.quickActionMeta}>Sem permissão</Text> : null}
           </Pressable>
         </View>
 

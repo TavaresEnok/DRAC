@@ -10,10 +10,11 @@ interface DashboardScreenProps {
   groupedCameras: Array<[string, Camera[]]>;
   streamPosters: Record<string, string | null>;
   previewLimit: number;
+  operationalMessages: string[];
   onOpenCamera: (cameraId: string) => void;
 }
 
-export function DashboardScreen({ cameras, groupedCameras, streamPosters, previewLimit, onOpenCamera }: DashboardScreenProps) {
+export function DashboardScreen({ cameras, groupedCameras, streamPosters, previewLimit, operationalMessages, onOpenCamera }: DashboardScreenProps) {
   const onlineCount  = cameras.filter(isOnline).length;
   const offlineCount = cameras.length - onlineCount;
 
@@ -41,6 +42,18 @@ export function DashboardScreen({ cameras, groupedCameras, streamPosters, previe
           ) : null}
         </View>
       </View>
+
+      {operationalMessages.length ? (
+        <View style={styles.mobileAlertsCard}>
+          <View style={styles.mobileAlertsHeader}>
+            <SvgIcon name="bell" size={17} color="#b45309" />
+            <Text style={styles.mobileAlertsTitle}>Atenção operacional</Text>
+          </View>
+          {operationalMessages.map((message) => (
+            <Text key={message} style={styles.mobileAlertsText}>{message}</Text>
+          ))}
+        </View>
+      ) : null}
 
       {groupedCameras.map(([groupName, items]) => (
         <View key={groupName} style={styles.groupBlock}>

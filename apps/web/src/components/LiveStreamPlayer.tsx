@@ -62,6 +62,21 @@ type CommercialRestrictionError = {
   adminMessage?: string;
 };
 
+type LiveDiagnostics = {
+  generatedAt?: string;
+  mediamtxEnabled?: boolean;
+  pathReady?: boolean;
+  pathName?: string | null;
+  publicAppUrl?: string | null;
+  apiPublicUrl?: string | null;
+  mediaMtxPublicHost?: string | null;
+  mediaMtxPublicScheme?: string | null;
+  mediaMtxPublicWebrtcUrl?: string | null;
+  mediaMtxPublicHlsUrl?: string | null;
+  mediaMtxWebrtcAllowOrigin?: string | null;
+  mediaMtxHlsAllowOrigin?: string | null;
+};
+
 type PlaybackProgress = {
   wallTime: number;
   mediaTime: number;
@@ -494,6 +509,7 @@ export function LiveStreamPlayer({
               recommendedProtocol?: LiveProtocol;
               protocolOrder?: LiveProtocol[];
             } | null;
+            liveDiagnostics?: LiveDiagnostics | null;
             protocols?: {
               posterUrl?: string | null;
               hlsUrl?: string | null;
@@ -519,6 +535,7 @@ export function LiveStreamPlayer({
           ?? (data?.protocols?.webrtcUrl ? `${data.protocols.webrtcUrl.replace(/\/+$/, '')}/whep` : null);
         const preferredLiveProtocol = data?.preferredLiveProtocol ?? 'webrtc';
         const sourceCodec = data?.sourceVideoCodec ?? data?.detectedVideoCodec;
+        const liveDiagnostics = data?.liveDiagnostics ?? null;
         const orderedProtocols = buildProtocolOrder(
           cameraId,
           preferredLiveProtocol,
@@ -872,6 +889,16 @@ export function LiveStreamPlayer({
           });
         };
 
+        const reportProtocolFailure = (protocol: LiveProtocol, reason: string) => {
+          if (!tokenHeaders) return;
+          void axios.post(`${API_URL}/camera-stream/${cameraId}/live-failure`, {
+            protocol,
+            stage: 'startup',
+            reason,
+            state: activeProtocolRef.current ?? 'not-playing',
+          }, { headers: tokenHeaders, timeout: 5000 }).catch(() => undefined);
+        };
+
         const startHls = async (lowLatencyMode: boolean, protocolName: ActiveLiveProtocol) => {
           if (!hlsUrl) {
             throw new Error('Stream HLS indisponível.');
@@ -944,6 +971,7 @@ export function LiveStreamPlayer({
             const protocolName = protocol === 'webrtc' ? 'WebRTC' : protocol === 'llhls' ? 'LL-HLS' : 'HLS';
             const failureReason = protocolError instanceof Error ? protocolError.message : 'falha desconhecida';
             failedProtocolsRef.current.add(protocol);
+            reportProtocolFailure(protocol, failureReason);
             setProtocolReason(`${protocolName} falhou: ${failureReason}. Testando o próximo protocolo.`);
             console.warn(`[LiveStreamPlayer:${cameraId}] ${protocolName} falhou: ${failureReason}`);
             if (noFrameTimeout != null) window.clearTimeout(noFrameTimeout);
@@ -959,7 +987,13 @@ export function LiveStreamPlayer({
 
         failedProtocolsRef.current.clear();
         streamUrlsCache.clear(cacheKey);
-        throw new Error('Aguardando vídeo da câmera.');
+        if (liveDiagnostics && !liveDiagnostics.pathReady) {
+          throw new Error('O MediaMTX ainda não publicou o caminho desta câmera. Verifique se a câmera está online e se o RTSP responde.');
+        }
+        if (liveDiagnostics?.mediaMtxWebrtcAllowOrigin === '*' && window.location.protocol === 'https:') {
+          throw new Error('Nenhum protocolo iniciou. Em HTTPS, confira domínio público, origem permitida do MediaMTX e porta/rota WebRTC.');
+        }
+        throw new Error('Nenhum protocolo iniciou. Verifique WebRTC/WHEP, HLS, codec da câmera e conectividade com o MediaMTX.');
       } catch (streamError) {
         if (cancelled) return;
         if (axios.isAxiosError<CommercialRestrictionError>(streamError) && streamError.response?.status === 423) {
@@ -979,7 +1013,14 @@ export function LiveStreamPlayer({
           setRetryMessage(null);
           setIsLoading(false);
         } else {
-          scheduleReconnect(message);
+          if (/Nenhum protocolo iniciou|MediaMTX|WebRTC|WHEP|HLS|codec/i.test(message) && !hasFrameRef.current) {
+            setError(message);
+            setRetryMessage('Tentaremos novamente automaticamente.');
+            setIsLoading(false);
+            scheduleReconnect(message);
+          } else {
+            scheduleReconnect(message);
+          }
         }
       }
     };

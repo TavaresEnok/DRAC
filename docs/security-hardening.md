@@ -58,6 +58,21 @@ Em desenvolvimento, `*` e aceitavel. Em producao, use o dominio HTTPS real.
 
 ## HTTPS e WebRTC
 
+Configure as URLs publicas antes de expor o sistema em dominio real:
+
+```env
+PUBLIC_APP_URL=https://drac.example.com
+API_PUBLIC_URL=https://drac.example.com/api
+MEDIAMTX_PUBLIC_HOST=drac.example.com
+MEDIAMTX_PUBLIC_SCHEME=https
+MEDIAMTX_PUBLIC_WEBRTC_URL=https://drac.example.com/webrtc
+MEDIAMTX_PUBLIC_HLS_URL=https://drac.example.com/hls
+MEDIAMTX_WEBRTC_ALLOW_ORIGIN=https://drac.example.com
+MEDIAMTX_HLS_ALLOW_ORIGIN=https://drac.example.com
+```
+
+Use `MEDIAMTX_PUBLIC_WEBRTC_URL` e `MEDIAMTX_PUBLIC_HLS_URL` quando o reverse proxy publicar MediaMTX sem as portas `8889` e `8888` no navegador. Se essas variaveis ficarem vazias, a API monta as URLs usando `MEDIAMTX_PUBLIC_HOST`, `MEDIAMTX_PUBLIC_SCHEME` e as portas configuradas.
+
 Use `infra/reverse-proxy.nginx.example` como base. Valide:
 
 ```bash
@@ -73,6 +88,7 @@ Teste WebRTC em navegador real:
 4. No navegador, confirme `connectionState=connected`.
 5. Valide audio quando a camera tiver audio habilitado.
 6. Monitore `docker stats vms-mediamtx vms-api` e processos `ffmpeg`.
+7. Se falhar, consulte auditoria com acao `stream.live.failure` para ver protocolo, estagio e motivo reportado pelo navegador.
 
 Se o dominio estiver atras de NAT, ajuste `MEDIAMTX_WEBRTC_ADDITIONAL_HOST` para o dominio publico ou IP publico correto.
 

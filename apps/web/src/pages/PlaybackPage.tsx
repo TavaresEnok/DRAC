@@ -246,6 +246,9 @@ export default function ReproduçãoPage() {
   const [draggingVideo, setDraggingVideo] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [jumpTime, setJumpTime] = useState('12:00:00');
+  const [compareEnabled, setCompareEnabled] = useState(false);
+  const [compareCameraIds, setCompareCameraIds] = useState<string[]>([]);
+  const [compareRecordingsByCamera, setCompareRecordingsByCamera] = useState<Record<string, GravaçãoItem[]>>({});
   const playbackReadyRef = useRef(false);
   const autoSkipTriedRef = useRef<Set<string>>(new Set());
 
@@ -382,6 +385,33 @@ export default function ReproduçãoPage() {
     };
   }, [accessToken, client, selectedCamId, selectedDate]);
 
+  useEffect(() => {
+    if (!compareEnabled || !accessToken || !selectedDate || !cameras.length) {
+      setCompareRecordingsByCamera({});
+      return;
+    }
+    const ids = Array.from(new Set([selectedCamId, ...compareCameraIds].filter(Boolean))).slice(0, 4);
+    if (!ids.length) return;
+    let cancelled = false;
+    void Promise.all(ids.map(async (cameraId) => {
+      const { data } = await client.get<{ items: GravaçãoItem[] }>(
+        `/recordings?cameraId=${encodeURIComponent(cameraId)}&date=${encodeURIComponent(selectedDate)}&limit=200&sort=asc`,
+        { timeout: API_TIMEOUT_MS },
+      );
+      return [cameraId, Array.isArray(data.items) ? data.items : []] as const;
+    }))
+      .then((entries) => {
+        if (cancelled) return;
+        setCompareRecordingsByCamera(Object.fromEntries(entries));
+      })
+      .catch(() => {
+        if (!cancelled) setCompareRecordingsByCamera({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, cameras.length, client, compareCameraIds, compareEnabled, selectedCamId, selectedDate]);
+
   const selectedCam = cameras.find((camera) => camera.id === selectedCamId) ?? cameras[0] ?? null;
   const selectedDay = useMemo(() => new Date(`${selectedDate}T00:00:00`), [selectedDate]);
   const dayStart = useMemo(() => startOfDay(selectedDay), [selectedDay]);
@@ -392,6 +422,24 @@ export default function ReproduçãoPage() {
   );
 
   const timelineSegments = useMemo(() => buildTimelineSegments(recordings, relevantEventos), [recordings, relevantEventos]);
+  const compareCameraItems = useMemo(() => (
+    Array.from(new Set([selectedCamId, ...compareCameraIds].filter(Boolean)))
+      .slice(0, 4)
+      .map((cameraId) => cameras.find((camera) => camera.id === cameraId))
+      .filter((camera): camera is NonNullable<typeof camera> => Boolean(camera))
+  ), [cameras, compareCameraIds, selectedCamId]);
+
+  const compareRows = useMemo(() => compareCameraItems.map((camera) => {
+    const items = compareRecordingsByCamera[camera.id] ?? (camera.id === selectedCamId ? recordings : []);
+    const eventsForCamera = events.filter((event) => event.cameraId === camera.id && isSameDay(new Date(event.timestamp), selectedDay)).slice(0, 40);
+    const segments = buildTimelineSegments(items, eventsForCamera);
+    const current = items.find((recording) => {
+      const start = minuteOfDay(recording.startedAt);
+      const end = minuteOfDay(recording.endedAt ?? recording.startedAt);
+      return playhead >= start && playhead <= end;
+    });
+    return { camera, items, segments, current };
+  }), [compareCameraItems, compareRecordingsByCamera, events, playhead, recordings, selectedCamId, selectedDay]);
   useEffect(() => {
     if (!recordings.length) {
       setSelectedGravaçãoId(null);
@@ -529,6 +577,14 @@ export default function ReproduçãoPage() {
     const minute = hh * 60 + mm + ss / 60;
     setPlayheadFromMinute(minute);
   }, [jumpTime, setPlayheadFromMinute]);
+
+  const toggleCompareCamera = useCallback((cameraId: string) => {
+    if (cameraId === selectedCamId) return;
+    setCompareCameraIds((current) => {
+      if (current.includes(cameraId)) return current.filter((id) => id !== cameraId);
+      return [...current, cameraId].slice(0, 3);
+    });
+  }, [selectedCamId]);
 
   const onTimelineClick = (clientX: number, rect: DOMRect) => {
     const pct = (clientX - rect.left) / rect.width;
@@ -799,6 +855,13 @@ export default function ReproduçãoPage() {
         </button>
 
         <div className="ml-auto flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setCompareEnabled((value) => !value)}
+            className={`mr-2 h-9 rounded-xl px-3 text-xs transition-colors ${compareEnabled ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'border border-border text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-foreground'}`}
+          >
+            Multi-câmera
+          </button>
           <span className="text-xs text-[hsl(var(--muted-foreground))]">Janela:</span>
           {[1, 2, 4].map((value) => (
             <button
@@ -812,6 +875,67 @@ export default function ReproduçãoPage() {
           ))}
         </div>
       </div>
+
+      {compareEnabled && (
+        <div className="rounded-lg border border-border bg-card/70 p-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold">Reprodução multi-câmera</div>
+              <div className="text-xs text-[hsl(var(--muted-foreground))]">Até 4 câmeras sincronizadas por data e horário.</div>
+            </div>
+            <div className="text-xs text-[hsl(var(--muted-foreground))]">{compareCameraItems.length}/4 selecionadas</div>
+          </div>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {cameras.map((camera) => {
+              const active = compareCameraItems.some((item) => item.id === camera.id);
+              const locked = camera.id === selectedCamId;
+              return (
+                <button
+                  key={camera.id}
+                  type="button"
+                  onClick={() => toggleCompareCamera(camera.id)}
+                  disabled={!locked && !active && compareCameraItems.length >= 4}
+                  className={`rounded border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${active ? 'border-[hsl(var(--primary)_/_0.45)] bg-[hsl(var(--primary)_/_0.10)] text-[hsl(var(--primary))]' : 'border-border text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-foreground'}`}
+                >
+                  {camera.code || camera.name}{locked ? ' · principal' : ''}
+                </button>
+              );
+            })}
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {compareRows.map(({ camera, segments, current }) => (
+              <div key={camera.id} className="rounded-lg border border-border bg-background/55 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-semibold">{camera.name}</div>
+                    <div className="text-[10px] text-[hsl(var(--muted-foreground))]">{current ? `${format(new Date(current.startedAt), 'HH:mm:ss')} - ${current.endedAt ? format(new Date(current.endedAt), 'HH:mm:ss') : '--'}` : 'Sem gravação neste horário'}</div>
+                  </div>
+                  <span className={`rounded px-2 py-1 text-[10px] ${current ? 'bg-emerald-500/10 text-emerald-300' : 'bg-white/5 text-[hsl(var(--muted-foreground))]'}`}>{current ? 'Disponível' : 'Vazio'}</span>
+                </div>
+                <div className="relative h-8 overflow-hidden rounded bg-[hsl(var(--muted))]" onClick={(event) => onTimelineClick(event.clientX, event.currentTarget.getBoundingClientRect())}>
+                  {segments.filter((segment) => segment.end >= viewStart && segment.start <= viewEnd).map((segment, index) => {
+                    const segStart = Math.max(segment.start, viewStart);
+                    const segEnd = Math.min(segment.end, viewEnd);
+                    const windowSize = viewEnd - viewStart;
+                    return (
+                      <div
+                        key={`${camera.id}-${segment.type}-${index}-${segStart}`}
+                        className="absolute top-0 h-full"
+                        style={{
+                          left: `${((segStart - viewStart) / windowSize) * 100}%`,
+                          width: `${((segEnd - segStart) / windowSize) * 100}%`,
+                          background: getSegmentColor(segment.type),
+                        }}
+                      />
+                    );
+                  })}
+                  <div className="pointer-events-none absolute top-0 bottom-0 w-0.5 bg-white" style={{ left: `${((playhead - viewStart) / (viewEnd - viewStart)) * 100}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-3 md:grid-cols-4">
         <div className="rounded-lg border border-border bg-card px-3 py-2">

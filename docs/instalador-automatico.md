@@ -114,6 +114,33 @@ POST /api/agent/heartbeat
 
 A central cadastra a instalacao automaticamente no primeiro heartbeat. Nao e necessario abrir porta no cliente para a central entrar; a conexao sai do servidor do cliente para a central.
 
+## Preflight Comercial
+
+Antes de clonar ou subir containers, o instalador valida:
+
+- usuario operacional diferente de `root`;
+- diretorio fora de `/root`;
+- `sudo` quando necessario;
+- `curl`;
+- resolucao DNS para GitHub e Central;
+- acesso ao GitHub raw e `/api/health` da Central;
+- portas principais em uso;
+- memoria disponivel;
+- espaco livre no diretorio de instalacao.
+
+Avisos nao bloqueiam quando ainda podem ser resolvidos depois, como Central temporariamente inacessivel ou porta ocupada por instalacao DRAC existente. Bloqueios param a instalacao quando continuar poderia deixar o servidor em estado ruim.
+
+O instalador tambem grava automaticamente:
+
+```env
+PUBLIC_APP_URL=http://IP_DO_SERVIDOR:5173
+API_PUBLIC_URL=http://IP_DO_SERVIDOR:3000
+MEDIAMTX_PUBLIC_HOST=IP_DO_SERVIDOR
+MEDIAMTX_PUBLIC_SCHEME=http
+```
+
+Em producao com dominio HTTPS, ajuste essas variaveis para o dominio real e restrinja `MEDIAMTX_HLS_ALLOW_ORIGIN` e `MEDIAMTX_WEBRTC_ALLOW_ORIGIN`.
+
 ## Validacao esperada
 
 Ao final, o instalador mostra:

@@ -21,8 +21,8 @@ export function LiveVideo({ uri, posterUri, videoStyle, emptyStyle, posterStyle,
     return (
       <View style={[videoStyle, emptyStyle]}>
         {posterUri ? <Image source={{ uri: posterUri }} style={posterStyle} /> : null}
-        <Text style={emptyTitleStyle}>Stream indisponivel</Text>
-        <Text style={emptyTextStyle}>Atualize ou abra a câmera novamente.</Text>
+        <Text style={emptyTitleStyle}>Transmissão indisponível</Text>
+        <Text style={emptyTextStyle}>A câmera pode estar offline, sem permissão ou sem resposta do servidor.</Text>
       </View>
     );
   }

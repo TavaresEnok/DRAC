@@ -530,6 +530,23 @@ check_exposure() {
   else
     ok "MediaMTX com allow origin restrito"
   fi
+
+  if [ -n "${PUBLIC_APP_URL:-}" ] && [ -n "${API_PUBLIC_URL:-}" ]; then
+    ok "URLs publicas configuradas para app/API"
+    if [[ "${PUBLIC_APP_URL:-}" =~ ^https:// ]] && [[ ! "${API_PUBLIC_URL:-}" =~ ^https:// ]]; then
+      fail "PUBLIC_APP_URL usa HTTPS, mas API_PUBLIC_URL nao usa HTTPS"
+    fi
+  else
+    warn "PUBLIC_APP_URL/API_PUBLIC_URL nao configuradas; WebRTC externo depende de host inferido por proxy"
+  fi
+
+  if [[ "${PUBLIC_APP_URL:-}" =~ ^https:// ]] && [ "${MEDIAMTX_WEBRTC_ALLOW_ORIGIN:-*}" = "*" ]; then
+    warn "Frontend HTTPS com MEDIAMTX_WEBRTC_ALLOW_ORIGIN='*'; restrinja para o dominio real antes de producao publica"
+  fi
+
+  if [[ "${PUBLIC_APP_URL:-}" =~ ^https:// ]] && [ -z "${MEDIAMTX_PUBLIC_WEBRTC_URL:-}" ] && [ -z "${MEDIAMTX_PUBLIC_HOST:-}" ]; then
+    fail "Frontend HTTPS sem MEDIAMTX_PUBLIC_WEBRTC_URL ou MEDIAMTX_PUBLIC_HOST; WHEP/WebRTC pode retornar host incorreto"
+  fi
 }
 
 check_cloud_settings() {

@@ -104,6 +104,36 @@ port_in_use() {
   return 1
 }
 
+host_from_url() {
+  printf '%s' "$1" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#/.*$##; s#:.*$##'
+}
+
+check_dns_host() {
+  local label="$1"
+  local host="$2"
+  [ -n "$host" ] || return 0
+  if command -v getent >/dev/null 2>&1 && getent hosts "$host" >/dev/null 2>&1; then
+    log "DNS OK: $label ($host)"
+    return 0
+  fi
+  if command -v host >/dev/null 2>&1 && host "$host" >/dev/null 2>&1; then
+    log "DNS OK: $label ($host)"
+    return 0
+  fi
+  warn "Nao foi possivel resolver DNS de $label ($host). Se for IP local, ignore; se for dominio publico, corrija antes da producao."
+}
+
+check_http_url() {
+  local label="$1"
+  local url="$2"
+  [ -n "$url" ] || return 0
+  if curl -fsS --max-time 10 "$url" >/dev/null 2>&1; then
+    log "Conectividade OK: $label"
+  else
+    warn "Nao foi possivel acessar $label em $url agora."
+  fi
+}
+
 preflight() {
   log "Executando pre-checagens"
 
@@ -124,6 +154,32 @@ preflight() {
   if ! command -v curl >/dev/null 2>&1; then
     fail "curl e obrigatorio para a instalacao automatica."
   fi
+
+  if ! command -v openssl >/dev/null 2>&1; then
+    warn "openssl ainda nao esta instalado; sera instalado nas dependencias do host."
+  fi
+
+  if command -v awk >/dev/null 2>&1; then
+    local mem_mb disk_kb disk_gb
+    mem_mb="$(awk '/MemTotal/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null || echo 0)"
+    disk_kb="$(df -Pk "$(dirname "$DRAC_INSTALL_DIR")" 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)"
+    disk_gb="$(awk -v kb="${disk_kb:-0}" 'BEGIN { printf "%d", kb / 1024 / 1024 }')"
+    if [ "${mem_mb:-0}" -lt 3900 ]; then
+      warn "Memoria baixa detectada (${mem_mb:-0}MB). Para producao, use pelo menos 4GB; para varias cameras, 8GB+."
+    else
+      log "Memoria OK: ${mem_mb}MB"
+    fi
+    if [ "${disk_gb:-0}" -lt 20 ]; then
+      warn "Disco livre baixo em $(dirname "$DRAC_INSTALL_DIR") (${disk_gb:-0}GB). Grave videos somente com storage dimensionado."
+    else
+      log "Disco livre OK: ${disk_gb}GB"
+    fi
+  fi
+
+  check_dns_host "GitHub" "github.com"
+  check_dns_host "Central" "$(host_from_url "$DRAC_CENTRAL_URL")"
+  check_http_url "GitHub raw" "https://raw.githubusercontent.com/TavaresEnok/DRAC/main/README.md"
+  check_http_url "DRAC Central" "${DRAC_CENTRAL_URL%/}/api/health"
 
   for port in 3000 5173 8554 8888 8889; do
     if port_in_use "$port"; then
@@ -234,6 +290,8 @@ prepare_env() {
   env_set "$env_file" MEDIAMTX_API_USER "drac_media"
   env_set "$env_file" MEDIAMTX_API_PASS "$(random_hex 18)"
   env_set "$env_file" CORS_ALLOWED_ORIGINS "http://${DRAC_SERVER_IP}:5173,http://${DRAC_SERVER_IP}:3002"
+  env_set "$env_file" PUBLIC_APP_URL "http://${DRAC_SERVER_IP}:5173"
+  env_set "$env_file" API_PUBLIC_URL "http://${DRAC_SERVER_IP}:3000"
   env_set "$env_file" VITE_API_URL ""
   env_set "$env_file" CLOUD_CONNECTOR_ENABLED "true"
   env_set "$env_file" CLOUD_API_URL "$DRAC_CENTRAL_URL"
@@ -253,6 +311,10 @@ prepare_env() {
   env_set "$env_file" DRAC_MEDIAMTX_WEBRTC_HTTP_BIND "0.0.0.0"
   env_set "$env_file" DRAC_MEDIAMTX_WEBRTC_UDP_BIND "0.0.0.0"
   env_set "$env_file" MEDIAMTX_WEBRTC_ADDITIONAL_HOST "$DRAC_SERVER_IP"
+  env_set "$env_file" MEDIAMTX_PUBLIC_HOST "$DRAC_SERVER_IP"
+  env_set "$env_file" MEDIAMTX_PUBLIC_SCHEME "http"
+  env_set "$env_file" MEDIAMTX_PUBLIC_WEBRTC_URL ""
+  env_set "$env_file" MEDIAMTX_PUBLIC_HLS_URL ""
   env_set "$env_file" MEDIAMTX_HLS_ALLOW_ORIGIN "*"
   env_set "$env_file" MEDIAMTX_WEBRTC_ALLOW_ORIGIN "*"
 

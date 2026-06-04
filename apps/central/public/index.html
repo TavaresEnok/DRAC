@@ -608,6 +608,7 @@
         'installation.installer_downloaded': 'Instalador baixado',
         'installation.installer_denied': 'Instalador recusado',
         'installation.installer_command_viewed': 'Comando de instalação aberto',
+        'installation.diagnostics_viewed': 'Diagnóstico copiado',
       };
       const auditResultLabels = {
         accepted: 'concluído',
@@ -990,12 +991,16 @@
             ` : `
               <div class="section">
                 <div class="section-title">Manutenção</div>
-                <button id="copy-selected-installer" class="primary">Copiar reinstalador oficial</button>
+                <div class="license-actions">
+                  <button id="copy-selected-diagnostics" class="primary">Copiar diagnóstico</button>
+                  <button id="copy-selected-installer" class="primary">Copiar reinstalador oficial</button>
+                </div>
               </div>
             `}
           </div>`;
         els.detail.querySelector('#save-license').addEventListener('click', () => requestContractChange(item.id, els.detail.querySelector('#license-select').value, els.detail.querySelector('#license-message').value.trim()));
         els.detail.querySelector('#suspend-license').addEventListener('click', () => requestContractChange(item.id, 'SUSPENDED', els.detail.querySelector('#license-message').value.trim() || 'Suspensão administrativa.'));
+        els.detail.querySelector('#copy-selected-diagnostics')?.addEventListener('click', () => copyDiagnosticsFor(item.id));
         els.detail.querySelector('#copy-selected-installer')?.addEventListener('click', () => copyInstallerFor(item.id));
         els.detail.querySelector('#delete-pending-install')?.addEventListener('click', () => deletePendingInstallation(item.id));
       }
@@ -1325,6 +1330,34 @@
           showToast('Instalador copiado.');
         } catch {
           showToast('Falha ao copiar instalador.');
+        }
+      }
+      async function copyDiagnosticsFor(id) {
+        try {
+          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/diagnostics`, {
+            method: 'GET',
+            credentials: 'include',
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            showToast(data.message || 'Não foi possível gerar o diagnóstico.');
+            return;
+          }
+          const payload = JSON.stringify(data, null, 2);
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(payload);
+          } else {
+            const area = document.createElement('textarea');
+            area.value = payload;
+            document.body.appendChild(area);
+            area.focus();
+            area.select();
+            document.execCommand('copy');
+            area.remove();
+          }
+          showToast('Diagnóstico copiado.');
+        } catch {
+          showToast('Falha ao copiar diagnóstico.');
         }
       }
 

@@ -77,10 +77,13 @@ API usada pelo painel:
 ```text
 POST /api/admin/provision
 GET /api/admin/installations/:id/installer
+GET /api/admin/installations/:id/diagnostics
 DELETE /api/admin/installations/:id
 ```
 
 O `DELETE` remove apenas instalacoes que ainda nao enviaram heartbeat.
+
+O diagnostico sanitizado nao inclui chave de licenca, token de instalador nem segredos. Ele consolida estado da instalacao, readiness, cameras, armazenamento, servidor, alertas ativos e ultimos heartbeats.
 
 Estados comerciais suportados:
 

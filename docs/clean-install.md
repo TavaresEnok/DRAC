@@ -184,6 +184,39 @@ ls -lh infra/backups/postgres
 du -sh infra/storage
 ```
 
+## Comandos Operacionais Separados
+
+Instalacao limpa:
+
+```bash
+curl -fsSL URL_GERADA_PELA_CENTRAL | bash
+```
+
+Atualizacao:
+
+```bash
+cd /home/flashnet/Drac
+./scripts/update-drac.sh
+```
+
+Diagnostico:
+
+```bash
+cd /home/flashnet/Drac
+./scripts/collect-diagnostics.sh
+./scripts/production-readiness.sh
+./scripts/prod-regression.sh
+```
+
+Restore:
+
+```bash
+cd /home/flashnet/Drac
+DRAC_RESTORE_YES=true ./scripts/restore-drac.sh dump.dump storage.tar.gz
+```
+
+Depois da instalacao, a Central deve mostrar o cliente automaticamente apos o primeiro heartbeat. Se isso nao acontecer em ate 60 segundos, valide `CLOUD_API_URL`, `CLOUD_INSTALLATION_ID`, `CLOUD_LICENSE_KEY` e rede de saida do servidor.
+
 Teste retencao com uma camera de homologacao antes de aplicar a politica definitiva em producao.
 
 ## 11. Encerramento Seguro
