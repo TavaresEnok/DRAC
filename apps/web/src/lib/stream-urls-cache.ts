@@ -10,6 +10,7 @@ interface CacheEntry<T> {
 
 class StreamUrlsCache {
   private cache = new Map<string, CacheEntry<any>>();
+  private inflight = new Map<string, Promise<any>>();
   private readonly defaultTtlMs = 8000; // 8 seconds
 
   /**
@@ -42,6 +43,7 @@ class StreamUrlsCache {
    */
   clear(key: string): void {
     this.cache.delete(key);
+    this.inflight.delete(key);
   }
 
   /**
@@ -49,6 +51,7 @@ class StreamUrlsCache {
    */
   clearAll(): void {
     this.cache.clear();
+    this.inflight.clear();
   }
 
   /**
@@ -63,9 +66,20 @@ class StreamUrlsCache {
     const cached = this.get<T>(key);
     if (cached) return cached;
 
-    const data = await factory();
-    this.set(key, data, ttlMs);
-    return data;
+    const existing = this.inflight.get(key) as Promise<T> | undefined;
+    if (existing) return existing;
+
+    const request = factory()
+      .then((data) => {
+        this.set(key, data, ttlMs);
+        return data;
+      })
+      .finally(() => {
+        this.inflight.delete(key);
+      });
+
+    this.inflight.set(key, request);
+    return request;
   }
 }
 

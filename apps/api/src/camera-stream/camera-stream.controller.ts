@@ -192,6 +192,19 @@ export class CameraStreamController {
             ? 'WebRTC configurado como protocolo principal; LL-HLS/HLS ficam apenas como contingência técnica.'
             : 'Ordem de fallback baseada no protocolo configurado.',
       },
+      liveDiagnostics: {
+        generatedAt: new Date().toISOString(),
+        mediamtxEnabled: this.mediamtxProxyService.isEnabled(),
+        pathReady: Boolean(safeMediaBridge.enabled && safeMediaBridge.pathName),
+        pathName: safeMediaBridge.pathName ?? null,
+        sourceVideoCodec: sourceCodec,
+        originalVideoCodec: originalCodec,
+        liveTranscodedForBrowser,
+        liveProfile,
+        deliveryProfile,
+        preferredProtocol: configuredPreferred,
+        protocolOrder,
+      },
       protocols: {
         flvUrl,
         posterUrl,

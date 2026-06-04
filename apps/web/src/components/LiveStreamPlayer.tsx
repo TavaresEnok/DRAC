@@ -18,18 +18,18 @@ type LiveStreamPlayerProps = {
 };
 
 const API_URL = getApiBaseUrl();
-const HLS_FIRST_FRAME_TIMEOUT_MS = 5000;
-const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 5000;
-const WEBRTC_WHEP_NEGOTIATION_TIMEOUT_MS = 6500;
-const WEBRTC_DISCONNECT_GRACE_MS = 3500;
+const HLS_FIRST_FRAME_TIMEOUT_MS = 7000;
+const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 8000;
+const WEBRTC_WHEP_NEGOTIATION_TIMEOUT_MS = 9500;
+const WEBRTC_DISCONNECT_GRACE_MS = 6000;
 const LIVE_RESUME_GRACE_MS = 1200;
 const LIVE_SOFT_ONLY_RESUME_MS = 120000;
 const LIVE_STALL_CHECK_INTERVAL_MS = 4000;
 const LIVE_STALL_SOFT_RECOVER_MS = 8000;
 const LIVE_STALL_RECONNECT_MS = 16000;
-const LIVE_RECONNECT_DEBOUNCE_MS = 1200;
-const LIVE_FAST_RETRY_BASE_MS = 800;
-const LIVE_FAST_RETRY_MAX_MS = 5000;
+const LIVE_RECONNECT_DEBOUNCE_MS = 2500;
+const LIVE_FAST_RETRY_BASE_MS = 1200;
+const LIVE_FAST_RETRY_MAX_MS = 7000;
 const LIVE_EDGE_OFFSET_SECONDS = 0.35;
 const LIVE_RENDER_STALL_RECONNECT_MS = 10000;
 const LIVE_VISUAL_FREEZE_RECONNECT_MS = 45000;
@@ -448,8 +448,9 @@ export function LiveStreamPlayer({
       const delayMs = getFastRetryDelay();
       const alreadyHadFrame = hasFrameRef.current;
       setError(null);
-      setRetryMessage(/Nenhum protocolo de live conseguiu iniciar/i.test(message)
-        ? 'Reconectando transmissão...'
+      const warmupMessage = /Nenhum protocolo de live conseguiu iniciar|Aguardando vídeo/i.test(message);
+      setRetryMessage(warmupMessage
+        ? 'Aguardando vídeo da câmera'
         : `${message} Reconectando...`);
       if (!alreadyHadFrame) {
         setActiveProtocol(null);
@@ -730,7 +731,7 @@ export function LiveStreamPlayer({
               if (cancelled || webrtcPcRef.current !== pc) return;
               if (activeProtocolRef.current === 'WEBRTC' && hasFrameRef.current) {
                 if (transient) {
-                  requestFreshLiveBoot(`${reason}. Reconectando WebRTC...`, true);
+                  requestFreshLiveBoot(`${reason}. Retomando WebRTC...`, true);
                 } else {
                   failActiveProtocol(reason);
                 }
@@ -957,7 +958,8 @@ export function LiveStreamPlayer({
         }
 
         failedProtocolsRef.current.clear();
-        throw new Error('A transmissão ainda não respondeu. Tentando novamente.');
+        streamUrlsCache.clear(cacheKey);
+        throw new Error('Aguardando vídeo da câmera.');
       } catch (streamError) {
         if (cancelled) return;
         if (axios.isAxiosError<CommercialRestrictionError>(streamError) && streamError.response?.status === 423) {
@@ -1465,7 +1467,7 @@ export function LiveStreamPlayer({
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
           <div className="flex items-center gap-2 rounded-md border border-white/10 bg-black/45 px-3 py-2 text-xs text-white/75">
             <LoaderCircle className="h-4 w-4 animate-spin" />
-            {retryMessage ?? 'Carregando stream'}
+            {retryMessage ?? 'Aguardando vídeo'}
           </div>
         </div>
       )}
