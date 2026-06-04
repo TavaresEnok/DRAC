@@ -14,7 +14,15 @@ import { AlarmsService } from '../alarms/alarms.service';
 import { CreateCameraDto } from './dto/create-camera.dto';
 import { TestCameraConnectionDto } from './dto/test-camera-connection.dto';
 import { UpdateCameraDto } from './dto/update-camera.dto';
-import { resolveDeliveryRtspProfile } from './helpers/rtsp-url.helper';
+import {
+  buildRtspUrl,
+  isHevcCodec,
+  resolveAnalyticsRtspProfile,
+  resolveDeliveryRtspProfile,
+  resolveLiveRtspProfile,
+  resolveRecordingRtspProfile,
+  sanitizeRtspUrl,
+} from './helpers/rtsp-url.helper';
 
 export function sanitizeCamera<T extends { passwordEncrypted: string }>(camera: T): Omit<T, 'passwordEncrypted'> {
   const { passwordEncrypted, ...safeCamera } = camera;
@@ -313,6 +321,97 @@ export class CamerasService {
       rtspReachable: status.rtspReachable,
       onvifReachable: status.onvifReachable,
       status: status.status,
+    };
+  }
+
+  async getPipelineSummary(id: string) {
+    const camera = await this.getCameraOrThrow(id);
+    const password = this.cryptoService.decrypt(camera.passwordEncrypted);
+    const liveProfile = resolveLiveRtspProfile(camera);
+    const recordingProfile = resolveRecordingRtspProfile(camera);
+    const analyticsProfile = resolveAnalyticsRtspProfile(camera);
+
+    const makeUrl = (profile: { channel: number; subtype: number }) => {
+      const url = buildRtspUrl({
+        username: camera.username,
+        password,
+        ip: camera.ip,
+        rtspPort: camera.rtspPort,
+        rtspPath: camera.rtspPath,
+        channel: profile.channel,
+        subtype: profile.subtype,
+      });
+      return { raw: url, sanitized: sanitizeRtspUrl(url) };
+    };
+
+    const live = makeUrl(liveProfile);
+    const recording = makeUrl(recordingProfile);
+    const analytics = makeUrl(analyticsProfile);
+    const liveCodec = this.normalizeVideoCodec(camera.detectedVideoCodec ?? camera.streamVideoCodec ?? camera.recordingVideoCodec);
+    const recordingCodec = this.normalizeVideoCodec(camera.recordingVideoCodec ?? camera.detectedVideoCodec);
+    const analyticsExpectedCodec = analyticsProfile.subtype === liveProfile.subtype ? liveCodec : null;
+    const analyticsUsesSubstream = analyticsProfile.channel !== liveProfile.channel || analyticsProfile.subtype !== liveProfile.subtype;
+    const liveNeedsBrowserTranscode = isHevcCodec(liveCodec) || Boolean(camera.audioEnabled);
+
+    return {
+      cameraId: camera.id,
+      cameraName: camera.name,
+      updatedAt: new Date().toISOString(),
+      transport: camera.preferredRtspTransport ?? 'tcp',
+      preferredLiveProtocol: camera.preferredLiveProtocol ?? 'webrtc',
+      architecture: {
+        separated: analyticsUsesSubstream && recordingProfile.subtype === 0 && liveProfile.subtype === 0,
+        rule: 'recording_main_live_main_analytics_substream',
+      },
+      live: {
+        role: 'Cliente ao vivo',
+        source: 'camera_main_stream',
+        channel: liveProfile.channel,
+        subtype: liveProfile.subtype,
+        rtspUrl: live.sanitized,
+        codec: liveCodec ?? null,
+        width: camera.streamWidth ?? camera.detectedWidth ?? null,
+        height: camera.streamHeight ?? camera.detectedHeight ?? null,
+        fps: camera.streamFps ?? camera.detectedFps ?? null,
+        browserProtocol: camera.preferredLiveProtocol ?? 'webrtc',
+        browserCodec: liveNeedsBrowserTranscode ? 'h264' : liveCodec ?? 'h264',
+        transcodeForBrowser: liveNeedsBrowserTranscode,
+        audioEnabled: Boolean(camera.audioEnabled),
+      },
+      recording: {
+        role: 'Arquivo',
+        source: 'camera_main_stream',
+        channel: recordingProfile.channel,
+        subtype: recordingProfile.subtype,
+        rtspUrl: recording.sanitized,
+        codecPolicy: 'copy_if_hevc_else_transcode_to_h265',
+        targetCodec: 'h265',
+        sourceCodec: recordingCodec ?? null,
+        width: camera.recordingWidth ?? camera.detectedWidth ?? null,
+        height: camera.recordingHeight ?? camera.detectedHeight ?? null,
+        fps: camera.recordingFps ?? camera.detectedFps ?? null,
+        mode: camera.recordingMode,
+        enabled: camera.recordingEnabled,
+      },
+      analytics: {
+        role: 'IA / analytics',
+        source: 'direct_camera',
+        channel: analyticsProfile.channel,
+        subtype: analyticsProfile.subtype,
+        rtspUrl: analytics.sanitized,
+        usesMediaMtx: false,
+        audioRequested: false,
+        expectedCodec: analyticsExpectedCodec,
+        separatedFromLive: analyticsUsesSubstream,
+      },
+      notes: [
+        analyticsUsesSubstream
+          ? 'IA está configurada para ler substream direto da câmera.'
+          : 'IA está usando o mesmo perfil da live; recomenda-se analyticsSubtype=1 quando houver substream.',
+        liveNeedsBrowserTranscode
+          ? 'Live pode usar transcode para H.264/WebRTC por codec HEVC ou áudio.'
+          : 'Live pode ser entregue sem transcode de vídeo quando o stream for compatível.',
+      ],
     };
   }
 

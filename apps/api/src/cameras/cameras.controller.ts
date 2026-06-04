@@ -534,6 +534,13 @@ export class CamerasController {
   }
 
   @Roles(UserRole.VIEWER)
+  @Get(':id/pipelines')
+  async getPipelines(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    await this.accessControlService.assertCanViewCamera(user, id);
+    return this.camerasService.getPipelineSummary(id);
+  }
+
+  @Roles(UserRole.VIEWER)
   @Get(':id')
   async findOne(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     await this.accessControlService.assertCanViewCamera(user, id);

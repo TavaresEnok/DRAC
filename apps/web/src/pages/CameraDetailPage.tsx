@@ -132,6 +132,47 @@ type RecordingRuntimeStatus = {
   lastSegmentAgeSeconds?: number | null;
 };
 
+type CameraPipelineSummary = {
+  architecture?: {
+    separated?: boolean;
+    rule?: string;
+  };
+  live?: {
+    channel?: number;
+    subtype?: number;
+    codec?: string | null;
+    width?: number | null;
+    height?: number | null;
+    fps?: number | null;
+    browserProtocol?: string | null;
+    browserCodec?: string | null;
+    transcodeForBrowser?: boolean;
+    rtspUrl?: string | null;
+  };
+  recording?: {
+    channel?: number;
+    subtype?: number;
+    sourceCodec?: string | null;
+    targetCodec?: string | null;
+    width?: number | null;
+    height?: number | null;
+    fps?: number | null;
+    mode?: string | null;
+    enabled?: boolean;
+    rtspUrl?: string | null;
+  };
+  analytics?: {
+    channel?: number;
+    subtype?: number;
+    source?: string | null;
+    usesMediaMtx?: boolean;
+    separatedFromLive?: boolean;
+    expectedCodec?: string | null;
+    rtspUrl?: string | null;
+  };
+  notes?: string[];
+};
+
 const emptyConfig: CameraConfig = {
   name: '',
   ip: '',
@@ -362,6 +403,7 @@ export default function CameraDetailPage() {
   const [diagnosingPtz, setDiagnosingPtz] = useState(false);
   const [triggeringAlarm, setTriggeringAlarm] = useState(false);
   const [ptzDiagnostics, setPtzDiagnostics] = useState<PtzDiagnostics | null>(null);
+  const [pipelineSummary, setPipelineSummary] = useState<CameraPipelineSummary | null>(null);
 
   const initialTabs = useMemo(() => {
     if (typeof window === 'undefined') {
@@ -383,13 +425,21 @@ export default function CameraDetailPage() {
     const loadCameraConfig = async () => {
       setConfigLoading(true);
       try {
-        const { data } = await axios.get(`${API_URL}/cameras/${cam.id}`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        const [{ data }, pipelineResult] = await Promise.all([
+          axios.get(`${API_URL}/cameras/${cam.id}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          }),
+          axios
+            .get(`${API_URL}/cameras/${cam.id}/pipelines`, {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            })
+            .catch(() => ({ data: null })),
+        ]);
 
         if (cancelled) return;
 
         setCameraConfigMeta(data);
+        setPipelineSummary(pipelineResult.data);
         setForm({
           name: data.name ?? '',
           ip: data.ip ?? '',
@@ -448,6 +498,7 @@ export default function CameraDetailPage() {
 
   useEffect(() => {
     setCameraConfigMeta(null);
+    setPipelineSummary(null);
   }, [cam?.id]);
 
   useEffect(() => {
@@ -698,6 +749,12 @@ export default function CameraDetailPage() {
       setCameraConfigMeta(updatedCamera);
       await loadData();
       setLiveConfigRevision((current) => current + 1);
+      axios
+        .get(`${API_URL}/cameras/${cam.id}/pipelines`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        })
+        .then(({ data }) => setPipelineSummary(data))
+        .catch(() => undefined);
       setForm((current) => ({ ...current, password: '' }));
       const appliedLiveResolution = form.streamWidth && form.streamHeight ? `${form.streamWidth}x${form.streamHeight}` : 'Sem redimensionamento';
       toast({
@@ -1402,17 +1459,42 @@ export default function CameraDetailPage() {
                         <div className="grid gap-3 md:grid-cols-3">
                           <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
                             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Live</div>
-                            <div className="mt-1 text-sm font-medium text-foreground">Original da câmera</div>
+                            <div className="mt-1 text-sm font-medium text-foreground">Principal · canal {pipelineSummary?.live?.channel ?? (form.liveChannel || form.channel || '1')} / subtipo {pipelineSummary?.live?.subtype ?? (form.liveSubtype || '0')}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              {pipelineSummary?.live?.width && pipelineSummary?.live?.height ? `${pipelineSummary.live.width}x${pipelineSummary.live.height}` : 'Resolução original'} · {(pipelineSummary?.live?.browserProtocol ?? 'webrtc').toUpperCase()}
+                            </div>
                           </div>
                           <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
                             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Gravação</div>
-                            <div className="mt-1 text-sm font-medium text-foreground">Principal H.265</div>
+                            <div className="mt-1 text-sm font-medium text-foreground">Principal · canal {pipelineSummary?.recording?.channel ?? (form.recordingChannel || form.channel || '1')} / subtipo {pipelineSummary?.recording?.subtype ?? (form.recordingSubtype || '0')}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              Arquivo {(pipelineSummary?.recording?.targetCodec ?? 'h265').toUpperCase()} · {pipelineSummary?.recording?.enabled ? 'habilitada' : 'opcional'}
+                            </div>
                           </div>
-                          <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
+                          <div className={cn(
+                            'rounded-lg border px-3 py-2',
+                            pipelineSummary?.analytics?.separatedFromLive === false
+                              ? 'border-amber-500/35 bg-amber-500/10'
+                              : 'border-border/70 bg-card',
+                          )}>
                             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">IA</div>
-                            <div className="mt-1 text-sm font-medium text-foreground">Perfil reservado</div>
+                            <div className="mt-1 text-sm font-medium text-foreground">Substream · canal {pipelineSummary?.analytics?.channel ?? (form.analyticsChannel || form.channel || '1')} / subtipo {pipelineSummary?.analytics?.subtype ?? (form.analyticsSubtype || '1')}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              {pipelineSummary?.analytics?.usesMediaMtx ? 'via MediaMTX' : 'direto da câmera'} · sem áudio
+                            </div>
                           </div>
                         </div>
+                        <details className="rounded-lg border border-border/70 bg-card/60 px-3 py-2">
+                          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Arquitetura técnica</summary>
+                          <div className="mt-3 grid gap-2 border-t border-border/70 pt-3 text-[11px] text-muted-foreground">
+                            <div className="flex justify-between gap-3"><span>Live</span><span className="truncate font-mono">{pipelineSummary?.live?.rtspUrl ?? 'rtsp://... main'}</span></div>
+                            <div className="flex justify-between gap-3"><span>Gravação</span><span className="truncate font-mono">{pipelineSummary?.recording?.rtspUrl ?? 'rtsp://... main'}</span></div>
+                            <div className="flex justify-between gap-3"><span>IA</span><span className="truncate font-mono">{pipelineSummary?.analytics?.rtspUrl ?? 'rtsp://... substream'}</span></div>
+                            {pipelineSummary?.notes?.map((note) => (
+                              <div key={note} className="rounded border border-border/60 bg-background/50 px-2 py-1">{note}</div>
+                            ))}
+                          </div>
+                        </details>
                       </SettingsCard>
 
                       <SettingsCard title="Live">
