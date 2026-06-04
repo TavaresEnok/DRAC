@@ -520,6 +520,7 @@
         pendingContract: null,
         auditEvents: [],
         provision: null,
+        summary: null,
       };
       if (!['operacao', 'clientes', 'instalacao', 'contratos', 'alertas', 'auditoria'].includes(state.view)) state.view = 'operacao';
 
@@ -855,13 +856,14 @@
         `).join('')}</div>`;
       }
       function renderMetrics(items) {
-        const online = state.installations.filter(i => i.status === 'ONLINE').length;
-        const attention = state.installations.filter(i => riskScore(i) > 0).length;
-        const camOnline = state.installations.reduce((sum, i) => sum + number(metric(i, 'cameraOnline', 0)), 0);
-        const camTotal = state.installations.reduce((sum, i) => sum + number(metric(i, 'cameraTotal', 0)), 0);
-        const alarms = state.installations.reduce((sum, i) => sum + number(metric(i, 'openAlarms', 0)), 0);
-        const maxDisk = state.installations.reduce((max, i) => Math.max(max, number(metric(i, 'diskUsagePercent', 0))), 0);
-        document.querySelector('#m-total').textContent = fmt.format(state.installations.length);
+        const totals = state.summary?.totals || null;
+        const online = totals?.online ?? state.installations.filter(i => i.status === 'ONLINE').length;
+        const attention = totals?.attention ?? state.installations.filter(i => riskScore(i) > 0).length;
+        const camOnline = totals?.cameraOnline ?? state.installations.reduce((sum, i) => sum + number(metric(i, 'cameraOnline', 0)), 0);
+        const camTotal = totals?.cameraTotal ?? state.installations.reduce((sum, i) => sum + number(metric(i, 'cameraTotal', 0)), 0);
+        const alarms = totals?.openAlarms ?? state.installations.reduce((sum, i) => sum + number(metric(i, 'openAlarms', 0)), 0);
+        const maxDisk = totals?.maxDiskUsagePercent ?? state.installations.reduce((max, i) => Math.max(max, number(metric(i, 'diskUsagePercent', 0))), 0);
+        document.querySelector('#m-total').textContent = fmt.format(totals?.installations ?? state.installations.length);
         document.querySelector('#m-total-sub').textContent = `${fmt.format(items.length)} no filtro atual`;
         document.querySelector('#m-online').textContent = fmt.format(online);
         document.querySelector('#m-attention').textContent = fmt.format(attention);
@@ -1200,6 +1202,12 @@
           }
           const data = await res.json();
           state.installations = Array.isArray(data.items) ? data.items : [];
+          const summaryRes = await fetch('/api/admin/summary', { credentials: 'include' }).catch(() => null);
+          if (summaryRes?.ok) {
+            state.summary = await summaryRes.json();
+          } else {
+            state.summary = null;
+          }
           if (state.view === 'auditoria') {
             const auditRes = await fetch('/api/admin/audit', { credentials: 'include' });
             if (auditRes.ok) {

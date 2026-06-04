@@ -468,6 +468,94 @@ function publicInstallation(item) {
   };
 }
 
+function fleetSummary(installations) {
+  const items = installations.map(publicInstallation);
+  const totals = items.reduce((acc, item) => {
+    const cameraTotal = Number(metricValue(item, 'cameraTotal', 0) || 0);
+    const cameraOnline = Number(metricValue(item, 'cameraOnline', 0) || 0);
+    const cameraOffline = Number(metricValue(item, 'cameraOffline', 0) || 0);
+    const cameraError = Number(metricValue(item, 'cameraError', 0) || 0);
+    const diskUsagePercent = Number(metricValue(item, 'diskUsagePercent', 0) || 0);
+    const openAlarms = Number(item.metrics?.openAlarms || 0);
+    const hasAttention =
+      item.status !== 'ONLINE' ||
+      item.licenseStatus === 'RESTRICTED' ||
+      item.licenseStatus === 'SUSPENDED' ||
+      item.metrics?.productionReadiness === 'blocked' ||
+      item.metrics?.productionReadiness === 'attention' ||
+      cameraOffline + cameraError > 0 ||
+      diskUsagePercent >= 85 ||
+      openAlarms > 0;
+
+    acc.installations += 1;
+    acc.online += item.status === 'ONLINE' ? 1 : 0;
+    acc.offline += item.status === 'OFFLINE' ? 1 : 0;
+    acc.pendingInstall += item.status === 'PENDING_INSTALL' ? 1 : 0;
+    acc.attention += hasAttention ? 1 : 0;
+    acc.suspended += item.licenseStatus === 'SUSPENDED' ? 1 : 0;
+    acc.restricted += item.licenseStatus === 'RESTRICTED' ? 1 : 0;
+    acc.cameraTotal += cameraTotal;
+    acc.cameraOnline += cameraOnline;
+    acc.cameraOffline += cameraOffline;
+    acc.cameraError += cameraError;
+    acc.openAlarms += openAlarms;
+    acc.maxDiskUsagePercent = Math.max(acc.maxDiskUsagePercent, diskUsagePercent);
+    return acc;
+  }, {
+    installations: 0,
+    online: 0,
+    offline: 0,
+    pendingInstall: 0,
+    attention: 0,
+    suspended: 0,
+    restricted: 0,
+    cameraTotal: 0,
+    cameraOnline: 0,
+    cameraOffline: 0,
+    cameraError: 0,
+    openAlarms: 0,
+    maxDiskUsagePercent: 0,
+  });
+
+  const topAttention = items
+    .map((item) => {
+      const diskUsagePercent = Number(metricValue(item, 'diskUsagePercent', 0) || 0);
+      const cameraIssues = Number(metricValue(item, 'cameraOffline', 0) || 0) + Number(metricValue(item, 'cameraError', 0) || 0);
+      const openAlarms = Number(item.metrics?.openAlarms || 0);
+      let score = 0;
+      if (item.status !== 'ONLINE') score += item.status === 'PENDING_INSTALL' ? 45 : 100;
+      if (item.licenseStatus === 'SUSPENDED') score += 90;
+      if (item.licenseStatus === 'RESTRICTED') score += 45;
+      if (item.metrics?.productionReadiness === 'blocked') score += 80;
+      if (item.metrics?.productionReadiness === 'attention') score += 30;
+      if (cameraIssues) score += 35;
+      if (diskUsagePercent >= 85) score += 30;
+      if (openAlarms) score += 10;
+      return {
+        id: item.id,
+        customerName: item.customerName || item.name || item.id,
+        status: item.status,
+        licenseStatus: item.licenseStatus,
+        productionReadiness: item.metrics?.productionReadiness || item.metrics?.status || 'unknown',
+        diskUsagePercent,
+        cameraIssues,
+        openAlarms,
+        ageSeconds: item.ageSeconds,
+        score,
+      };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    onlineThresholdSeconds: ONLINE_THRESHOLD_SECONDS,
+    totals,
+    topAttention,
+  };
+}
+
 function licenseResponse(item) {
   const status = item.licenseStatus || LICENSE_ACTIVE;
   const restrictions = {
@@ -702,6 +790,10 @@ async function route(req, res) {
       if (req.method === 'GET' && url.pathname === '/api/admin/installations') {
         await saveDb(db);
         return json(req, res, 200, { items: Object.values(db.installations).map(publicInstallation) });
+      }
+      if (req.method === 'GET' && url.pathname === '/api/admin/summary') {
+        await saveDb(db);
+        return json(req, res, 200, fleetSummary(Object.values(db.installations)));
       }
       if (req.method === 'POST' && url.pathname === '/api/admin/provision') {
         return handleProvision(req, res, db, actor);

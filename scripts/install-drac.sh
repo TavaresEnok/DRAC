@@ -91,6 +91,47 @@ detect_ip() {
   hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true
 }
 
+port_in_use() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnu "( sport = :$port )" 2>/dev/null | tail -n +2 | grep -q .
+    return $?
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -ltnu 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}$"
+    return $?
+  fi
+  return 1
+}
+
+preflight() {
+  log "Executando pre-checagens"
+
+  if [ "$DRAC_OPERATING_USER" = "root" ]; then
+    fail "DRAC_OPERATING_USER nao pode ser root. Use um usuario operacional, por exemplo flashnet."
+  fi
+
+  case "$DRAC_INSTALL_DIR" in
+    /root|/root/*)
+      fail "DRAC_INSTALL_DIR nao pode ficar dentro de /root. Use /home/$DRAC_OPERATING_USER/Drac ou outro diretorio operacional."
+      ;;
+  esac
+
+  if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+    fail "Execute como root ou instale sudo para permitir configuracao de dependencias do host."
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    fail "curl e obrigatorio para a instalacao automatica."
+  fi
+
+  for port in 3000 5173 8554 8888 8889; do
+    if port_in_use "$port"; then
+      warn "Porta $port ja esta em uso. Se for uma instalacao DRAC existente, o Compose fara a atualizacao; se for outro servico, ajuste antes de continuar."
+    fi
+  done
+}
+
 ensure_operating_user() {
   if id "$DRAC_OPERATING_USER" >/dev/null 2>&1; then
     return
@@ -294,6 +335,7 @@ EOF
 
 main() {
   log "Instalador DRAC VMS"
+  preflight
   ensure_operating_user
   install_host_dependencies
   sync_repository
