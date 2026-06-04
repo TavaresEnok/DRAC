@@ -38,6 +38,24 @@ type DetectedCameraProfile = {
   metadata: ProbedStreamMetadata | null;
 };
 
+type CameraProbeStep = {
+  key: string;
+  label: string;
+  status: 'ok' | 'warning' | 'error';
+  durationMs: number;
+  detail?: string | null;
+};
+
+type OnvifMediaProfile = {
+  token: string;
+  name?: string | null;
+  width?: number | null;
+  height?: number | null;
+  encoding?: string | null;
+  rtspPath?: string | null;
+  rtspUri?: string | null;
+};
+
 type CameraProfilePayload = {
   streamWidth?: number | null;
   streamHeight?: number | null;
@@ -300,25 +318,97 @@ export class CamerasService {
 
   async testConnectionDraft(input: TestCameraConnectionDto) {
     this.assertTestTargetAllowed(input.ip);
+    const steps: CameraProbeStep[] = [];
+    const runStep = async <T>(key: string, label: string, action: () => Promise<T>, detail?: (value: T) => string | null | undefined): Promise<T> => {
+      const startedAt = Date.now();
+      try {
+        const value = await action();
+        steps.push({
+          key,
+          label,
+          status: 'ok',
+          durationMs: Date.now() - startedAt,
+          detail: detail?.(value) ?? null,
+        });
+        return value;
+      } catch (error) {
+        steps.push({
+          key,
+          label,
+          status: 'error',
+          durationMs: Date.now() - startedAt,
+          detail: error instanceof Error ? error.message : 'falha',
+        });
+        throw error;
+      }
+    };
     const rtspPortCandidates = Array.from(
       new Set([input.rtspPort, 554, 8554, 10554, 5544, 51488, 51489, 51490].filter((v): v is number => Number.isFinite(v as number))),
     );
-    const reachableRtspPorts: number[] = [];
-    for (const port of rtspPortCandidates) {
-      if (await this.portChecker.check(input.ip, port)) {
-        reachableRtspPorts.push(port);
-      }
+    const reachableRtspPorts = await runStep(
+      'rtsp_ports',
+      'Verificar portas RTSP',
+      async () => {
+        const found: number[] = [];
+        for (const port of rtspPortCandidates) {
+          if (await this.portChecker.check(input.ip, port)) {
+            found.push(port);
+          }
+        }
+        return found;
+      },
+      (ports) => ports.length ? `Portas abertas: ${ports.join(', ')}` : 'Nenhuma porta RTSP comum respondeu',
+    );
+    if (!reachableRtspPorts.length) {
+      steps[steps.length - 1].status = 'warning';
     }
     const rtspReachable = reachableRtspPorts.includes(input.rtspPort);
     const rtspReachableAny = reachableRtspPorts.length > 0;
     const onvifPorts = Array.from(new Set([input.onvifPort, 8075, 8080, 8000, 8899, 80, 2020].filter((v): v is number => Number.isFinite(v as number))));
-    const reachablePorts: number[] = [];
-    for (const port of onvifPorts) {
-      if (await this.portChecker.check(input.ip, port)) {
-        reachablePorts.push(port);
-      }
+    const reachablePorts = await runStep(
+      'onvif_ports',
+      'Verificar portas ONVIF',
+      async () => {
+        const found: number[] = [];
+        for (const port of onvifPorts) {
+          if (await this.portChecker.check(input.ip, port)) {
+            found.push(port);
+          }
+        }
+        return found;
+      },
+      (ports) => ports.length ? `Portas abertas: ${ports.join(', ')}` : 'Nenhuma porta ONVIF comum respondeu',
+    );
+    if (!reachablePorts.length) {
+      steps[steps.length - 1].status = 'warning';
     }
     const onvifReachable = input.onvifPort == null ? reachablePorts.length > 0 : reachablePorts.includes(input.onvifPort);
+
+    let onvifMedia: {
+      port: number | null;
+      path: string | null;
+      profiles: OnvifMediaProfile[];
+      errors: string[];
+    } = { port: null, path: null, profiles: [], errors: [] };
+    if (input.username && input.password && reachablePorts.length > 0) {
+      onvifMedia = await runStep(
+        'onvif_media',
+        'Ler perfis ONVIF de mídia',
+        () => this.discoverOnvifMediaProfiles({
+          host: input.ip,
+          ports: reachablePorts,
+          preferredPath: input.onvifPath,
+          username: input.username!,
+          password: input.password!,
+        }),
+        (media) => media.profiles.length
+          ? `${media.profiles.length} perfil(is) ONVIF encontrado(s)`
+          : 'ONVIF respondeu, mas não entregou perfis de mídia',
+      );
+      if (!onvifMedia.profiles.length) {
+        steps[steps.length - 1].status = 'warning';
+      }
+    }
 
     const channel = input.channel ?? 1;
     const mainSubtype = 0;
@@ -340,25 +430,41 @@ export class CamerasService {
     if (rtspReachableAny && input.username && input.password) {
       let probe: Awaited<ReturnType<typeof this.probeRtspPaths>> | null = null;
       if (rtspReachable) {
-        const selectedProbe = await this.probeRtspPaths({
-          ip: input.ip,
-          rtspPorts: [input.rtspPort],
-          username: input.username,
-          password: input.password,
-          paths: rtspPathCandidates,
-        });
+        const selectedProbe = await runStep(
+          'rtsp_selected_probe',
+          'Testar vídeo na porta informada',
+          () => this.probeRtspPaths({
+            ip: input.ip,
+            rtspPorts: [input.rtspPort],
+            username: input.username!,
+            password: input.password!,
+            paths: rtspPathCandidates,
+          }),
+          (result) => result.ok ? `Vídeo OK em ${result.path}` : result.error,
+        );
+        if (!selectedProbe.ok) {
+          steps[steps.length - 1].status = 'warning';
+        }
         selectedRtspPortAuthOk = selectedProbe.ok;
         if (selectedProbe.ok) {
           probe = selectedProbe;
         }
       }
-      probe ??= await this.probeRtspPaths({
-        ip: input.ip,
-        rtspPorts: reachableRtspPorts,
-        username: input.username,
-        password: input.password,
-        paths: rtspPathCandidates,
-      });
+      probe ??= await runStep(
+        'rtsp_fallback_probe',
+        'Testar caminhos RTSP conhecidos',
+        () => this.probeRtspPaths({
+          ip: input.ip,
+          rtspPorts: reachableRtspPorts,
+          username: input.username!,
+          password: input.password!,
+          paths: rtspPathCandidates,
+        }),
+        (result) => result.ok ? `Vídeo OK em ${result.port}${result.path}` : result.error,
+      );
+      if (!probe.ok) {
+        steps[steps.length - 1].status = 'warning';
+      }
       rtspAuthOk = probe.ok;
       detectedRtspPort = probe.port;
       detectedRtspPath = probe.path;
@@ -366,22 +472,38 @@ export class CamerasService {
       rtspProbeError = probe.error;
 
       const portsForProfileProbe = detectedRtspPort ? [detectedRtspPort] : reachableRtspPorts;
-      const [mainProbe, subProbe] = await Promise.all([
-        this.probeRtspPaths({
-          ip: input.ip,
-          rtspPorts: portsForProfileProbe,
-          username: input.username,
-          password: input.password,
-          paths: this.buildRtspPathCandidates({ channel, subtype: mainSubtype, customPath: detectedRtspPath ?? input.rtspPath }),
-        }),
-        this.probeRtspPaths({
-          ip: input.ip,
-          rtspPorts: portsForProfileProbe,
-          username: input.username,
-          password: input.password,
-          paths: this.buildRtspPathCandidates({ channel, subtype: analyticsSubtype, customPath: detectedRtspPath ?? input.rtspPath }),
-        }),
-      ]);
+      const onvifMain = this.pickOnvifMainProfile(onvifMedia.profiles);
+      const onvifSub = this.pickOnvifSubProfile(onvifMedia.profiles, onvifMain?.token);
+      const [mainProbe, subProbe] = await runStep(
+        'rtsp_profile_probe',
+        'Separar stream principal e substream',
+        () => Promise.all([
+          this.probeRtspPaths({
+            ip: input.ip,
+            rtspPorts: portsForProfileProbe,
+            username: input.username!,
+            password: input.password!,
+            paths: this.buildRtspPathCandidates({ channel, subtype: mainSubtype, customPath: onvifMain?.rtspPath ?? detectedRtspPath ?? input.rtspPath }),
+          }),
+          this.probeRtspPaths({
+            ip: input.ip,
+            rtspPorts: portsForProfileProbe,
+            username: input.username!,
+            password: input.password!,
+            paths: this.buildRtspPathCandidates({ channel, subtype: analyticsSubtype, customPath: onvifSub?.rtspPath ?? input.rtspPath }),
+          }),
+        ]),
+        ([mainResult, subResult]) => {
+          const parts = [
+            mainResult.ok ? `principal ${mainResult.metadata?.width ?? '?'}x${mainResult.metadata?.height ?? '?'}` : 'principal não confirmado',
+            subResult.ok ? `substream ${subResult.metadata?.width ?? '?'}x${subResult.metadata?.height ?? '?'}` : 'substream não confirmado',
+          ];
+          return parts.join(' · ');
+        },
+      );
+      if (!mainProbe.ok || !subProbe.ok) {
+        steps[steps.length - 1].status = mainProbe.ok ? 'warning' : 'error';
+      }
       mainProfile = {
         channel,
         subtype: mainSubtype,
@@ -460,6 +582,14 @@ export class CamerasService {
       detectedOnvifPort,
       detectedOnvifPath,
       detectedOnvifProfileToken,
+      onvifMediaProfiles: onvifMedia.profiles.map((profile) => ({
+        token: profile.token,
+        name: profile.name ?? null,
+        width: profile.width ?? null,
+        height: profile.height ?? null,
+        encoding: profile.encoding ?? null,
+        rtspPath: profile.rtspPath ?? null,
+      })),
       autoProfiles: {
         live: {
           channel,
@@ -467,6 +597,7 @@ export class CamerasService {
           source: 'main',
           rtspPath: mainProfile?.rtspPath ?? suggestedRtspPath,
           metadata: mainProfile?.metadata ?? detectedStream,
+          onvifProfileToken: this.pickOnvifMainProfile(onvifMedia.profiles)?.token ?? null,
         },
         recording: {
           channel,
@@ -475,6 +606,7 @@ export class CamerasService {
           rtspPath: mainProfile?.rtspPath ?? suggestedRtspPath,
           metadata: mainProfile?.metadata ?? detectedStream,
           codecPolicy: 'copy_source_prefer_h265',
+          onvifProfileToken: this.pickOnvifMainProfile(onvifMedia.profiles)?.token ?? null,
         },
         analytics: {
           channel,
@@ -482,8 +614,10 @@ export class CamerasService {
           source: subProfile?.rtspPath ? 'sub' : 'sub_preferred',
           rtspPath: subProfile?.rtspPath ?? null,
           metadata: subProfile?.metadata ?? null,
+          onvifProfileToken: this.pickOnvifSubProfile(onvifMedia.profiles, this.pickOnvifMainProfile(onvifMedia.profiles)?.token)?.token ?? null,
         },
       },
+      probeSteps: steps,
       hasEdgeAi: ptzDigestOk || onvifReachable,
       status,
       checkedAt: new Date().toISOString(),
@@ -508,6 +642,230 @@ export class CamerasService {
       isMain ? '/stream1' : '/stream2',
       isMain ? '/profile1/media.smp' : '/profile2/media.smp',
     ].filter((v): v is string => Boolean(v))));
+  }
+
+  private buildGetProfilesSoapBody() {
+    return `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
+  <soap:Body>
+    <trt:GetProfiles />
+  </soap:Body>
+</soap:Envelope>`;
+  }
+
+  private buildGetStreamUriSoapBody(profileToken: string) {
+    return `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:trt="http://www.onvif.org/ver10/media/wsdl" xmlns:tt="http://www.onvif.org/ver10/schema">
+  <soap:Body>
+    <trt:GetStreamUri>
+      <trt:StreamSetup>
+        <tt:Stream>RTP-Unicast</tt:Stream>
+        <tt:Transport>
+          <tt:Protocol>RTSP</tt:Protocol>
+        </tt:Transport>
+      </trt:StreamSetup>
+      <trt:ProfileToken>${profileToken}</trt:ProfileToken>
+    </trt:GetStreamUri>
+  </soap:Body>
+</soap:Envelope>`;
+  }
+
+  private parseSoapSuccess(statusCode: number | undefined, responseBody: string) {
+    const body = responseBody.trim();
+    const lower = body.toLowerCase();
+    if ((statusCode ?? 500) >= 400 || lower.includes('<fault') || lower.includes(':fault>') || lower.includes('<soap:fault')) {
+      return { ok: false, body, message: `ONVIF SOAP HTTP ${statusCode ?? 500}` };
+    }
+    return { ok: true, body, message: 'ok' };
+  }
+
+  private digestSoapRequest(input: {
+    host: string;
+    port: number;
+    path: string;
+    body: string;
+    username: string;
+    password: string;
+    timeout?: number;
+  }): Promise<{ ok: boolean; message: string; responseBody?: string }> {
+    const timeout = input.timeout ?? 3000;
+    const baseHeaders = {
+      'Content-Type': 'application/soap+xml; charset=utf-8',
+      'Content-Length': Buffer.byteLength(input.body),
+      Connection: 'close',
+    };
+
+    return new Promise((resolve) => {
+      const collect = (res: http.IncomingMessage, done: (value: { ok: boolean; message: string; responseBody?: string }) => void) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          const parsed = this.parseSoapSuccess(res.statusCode, text);
+          done({ ok: parsed.ok, message: parsed.message, responseBody: parsed.body });
+        });
+      };
+
+      const requestOptions: http.RequestOptions = {
+        host: input.host,
+        port: input.port,
+        path: input.path,
+        method: 'POST',
+        timeout,
+        headers: baseHeaders,
+      };
+
+      const req1 = http.request(requestOptions, (res1) => {
+        if (res1.statusCode === 401) {
+          const authHeader = res1.headers['www-authenticate'];
+          if (!authHeader || !String(authHeader).toLowerCase().startsWith('digest')) {
+            resolve({ ok: false, message: 'ONVIF auth não é Digest' });
+            return;
+          }
+          const auth = this.buildDigestAuthorization('POST', input.path, String(authHeader), input.username, input.password);
+          const req2 = http.request(
+            { ...requestOptions, headers: { ...baseHeaders, Authorization: auth } },
+            (res2) => collect(res2, resolve),
+          );
+          req2.on('error', (error) => resolve({ ok: false, message: error.message }));
+          req2.on('timeout', () => {
+            req2.destroy();
+            resolve({ ok: false, message: 'ONVIF timeout' });
+          });
+          req2.write(input.body);
+          req2.end();
+          return;
+        }
+        collect(res1, resolve);
+      });
+      req1.on('error', (error) => resolve({ ok: false, message: error.message }));
+      req1.on('timeout', () => {
+        req1.destroy();
+        resolve({ ok: false, message: 'ONVIF timeout' });
+      });
+      req1.write(input.body);
+      req1.end();
+    });
+  }
+
+  private extractOnvifMediaProfiles(responseBody?: string): OnvifMediaProfile[] {
+    if (!responseBody) return [];
+    const profiles: OnvifMediaProfile[] = [];
+    const profileRegex = /<(?:\w+:)?Profiles\b([^>]*)>([\s\S]*?)<\/(?:\w+:)?Profiles>/g;
+    let match: RegExpExecArray | null;
+    while ((match = profileRegex.exec(responseBody)) !== null) {
+      const attrs = match[1] ?? '';
+      const body = match[2] ?? '';
+      const token = attrs.match(/\b(?:token|Token)="([^"]+)"/)?.[1];
+      if (!token) continue;
+      const width = this.parseOptionalInt(body.match(/<(?:\w+:)?Width>([^<]+)<\/(?:\w+:)?Width>/)?.[1] ?? null);
+      const height = this.parseOptionalInt(body.match(/<(?:\w+:)?Height>([^<]+)<\/(?:\w+:)?Height>/)?.[1] ?? null);
+      profiles.push({
+        token,
+        name: body.match(/<(?:\w+:)?Name>([^<]+)<\/(?:\w+:)?Name>/)?.[1] ?? null,
+        encoding: body.match(/<(?:\w+:)?Encoding>([^<]+)<\/(?:\w+:)?Encoding>/)?.[1] ?? null,
+        width,
+        height,
+      });
+    }
+    return profiles.filter((profile, index, list) => list.findIndex((item) => item.token === profile.token) === index);
+  }
+
+  private extractRtspUriFromSoap(responseBody?: string) {
+    if (!responseBody) return null;
+    const raw = responseBody.match(/<(?:\w+:)?Uri>([^<]+)<\/(?:\w+:)?Uri>/)?.[1];
+    return raw ? raw.replace(/&amp;/g, '&').trim() : null;
+  }
+
+  private pathFromRtspUri(uri?: string | null) {
+    if (!uri) return null;
+    try {
+      const parsed = new URL(uri);
+      return `${parsed.pathname}${parsed.search}`;
+    } catch {
+      const match = uri.match(/^rtsp:\/\/[^/]+(\/.*)$/i);
+      return match?.[1] ?? null;
+    }
+  }
+
+  private async discoverOnvifMediaProfiles(input: {
+    host: string;
+    ports: number[];
+    preferredPath?: string | null;
+    username: string;
+    password: string;
+  }) {
+    const paths = Array.from(new Set([
+      input.preferredPath?.trim(),
+      '/onvif/media_service',
+      '/onvif/device_service',
+      '/onvif/ptz_service',
+    ].filter((value): value is string => Boolean(value))));
+    const errors: string[] = [];
+
+    for (const port of input.ports) {
+      for (const path of paths) {
+        const profilesResult = await this.digestSoapRequest({
+          host: input.host,
+          port,
+          path,
+          body: this.buildGetProfilesSoapBody(),
+          username: input.username,
+          password: input.password,
+          timeout: 3000,
+        });
+        if (!profilesResult.ok) {
+          errors.push(`${port}${path}: ${profilesResult.message}`);
+          continue;
+        }
+        const profiles = this.extractOnvifMediaProfiles(profilesResult.responseBody);
+        if (!profiles.length) {
+          errors.push(`${port}${path}: sem perfis`);
+          continue;
+        }
+
+        const withUris: OnvifMediaProfile[] = [];
+        for (const profile of profiles.slice(0, 6)) {
+          const uriResult = await this.digestSoapRequest({
+            host: input.host,
+            port,
+            path,
+            body: this.buildGetStreamUriSoapBody(profile.token),
+            username: input.username,
+            password: input.password,
+            timeout: 3000,
+          });
+          const rtspUri = uriResult.ok ? this.extractRtspUriFromSoap(uriResult.responseBody) : null;
+          withUris.push({
+            ...profile,
+            rtspUri,
+            rtspPath: this.pathFromRtspUri(rtspUri),
+          });
+        }
+
+        return { port, path, profiles: withUris, errors };
+      }
+    }
+
+    return { port: null, path: null, profiles: [], errors };
+  }
+
+  private pickOnvifMainProfile(profiles: OnvifMediaProfile[]) {
+    return [...profiles].sort((a, b) => {
+      const areaA = Number(a.width ?? 0) * Number(a.height ?? 0);
+      const areaB = Number(b.width ?? 0) * Number(b.height ?? 0);
+      return areaB - areaA;
+    })[0] ?? null;
+  }
+
+  private pickOnvifSubProfile(profiles: OnvifMediaProfile[], mainToken?: string | null) {
+    const candidates = profiles.filter((profile) => profile.token !== mainToken);
+    if (!candidates.length) return null;
+    return candidates.sort((a, b) => {
+      const areaA = Number(a.width ?? 0) * Number(a.height ?? 0);
+      const areaB = Number(b.width ?? 0) * Number(b.height ?? 0);
+      return areaA - areaB;
+    })[0] ?? null;
   }
 
   private parseDigestHeader(header: string) {

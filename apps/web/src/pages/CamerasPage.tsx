@@ -235,6 +235,7 @@ function WizardModal({
         source?: string;
         rtspPath?: string | null;
         metadata?: { codec?: string | null; width?: number | null; height?: number | null; fps?: number | null; bitrateKbps?: number | null } | null;
+        onvifProfileToken?: string | null;
       };
       recording?: {
         channel?: number;
@@ -243,6 +244,7 @@ function WizardModal({
         rtspPath?: string | null;
         metadata?: { codec?: string | null; width?: number | null; height?: number | null; fps?: number | null; bitrateKbps?: number | null } | null;
         codecPolicy?: string;
+        onvifProfileToken?: string | null;
       };
       analytics?: {
         channel?: number;
@@ -250,8 +252,16 @@ function WizardModal({
         source?: string;
         rtspPath?: string | null;
         metadata?: { codec?: string | null; width?: number | null; height?: number | null; fps?: number | null; bitrateKbps?: number | null } | null;
+        onvifProfileToken?: string | null;
       };
     };
+    probeSteps?: Array<{
+      key: string;
+      label: string;
+      status: 'ok' | 'warning' | 'error';
+      durationMs: number;
+      detail?: string | null;
+    }>;
   }>;
 }) {
   const [step, setStep] = useState(0);
@@ -298,6 +308,7 @@ function WizardModal({
   const [isTesting, setIsTesting] = useState(false);
   const [testingStage, setTestingStage] = useState('');
   const [autoProfiles, setAutoProfiles] = useState<Awaited<ReturnType<typeof onTestConnection>>['autoProfiles'] | null>(null);
+  const [probeSteps, setProbeSteps] = useState<NonNullable<Awaited<ReturnType<typeof onTestConnection>>['probeSteps']>>([]);
 
   const updateField = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -436,6 +447,7 @@ function WizardModal({
       if (result.suggestedRtspPath && !form.rtspPath.trim()) updateField('rtspPath', result.suggestedRtspPath);
       if (result.detectedStream?.codec) updateField('streamVideoCodec', normalizeVideoCodec(result.detectedStream.codec));
       setAutoProfiles(result.autoProfiles ?? null);
+      setProbeSteps(result.probeSteps ?? []);
       setDetectedMax({
         width: typeof result.detectedStream?.width === 'number' ? result.detectedStream.width : null,
         height: typeof result.detectedStream?.height === 'number' ? result.detectedStream.height : null,
@@ -546,6 +558,23 @@ function WizardModal({
                   {testingStage || 'Detectando câmera...'}
                 </div>
               )}
+              {!isTesting && probeSteps.length > 0 && (
+                <details className="rounded border border-border bg-background px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
+                  <summary className="cursor-pointer text-xs font-medium">Diagnóstico automático</summary>
+                  <div className="mt-2 space-y-1.5">
+                    {probeSteps.map((item) => (
+                      <div key={item.key} className="flex items-start justify-between gap-3">
+                        <span className={item.status === 'error' ? 'text-red-300' : item.status === 'warning' ? 'text-amber-300' : 'text-emerald-300'}>
+                          {item.label}
+                        </span>
+                        <span className="min-w-0 flex-1 text-right">
+                          {item.detail || item.status} · {item.durationMs}ms
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
               {detectedMax && (
                 <div className="rounded border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-300">
                   Câmera detectada. Live, gravação e IA foram configuradas automaticamente.
@@ -554,6 +583,8 @@ function WizardModal({
                     <div className="mt-1 grid gap-1">
                       <span>Principal: {detectedMax.width && detectedMax.height ? `${detectedMax.width}x${detectedMax.height}` : 'detectado'} · {detectedMax.fps ?? '-'} FPS</span>
                       <span>IA: subtipo {autoProfiles?.analytics?.subtype ?? ANALYTICS_STREAM_SUBTYPE} reservado</span>
+                      {autoProfiles?.live?.onvifProfileToken && <span>ONVIF live: {autoProfiles.live.onvifProfileToken}</span>}
+                      {autoProfiles?.analytics?.onvifProfileToken && <span>ONVIF IA: {autoProfiles.analytics.onvifProfileToken}</span>}
                       <span>Bitrate: {detectedMax.bitrateKbps ? `${detectedMax.bitrateKbps} kbps` : '-'}</span>
                     </div>
                   </details>
