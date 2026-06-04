@@ -522,6 +522,7 @@ test('permissions audit: rotas sensiveis mantem RequirePermission', () => {
   assertRoutePermission('src/camera-stream/camera-stream.controller.ts', "@Post(':cameraId/token')", 'liveView');
   assertRoutePermission('src/ptz/ptz.controller.ts', "@Post(':cameraId/move')", 'ptzControl');
   assertRoutePermission('src/recordings/recordings.controller.ts', "@Post('recordings/:id/play-token')", 'playback');
+  assertRoutePermission('src/recordings/recordings.controller.ts', "@Post('recordings/:id/compatible/prepare')", 'playback');
   assertRoutePermission('src/recordings/recordings.controller.ts', "@Post('recordings/:id/clips/export')", 'exportEvidence');
   assertRoutePermission('src/evidence/evidence.controller.ts', "@Post('sign')", 'exportEvidence');
   assertRoutePermission('src/alarms/alarms.controller.ts', "@Post('rules/:id/mute')", 'alarmAck');

@@ -77,6 +77,27 @@ type RecordingDiagnosticsSummary = {
   diagnostics: RecordingDiagnostics;
 };
 
+type RecordingHealthCamera = {
+  cameraId: string;
+  total: number;
+  broken: number;
+  tooSmall: number;
+  compatibleRecommended: number;
+  directLikely: number;
+  withAudio: number;
+  lastRecordingAt: string | null;
+  lastRecordingAgeSeconds: number | null;
+  needsAttention: boolean;
+  alertReason: string | null;
+};
+
+type RecordingHealthSummary = {
+  date: string;
+  totalRecordings: number;
+  camerasNeedingAttention: number;
+  cameras: RecordingHealthCamera[];
+};
+
 type InvestigaçãoOption = {
   id: string;
   title: string;
@@ -211,6 +232,8 @@ export default function ReproduçãoPage() {
   const [playing, setPlaying] = useState(false);
   const [recordings, setGravaçãos] = useState<GravaçãoItem[]>([]);
   const [diagnosticsByRecordingId, setDiagnosticsByRecordingId] = useState<Record<string, RecordingDiagnostics>>({});
+  const [healthSummary, setHealthSummary] = useState<RecordingHealthSummary | null>(null);
+  const [preparingCompatibleId, setPreparingCompatibleId] = useState<string | null>(null);
   const [investigations, setInvestigaçãos] = useState<InvestigaçãoOption[]>([]);
   const [selectedInvestigaçãoId, setSelectedInvestigaçãoId] = useState('__none__');
   const [clipStartSeconds, setClipStartSeconds] = useState<number | null>(null);
@@ -338,6 +361,27 @@ export default function ReproduçãoPage() {
     };
   }, [accessToken, client, recordings]);
 
+  useEffect(() => {
+    if (!accessToken || !selectedCamId || !selectedDate) {
+      setHealthSummary(null);
+      return;
+    }
+    let cancelled = false;
+    void client.get<RecordingHealthSummary>(
+      `/recordings/health-summary?cameraId=${encodeURIComponent(selectedCamId)}&date=${encodeURIComponent(selectedDate)}`,
+      { timeout: API_TIMEOUT_MS },
+    )
+      .then(({ data }) => {
+        if (!cancelled) setHealthSummary(data);
+      })
+      .catch(() => {
+        if (!cancelled) setHealthSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, client, selectedCamId, selectedDate]);
+
   const selectedCam = cameras.find((camera) => camera.id === selectedCamId) ?? cameras[0] ?? null;
   const selectedDay = useMemo(() => new Date(`${selectedDate}T00:00:00`), [selectedDate]);
   const dayStart = useMemo(() => startOfDay(selectedDay), [selectedDay]);
@@ -378,6 +422,7 @@ export default function ReproduçãoPage() {
   const selectedDiagnostics = selectedGravaçãoId ? diagnosticsByRecordingId[selectedGravaçãoId] ?? null : null;
   const playbackMayUseCompatible = compatMode || Boolean(selectedDiagnostics?.compatibleRecommended);
   const recordingById = useMemo(() => new Map(recordings.map((recording) => [recording.id, recording] as const)), [recordings]);
+  const selectedHealth = healthSummary?.cameras.find((item) => item.cameraId === selectedCamId) ?? null;
 
   useEffect(() => {
     if (!selectedGravaçãoId || !accessToken) {
@@ -519,6 +564,38 @@ export default function ReproduçãoPage() {
       setDownloadingRecordingId(null);
     }
   };
+
+  const prepareCompatiblePlayback = useCallback(async () => {
+    if (!selectedGravação || !accessToken) return;
+    setPreparingCompatibleId(selectedGravação.id);
+    try {
+      const { data } = await client.post<{ diagnostics?: RecordingDiagnostics }>(
+        `/recordings/${selectedGravação.id}/compatible/prepare`,
+        {},
+        { timeout: 180000 },
+      );
+      if (data.diagnostics) {
+        setDiagnosticsByRecordingId((current) => ({
+          ...current,
+          [selectedGravação.id]: data.diagnostics!,
+        }));
+      }
+      setGravaçãos((current) => current.map((item) => (
+        item.id === selectedGravação.id ? { ...item, compatibleCached: true } : item
+      )));
+      setCompatMode(true);
+      setReloadNonce((current) => current + 1);
+      toast({ title: 'Playback compatível pronto', description: 'A gravação foi preparada para reprodução no navegador.' });
+    } catch (error) {
+      toast({
+        title: 'Falha ao preparar playback',
+        description: error instanceof Error ? error.message : 'Não foi possível preparar a gravação compatível.',
+        variant: 'destructive',
+      });
+    } finally {
+      setPreparingCompatibleId(null);
+    }
+  }, [accessToken, client, selectedGravação]);
 
   const exportClip = useCallback(async () => {
     if (!selectedGravação || !accessToken) return;
@@ -733,6 +810,31 @@ export default function ReproduçãoPage() {
               {value === 1 ? '24h' : value === 2 ? '12h' : '6h'}
             </button>
           ))}
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-4">
+        <div className="rounded-lg border border-border bg-card px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">Segmentos</div>
+          <div className="mt-1 text-lg font-semibold">{selectedHealth?.total ?? recordings.length}</div>
+        </div>
+        <div className="rounded-lg border border-border bg-card px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">Direto</div>
+          <div className="mt-1 text-lg font-semibold">{selectedHealth?.directLikely ?? recordings.filter((item) => item.fileUsable ?? item.fileExists).length}</div>
+        </div>
+        <div className="rounded-lg border border-border bg-card px-3 py-2">
+          <div className="text-[10px] uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">Compatível</div>
+          <div className="mt-1 text-lg font-semibold">{selectedHealth?.compatibleRecommended ?? Object.values(diagnosticsByRecordingId).filter((item) => item.compatibleRecommended).length}</div>
+        </div>
+        <div className={`rounded-lg border px-3 py-2 ${
+          selectedHealth?.needsAttention
+            ? 'border-red-500/30 bg-red-500/10'
+            : 'border-border bg-card'
+        }`}>
+          <div className="text-[10px] uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">Saúde</div>
+          <div className={`mt-1 text-sm font-semibold ${selectedHealth?.needsAttention ? 'text-red-300' : 'text-emerald-400'}`}>
+            {selectedHealth?.needsAttention ? selectedHealth.alertReason ?? 'Atenção necessária' : 'Operacional'}
+          </div>
         </div>
       </div>
 
@@ -974,6 +1076,17 @@ export default function ReproduçãoPage() {
                 {downloadingRecordingId === selectedGravação?.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                 Baixar
               </button>
+              {selectedDiagnostics?.compatibleRecommended && !selectedGravação?.compatibleCached && (
+                <button
+                  type="button"
+                  onClick={() => void prepareCompatiblePlayback()}
+                  disabled={!selectedGravação || preparingCompatibleId === selectedGravação.id}
+                  className="flex items-center gap-1.5 rounded border border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.08)] px-3 py-1.5 text-xs text-[hsl(var(--primary))] transition-colors hover:bg-[hsl(var(--primary)_/_0.14)] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {preparingCompatibleId === selectedGravação?.id && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
+                  Preparar compatível
+                </button>
+              )}
             </div>
 
             <details className="mb-3 rounded-xl border border-border bg-background/55 p-3">

@@ -283,6 +283,23 @@ export class RecordingsService {
     createReadStream(filePath, { start: validStart, end: validEnd }).pipe(res);
   }
 
+  async prepareCompatiblePlayback(recordingId: string) {
+    const recording = await this.ensureRecordingExists(recordingId);
+    const outputPath = await this.ensureCompatibleFile(recordingId);
+    const stats = statSync(outputPath);
+    const diagnostics = await this.getRecordingDiagnostics(recordingId, true);
+
+    return {
+      recordingId,
+      cameraId: recording.cameraId,
+      status: 'ready',
+      compatibleCached: true,
+      compatibleFileName: `${recording.id}.mp4`,
+      sizeBytes: stats.size,
+      diagnostics,
+    };
+  }
+
   async downloadRecording(recordingId: string, res: Response) {
     const recording = await this.ensureRecordingExists(recordingId);
 

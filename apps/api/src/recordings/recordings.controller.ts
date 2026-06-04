@@ -354,6 +354,20 @@ export class RecordingsController {
     return this.recordingsService.getRecordingIntegrity(id);
   }
 
+  @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
+  @Post('recordings/:id/compatible/prepare')
+  async prepareCompatiblePlayback(@CurrentUser() user: AuthUser, @Param('id') id: string, @Req() req: Request) {
+    const recording = await this.recordingsService.ensureRecordingExists(id);
+    await this.accessControlService.assertCanViewCamera(user, recording.cameraId);
+    const result = await this.recordingsService.prepareCompatiblePlayback(id);
+    await this.auditService.log(user.id, 'playback.compatible.prepare', 'Recording', id, {
+      sizeBytes: result.sizeBytes,
+      compatibleCached: result.compatibleCached,
+    }, req);
+    return result;
+  }
+
   @Roles(UserRole.OPERATOR)
   @RequirePermission('exportEvidence')
   @Get('recordings/:id/snapshot')
