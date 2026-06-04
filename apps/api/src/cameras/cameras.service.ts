@@ -29,6 +29,15 @@ type ProbedStreamMetadata = {
   bitrateKbps?: number | null;
 };
 
+type DetectedCameraProfile = {
+  channel: number;
+  subtype: number;
+  role: 'main' | 'sub';
+  rtspPort: number | null;
+  rtspPath: string | null;
+  metadata: ProbedStreamMetadata | null;
+};
+
 type CameraProfilePayload = {
   streamWidth?: number | null;
   streamHeight?: number | null;
@@ -43,6 +52,8 @@ type CameraProfilePayload = {
 @Injectable()
 export class CamerasService {
   private readonly logger = new Logger(CamerasService.name);
+  private readonly rtspProbeTimeoutMs = Number(process.env.CAMERA_RTSP_PROBE_TIMEOUT_MS ?? 4500);
+  private readonly rtspProbeKillTimeoutMs = Number(process.env.CAMERA_RTSP_PROBE_KILL_TIMEOUT_MS ?? 5500);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -70,6 +81,9 @@ export class CamerasService {
     const normalizedProfile = this.normalizeProfileToDetected(dto, null);
     const defaultChannel = dto.channel ?? 1;
     const defaultSubtype = dto.subtype ?? 0;
+    const liveSubtype = dto.liveSubtype ?? 0;
+    const recordingSubtype = dto.recordingSubtype ?? 0;
+    const analyticsSubtype = dto.analyticsSubtype ?? 1;
     const camera = await this.prisma.camera.create({
       data: {
         name: dto.name,
@@ -84,11 +98,11 @@ export class CamerasService {
         channel: defaultChannel,
         subtype: defaultSubtype,
         liveChannel: dto.liveChannel ?? defaultChannel,
-        liveSubtype: dto.liveSubtype ?? defaultSubtype,
+        liveSubtype,
         recordingChannel: dto.recordingChannel ?? defaultChannel,
-        recordingSubtype: dto.recordingSubtype ?? defaultSubtype,
+        recordingSubtype,
         analyticsChannel: dto.analyticsChannel ?? defaultChannel,
-        analyticsSubtype: dto.analyticsSubtype ?? 1,
+        analyticsSubtype,
         siteId: dto.siteId,
         areaId: dto.areaId,
         groupId: dto.groupId,
@@ -97,7 +111,7 @@ export class CamerasService {
         retentionDays: dto.retentionDays ?? this.getDefaultRetentionDays(),
         preferredRtspTransport: dto.preferredRtspTransport ?? 'tcp',
         preferredLiveProtocol: this.normalizeLiveProtocol(dto.preferredLiveProtocol) ?? 'webrtc',
-        streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec, { allowOriginal: true }),
+        streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec, { allowOriginal: true }) ?? 'original',
         streamWidth: normalizedProfile.streamWidth,
         streamHeight: normalizedProfile.streamHeight,
         streamFps: normalizedProfile.streamFps,
@@ -306,28 +320,14 @@ export class CamerasService {
     }
     const onvifReachable = input.onvifPort == null ? reachablePorts.length > 0 : reachablePorts.includes(input.onvifPort);
 
-    const rtspPathCandidates = Array.from(new Set([
-      input.rtspPath?.trim().length ? input.rtspPath.trim() : null,
-      input.channel != null && input.subtype != null ? `/cam/realmonitor?channel=${input.channel}&subtype=${input.subtype}` : null,
-      '/Streaming/Channels/101',
-      '/Streaming/Channels/102',
-      '/Streaming/Channels/201',
-      '/Streaming/Channels/202',
-      '/Streaming/Channels/101?transportmode=unicast',
-      '/Streaming/Channels/102?transportmode=unicast',
-      '/h264/ch1/main/av_stream',
-      '/h264/ch1/sub/av_stream',
-      '/cam/realmonitor?channel=1&subtype=0',
-      '/cam/realmonitor?channel=1&subtype=1',
-      '/cam/realmonitor?channel=1&subtype=0&unicast=true',
-      '/cam/realmonitor?channel=1&subtype=1&unicast=true',
-      '/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif',
-      '/cam/realmonitor?channel=1&subtype=1&unicast=true&proto=Onvif',
-      '/live/ch00_0',
-      '/live/ch00_1',
-      '/stream1',
-      '/stream2',
-    ].filter((v): v is string => Boolean(v))));
+    const channel = input.channel ?? 1;
+    const mainSubtype = 0;
+    const analyticsSubtype = 1;
+    const rtspPathCandidates = this.buildRtspPathCandidates({
+      channel,
+      subtype: input.subtype ?? mainSubtype,
+      customPath: input.rtspPath,
+    });
 
     let rtspAuthOk = false;
     let selectedRtspPortAuthOk = false;
@@ -335,6 +335,8 @@ export class CamerasService {
     let detectedRtspPath: string | null = null;
     let detectedStream: ProbedStreamMetadata | null = null;
     let rtspProbeError: string | null = null;
+    let mainProfile: DetectedCameraProfile | null = null;
+    let subProfile: DetectedCameraProfile | null = null;
     if (rtspReachableAny && input.username && input.password) {
       let probe: Awaited<ReturnType<typeof this.probeRtspPaths>> | null = null;
       if (rtspReachable) {
@@ -362,6 +364,40 @@ export class CamerasService {
       detectedRtspPath = probe.path;
       detectedStream = probe.metadata;
       rtspProbeError = probe.error;
+
+      const portsForProfileProbe = detectedRtspPort ? [detectedRtspPort] : reachableRtspPorts;
+      const [mainProbe, subProbe] = await Promise.all([
+        this.probeRtspPaths({
+          ip: input.ip,
+          rtspPorts: portsForProfileProbe,
+          username: input.username,
+          password: input.password,
+          paths: this.buildRtspPathCandidates({ channel, subtype: mainSubtype, customPath: detectedRtspPath ?? input.rtspPath }),
+        }),
+        this.probeRtspPaths({
+          ip: input.ip,
+          rtspPorts: portsForProfileProbe,
+          username: input.username,
+          password: input.password,
+          paths: this.buildRtspPathCandidates({ channel, subtype: analyticsSubtype, customPath: detectedRtspPath ?? input.rtspPath }),
+        }),
+      ]);
+      mainProfile = {
+        channel,
+        subtype: mainSubtype,
+        role: 'main',
+        rtspPort: mainProbe.port,
+        rtspPath: mainProbe.path,
+        metadata: mainProbe.metadata,
+      };
+      subProfile = {
+        channel,
+        subtype: analyticsSubtype,
+        role: 'sub',
+        rtspPort: subProbe.port,
+        rtspPath: subProbe.path,
+        metadata: subProbe.metadata,
+      };
     }
 
     let status: CameraStatus = CameraStatus.OFFLINE;
@@ -369,7 +405,7 @@ export class CamerasService {
       status = CameraStatus.ONLINE;
     }
 
-    const suggestedRtspPath = `/cam/realmonitor?channel=${input.channel ?? 1}&subtype=${input.subtype ?? 0}`;
+    const suggestedRtspPath = mainProfile?.rtspPath ?? detectedRtspPath ?? `/cam/realmonitor?channel=${channel}&subtype=${mainSubtype}`;
     const candidatePaths = Array.from(new Set([input.onvifPath?.trim(), '/onvif/ptz_service', '/onvif/device_service'].filter((v): v is string => Boolean(v))));
     const candidateTokens = Array.from(new Set([input.onvifProfileToken?.trim(), 'Profile000', 'Profile001', 'profile_1'].filter((v): v is string => Boolean(v))));
 
@@ -424,10 +460,54 @@ export class CamerasService {
       detectedOnvifPort,
       detectedOnvifPath,
       detectedOnvifProfileToken,
+      autoProfiles: {
+        live: {
+          channel,
+          subtype: mainSubtype,
+          source: 'main',
+          rtspPath: mainProfile?.rtspPath ?? suggestedRtspPath,
+          metadata: mainProfile?.metadata ?? detectedStream,
+        },
+        recording: {
+          channel,
+          subtype: mainSubtype,
+          source: 'main',
+          rtspPath: mainProfile?.rtspPath ?? suggestedRtspPath,
+          metadata: mainProfile?.metadata ?? detectedStream,
+          codecPolicy: 'copy_source_prefer_h265',
+        },
+        analytics: {
+          channel,
+          subtype: analyticsSubtype,
+          source: subProfile?.rtspPath ? 'sub' : 'sub_preferred',
+          rtspPath: subProfile?.rtspPath ?? null,
+          metadata: subProfile?.metadata ?? null,
+        },
+      },
       hasEdgeAi: ptzDigestOk || onvifReachable,
       status,
       checkedAt: new Date().toISOString(),
     };
+  }
+
+  private buildRtspPathCandidates(input: { channel?: number | null; subtype?: number | null; customPath?: string | null }) {
+    const channel = input.channel ?? 1;
+    const subtype = input.subtype ?? 0;
+    const hikvisionProfile = `${channel}${(subtype + 1).toString().padStart(2, '0')}`;
+    const isMain = subtype === 0;
+    return Array.from(new Set([
+      input.customPath?.trim().length ? input.customPath.trim() : null,
+      `/cam/realmonitor?channel=${channel}&subtype=${subtype}`,
+      `/cam/realmonitor?channel=${channel}&subtype=${subtype}&unicast=true`,
+      `/cam/realmonitor?channel=${channel}&subtype=${subtype}&unicast=true&proto=Onvif`,
+      `/Streaming/Channels/${hikvisionProfile}`,
+      `/Streaming/Channels/${hikvisionProfile}?transportmode=unicast`,
+      `/h264/ch${channel}/${isMain ? 'main' : 'sub'}/av_stream`,
+      `/h265/ch${channel}/${isMain ? 'main' : 'sub'}/av_stream`,
+      isMain ? '/live/ch00_0' : '/live/ch00_1',
+      isMain ? '/stream1' : '/stream2',
+      isMain ? '/profile1/media.smp' : '/profile2/media.smp',
+    ].filter((v): v is string => Boolean(v))));
   }
 
   private parseDigestHeader(header: string) {
@@ -574,7 +654,7 @@ export class CamerasService {
               '-rtsp_transport',
               'tcp',
               '-timeout',
-              '5000000',
+              String(this.rtspProbeTimeoutMs * 1000),
               '-select_streams',
               'v:0',
               '-show_entries',
@@ -595,7 +675,7 @@ export class CamerasService {
           const killTimer = setTimeout(() => {
             proc.kill('SIGKILL');
             finish({ ok: false, error: 'ffprobe timeout', metadata: null });
-          }, 7000);
+          }, this.rtspProbeKillTimeoutMs);
           let stdout = '';
           let stderr = '';
           proc.stdout.on('data', (chunk) => {
@@ -664,23 +744,11 @@ export class CamerasService {
         try {
           const password = this.cryptoService.decrypt(camera.passwordEncrypted);
           const liveProfile = resolveDeliveryRtspProfile(camera);
-          const rtspPathCandidates = Array.from(
-            new Set(
-              [
-                camera.rtspPath?.trim().length ? camera.rtspPath : null,
-                `/Streaming/Channels/${liveProfile.channel}01`,
-                `/Streaming/Channels/${liveProfile.channel}02`,
-                '/Streaming/Channels/101',
-                '/Streaming/Channels/102',
-                '/h264/ch1/main/av_stream',
-                '/h264/ch1/sub/av_stream',
-                `/cam/realmonitor?channel=${liveProfile.channel}&subtype=${liveProfile.subtype}`,
-                `/cam/realmonitor?channel=${liveProfile.channel}&subtype=0`,
-                '/cam/realmonitor?channel=1&subtype=0',
-                '/cam/realmonitor?channel=1&subtype=1',
-              ].filter((v): v is string => Boolean(v)),
-            ),
-          );
+          const rtspPathCandidates = this.buildRtspPathCandidates({
+            channel: liveProfile.channel,
+            subtype: liveProfile.subtype,
+            customPath: camera.rtspPath,
+          });
           const probe = await this.probeRtspPaths({
             ip: camera.ip,
             rtspPorts: [camera.rtspPort],
