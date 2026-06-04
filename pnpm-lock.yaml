@@ -108,6 +108,8 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
+  apps/central: {}
+
   apps/mobile:
     dependencies:
       '@react-native-async-storage/async-storage':

@@ -13,6 +13,7 @@ const API_URL = getApiBaseUrl();
 const PERMISSION_LABELS: Record<string, { label: string; desc: string }> = {
   liveView: { label: 'Ao Vivo', desc: 'Acessar transmissões ao vivo das câmeras' },
   playback: { label: 'Reprodução', desc: 'Revisar gravações' },
+  ptzControl: { label: 'Controle PTZ', desc: 'Mover câmeras PTZ, consultar diagnósticos e acionar relés' },
   alarmAck: { label: 'Reconhecer alarmes', desc: 'Reconhecer e gerenciar alarmes' },
   cameraConfig: { label: 'Configuração de câmeras', desc: 'Criar, editar e remover câmeras' },
   userManage: { label: 'Gestão de usuários', desc: 'Criar e editar contas de usuário' },

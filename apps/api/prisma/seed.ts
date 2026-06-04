@@ -21,6 +21,12 @@ function assertStrongPassword(password: string, context: string) {
   }
 }
 
+function requireSeedPassword(envName: string) {
+  const password = (process.env[envName] ?? '').trim();
+  assertStrongPassword(password, envName);
+  return password;
+}
+
 async function main() {
   const email = (process.env.ADMIN_EMAIL ?? 'admin@local.dev').trim().toLowerCase();
   const password = (process.env.ADMIN_PASSWORD ?? '').trim();
@@ -51,9 +57,9 @@ async function main() {
   // 2. Criar usuários de exemplo apenas quando explicitamente habilitado
   if (allowSampleUsers) {
     const users = [
-      { name: 'Admin Local', email: 'admin.local@local.dev', password: 'admin123', role: UserRole.ADMIN },
-      { name: 'Operador Local', email: 'operador.local@local.dev', password: 'operador123', role: UserRole.OPERATOR },
-      { name: 'Viewer Local', email: 'viewer.local@local.dev', password: 'viewer123', role: UserRole.VIEWER },
+      { name: 'Admin Local', email: 'admin.local@local.dev', password: requireSeedPassword('SEED_ADMIN_PASSWORD'), role: UserRole.ADMIN },
+      { name: 'Operador Local', email: 'operador.local@local.dev', password: requireSeedPassword('SEED_OPERATOR_PASSWORD'), role: UserRole.OPERATOR },
+      { name: 'Viewer Local', email: 'viewer.local@local.dev', password: requireSeedPassword('SEED_VIEWER_PASSWORD'), role: UserRole.VIEWER },
     ];
 
     for (const item of users) {

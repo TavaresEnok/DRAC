@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { AlarmsService } from './alarms.service';
 import { AlarmMuteService } from './alarm-mute.service';
 import { CreateAlarmRuleDto } from './dto/create-alarm-rule.dto';
@@ -16,36 +17,42 @@ export class AlarmsController {
   ) {}
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Get('rules')
   async listRules() {
     return this.alarmsService.listRules();
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Post('rules')
   async createRule(@Body() dto: CreateAlarmRuleDto) {
     return this.alarmsService.createRule(dto);
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Patch('rules/:id')
   async updateRule(@Param('id') id: string, @Body() dto: UpdateAlarmRuleDto) {
     return this.alarmsService.updateRule(id, dto);
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Patch('rules/:id/enabled')
   async setRuleEnabled(@Param('id') id: string, @Body() dto: SetAlarmRuleEnabledDto) {
     return this.alarmsService.setRuleEnabled(id, dto);
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Post('rules/:id/simulate')
   async simulateRule(@Param('id') id: string, @Body() dto: SimulateAlarmRuleDto) {
     return this.alarmsService.simulateRule(id, dto);
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('alarmAck')
   @Post('rules/:id/mute')
   async muteRule(
     @Param('id') id: string,
@@ -55,6 +62,7 @@ export class AlarmsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('alarmAck')
   @Post('rules/:id/unmute')
   async unmuteRule(@Param('id') id: string) {
     await this.alarmMuteService.unmuteRule(id);
@@ -62,6 +70,7 @@ export class AlarmsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('alarmAck')
   @Post('cameras/:cameraId/events/:eventType/mute')
   async muteCameraEvent(
     @Param('cameraId') cameraId: string,
@@ -72,6 +81,7 @@ export class AlarmsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('alarmAck')
   @Post('cameras/:cameraId/events/:eventType/unmute')
   async unmuteCameraEvent(@Param('cameraId') cameraId: string, @Param('eventType') eventType: string) {
     await this.alarmMuteService.unmuteCameraEvent(cameraId, eventType);

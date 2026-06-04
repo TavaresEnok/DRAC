@@ -46,6 +46,35 @@ export class AccessControlService {
     ]));
   }
 
+  async getAdminGroupIds(user: AuthUser): Promise<string[]> {
+    if (this.isPrivileged(user)) {
+      const groups = await this.prisma.cameraGroup.findMany({ select: { id: true } });
+      return groups.map((group) => group.id);
+    }
+
+    const permissions = await this.prisma.cameraPermission.findMany({
+      where: { userId: user.id, groupId: { not: null }, level: CameraPermissionLevel.ADMIN },
+      select: { groupId: true },
+    });
+
+    return permissions.map((permission) => permission.groupId).filter((id): id is string => Boolean(id));
+  }
+
+  async canAdminGroup(user: AuthUser, groupId: string): Promise<boolean> {
+    if (this.isPrivileged(user)) return true;
+    const permission = await this.prisma.cameraPermission.findFirst({
+      where: { userId: user.id, groupId, level: CameraPermissionLevel.ADMIN },
+      select: { id: true },
+    });
+    return Boolean(permission);
+  }
+
+  async assertCanAdminGroup(user: AuthUser, groupId: string): Promise<void> {
+    if (!(await this.canAdminGroup(user, groupId))) {
+      throw new ForbiddenException('Sem permissão administrativa neste grupo.');
+    }
+  }
+
   private async getMaxPermissionLevel(userId: string, cameraId: string): Promise<CameraPermissionLevel | null> {
     const camera = await this.prisma.camera.findUnique({ where: { id: cameraId }, select: { groupId: true } });
     if (!camera) return null;

@@ -30,7 +30,11 @@ export function CommandPalette({ open, onClose }: Props) {
   const { logout, user } = useAuthStore();
   const { theme, setTheme } = useThemeStore();
   const cameras = useVmsDataStore((state) => state.cameras);
-  const visiblePages = user?.role === 'admin' ? PAGES : PAGES.filter((page) => !['/users', '/settings'].includes(page.path));
+  const visiblePages = PAGES.filter((page) => {
+    if (page.path === '/settings') return user?.role === 'admin';
+    if (page.path === '/users') return user?.role === 'admin' || user?.role === 'operator';
+    return true;
+  });
 
   const recent = [
     cameras[0] ? { label: `Ao Vivo — ${cameras[0].name}`, path: '/live', icon: Clock } : null,

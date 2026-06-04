@@ -16,16 +16,16 @@ export class CameraPermissionsController {
     private readonly auditService: AuditService,
   ) {}
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.OPERATOR)
   @Get()
-  list(@Query('userId') userId?: string) {
-    return this.cameraPermissionsService.list(userId);
+  list(@CurrentUser() user: AuthUser, @Query('userId') userId?: string) {
+    return this.cameraPermissionsService.list(user, userId);
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.OPERATOR)
   @Post()
   async grant(@CurrentUser() user: AuthUser, @Body() dto: GrantCameraPermissionDto, @Req() req: Request) {
-    const result = await this.cameraPermissionsService.grant(dto);
+    const result = await this.cameraPermissionsService.grant(user, dto);
     await this.auditService.log(
       user.id,
       'camera_permission.grant',
@@ -37,18 +37,18 @@ export class CameraPermissionsController {
     return result;
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.OPERATOR)
   @Patch(':id')
   async update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: UpdateCameraPermissionDto, @Req() req: Request) {
-    const result = await this.cameraPermissionsService.update(id, dto);
+    const result = await this.cameraPermissionsService.update(user, id, dto);
     await this.auditService.log(user.id, 'camera_permission.update', 'CameraPermission', result.id, { level: dto.level }, req);
     return result;
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.OPERATOR)
   @Delete(':id')
   async remove(@CurrentUser() user: AuthUser, @Param('id') id: string, @Req() req: Request) {
-    const result = await this.cameraPermissionsService.remove(id);
+    const result = await this.cameraPermissionsService.remove(user, id);
     await this.auditService.log(user.id, 'camera_permission.revoke', 'CameraPermission', id, undefined, req);
     return result;
   }

@@ -1,5 +1,6 @@
 import { UserRole } from '@prisma/client';
-import { IsEmail, IsEnum, IsString, Matches, MinLength } from 'class-validator';
+import { CameraPermissionLevel } from '@prisma/client';
+import { IsArray, IsEmail, IsEnum, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 
 export class CreateUserDto {
   @IsString()
@@ -17,4 +18,13 @@ export class CreateUserDto {
 
   @IsEnum(UserRole)
   role!: UserRole;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  groupIds?: string[];
+
+  @IsOptional()
+  @IsEnum(CameraPermissionLevel)
+  permissionLevel?: CameraPermissionLevel;
 }

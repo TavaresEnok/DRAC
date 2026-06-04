@@ -54,7 +54,9 @@ export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
   const visibleSections = NAV_SECTIONS
     .map((section) => ({
       ...section,
-      items: section.label === 'Administração' && user?.role !== 'admin' ? [] : section.items,
+      items: section.label === 'Administração'
+        ? section.items.filter((item) => item.path === '/users' ? user?.role === 'admin' || user?.role === 'operator' : user?.role === 'admin')
+        : section.items,
     }))
     .filter((section) => section.items.length > 0);
 

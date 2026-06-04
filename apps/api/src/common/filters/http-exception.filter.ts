@@ -32,17 +32,18 @@ export class HttpExceptionFilter implements ExceptionFilter {
       timestamp: new Date().toISOString(),
       path: request.url,
       method: request.method,
+      requestId: typeof request.headers['x-request-id'] === 'string' ? request.headers['x-request-id'] : undefined,
       ...(typeof message === 'object' ? message : { message }),
     };
 
     // Log the error
     if (status >= 500) {
       this.logger.error(
-        `${request.method} ${request.url} ${status}`,
+        `${request.method} ${request.url} ${status} requestId=${errorResponse.requestId ?? '-'}`,
         exception instanceof Error ? exception.stack : JSON.stringify(exception),
       );
     } else {
-      this.logger.warn(`${request.method} ${request.url} ${status}`);
+      this.logger.warn(`${request.method} ${request.url} ${status} requestId=${errorResponse.requestId ?? '-'}`);
     }
 
     response.status(status).json(errorResponse);

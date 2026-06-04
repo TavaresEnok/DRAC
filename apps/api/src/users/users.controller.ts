@@ -16,19 +16,19 @@ export class UsersController {
     private readonly auditService: AuditService,
   ) {}
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.OPERATOR)
   @Get()
-  list() {
-    return this.usersService.list();
+  list(@CurrentUser() actor: AuthUser) {
+    return this.usersService.list(actor);
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.OPERATOR)
   @Get(':id')
-  getById(@Param('id') id: string) {
-    return this.usersService.getById(id);
+  getById(@CurrentUser() actor: AuthUser, @Param('id') id: string) {
+    return this.usersService.getById(id, actor);
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.OPERATOR)
   @Post()
   async create(@CurrentUser() actor: AuthUser, @Body() dto: CreateUserDto, @Req() req: Request) {
     const user = await this.usersService.create(actor, dto);
@@ -36,7 +36,7 @@ export class UsersController {
     return user;
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.OPERATOR)
   @Patch(':id')
   async update(@CurrentUser() actor: AuthUser, @Param('id') id: string, @Body() dto: UpdateUserDto, @Req() req: Request) {
     const user = await this.usersService.update(actor, id, dto);
@@ -44,7 +44,7 @@ export class UsersController {
     return user;
   }
 
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.OPERATOR)
   @Delete(':id')
   async softDelete(@CurrentUser() actor: AuthUser, @Param('id') id: string, @Req() req: Request) {
     const user = await this.usersService.softDelete(actor, id);

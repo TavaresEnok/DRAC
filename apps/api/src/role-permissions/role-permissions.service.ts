@@ -39,7 +39,7 @@ export class RolePermissionsService implements OnModuleInit {
     const result: Record<string, PermissionMatrix> = {};
     for (const role of Object.values(UserRole)) {
       const stored = byRole.get(role);
-      result[role] = stored ? normalizeMatrix(stored) : DEFAULT_PERMISSIONS[role];
+      result[role] = stored ? normalizeMatrix(stored, DEFAULT_PERMISSIONS[role]) : DEFAULT_PERMISSIONS[role];
     }
     this.cache = result;
     this.cacheAt = Date.now();

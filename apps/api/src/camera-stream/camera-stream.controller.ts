@@ -9,6 +9,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { type AuthUser } from '../common/types/auth-user.type';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { FfmpegMjpegService } from './ffmpeg-mjpeg.service';
 import { MediamtxProxyService } from './mediamtx-proxy.service';
 import { CamerasService } from '../cameras/cameras.service';
@@ -59,6 +60,7 @@ export class CameraStreamController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('liveView')
   @Post(':cameraId/token')
   async createStreamToken(
     @CurrentUser() user: AuthUser,
@@ -73,18 +75,21 @@ export class CameraStreamController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Get('stats')
   async getGlobalStats() {
     return this.ffmpegMjpegService.getStreamStats();
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Get(':cameraId/stats')
   async getCameraStats(@Param('cameraId') cameraId: string) {
     return this.ffmpegMjpegService.getStreamStats(cameraId);
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('liveView')
   @Get(':cameraId/urls')
   async getDeliveryUrls(
     @CurrentUser() user: AuthUser,

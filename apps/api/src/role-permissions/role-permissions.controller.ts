@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AuthUser } from '../common/types/auth-user.type';
+import { RequirePermission } from './require-permission.decorator';
 import { RolePermissionsService } from './role-permissions.service';
 
 @Controller('role-permissions')
@@ -15,6 +16,7 @@ export class RolePermissionsController {
   ) {}
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('roleManage')
   @Get()
   async getMatrix() {
     return {
@@ -33,6 +35,7 @@ export class RolePermissionsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('roleManage')
   @Patch(':role')
   async updateRole(
     @CurrentUser() actor: AuthUser,

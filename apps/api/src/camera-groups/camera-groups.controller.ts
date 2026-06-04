@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AuthUser } from '../common/types/auth-user.type';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { CameraGroupsService } from './camera-groups.service';
 import { CreateCameraGroupDto } from './dto/create-camera-group.dto';
 import { UpdateCameraGroupDto } from './dto/update-camera-group.dto';
@@ -29,6 +30,7 @@ export class CameraGroupsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
   @Post()
   async create(@CurrentUser() user: AuthUser, @Body() dto: CreateCameraGroupDto, @Req() req: Request) {
     const group = await this.cameraGroupsService.create(dto);
@@ -37,6 +39,7 @@ export class CameraGroupsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
   @Patch(':id')
   async update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: UpdateCameraGroupDto, @Req() req: Request) {
     const group = await this.cameraGroupsService.update(id, dto);
@@ -45,6 +48,7 @@ export class CameraGroupsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
   @Delete(':id')
   async softDelete(@CurrentUser() user: AuthUser, @Param('id') id: string, @Req() req: Request) {
     const group = await this.cameraGroupsService.softDelete(id);
@@ -53,6 +57,7 @@ export class CameraGroupsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
   @Post(':id/cameras/:cameraId')
   async addCamera(@CurrentUser() user: AuthUser, @Param('id') id: string, @Param('cameraId') cameraId: string, @Req() req: Request) {
     const group = await this.cameraGroupsService.addCamera(id, cameraId);
@@ -61,6 +66,7 @@ export class CameraGroupsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
   @Delete(':id/cameras/:cameraId')
   async removeCamera(@CurrentUser() user: AuthUser, @Param('id') id: string, @Param('cameraId') cameraId: string, @Req() req: Request) {
     const group = await this.cameraGroupsService.removeCamera(id, cameraId);

@@ -131,7 +131,7 @@ function AppRoutes() {
         {() => <ProtectedRoute component={WallModePage} />}
       </Route>
       <Route path="/users">
-        {() => <ProtectedRoute component={UsersPage} adminOnly />}
+        {() => <ProtectedRoute component={UsersPage} />}
       </Route>
       <Route path="/roles">
         {() => <ProtectedRoute component={RolesPage} adminOnly />}

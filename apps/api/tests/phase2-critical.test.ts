@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import * as bcrypt from 'bcrypt';
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { CameraPermissionLevel, UserRole } from '@prisma/client';
@@ -9,6 +10,9 @@ import { CamerasController } from '../src/cameras/cameras.controller';
 import { EvidenceService } from '../src/evidence/evidence.service';
 import { RecordingsController } from '../src/recordings/recordings.controller';
 import { RecordingsService } from '../src/recordings/recordings.service';
+import { UsersService } from '../src/users/users.service';
+import { PermissionsGuard } from '../src/role-permissions/permissions.guard';
+import { DEFAULT_PERMISSIONS, normalizeMatrix } from '../src/role-permissions/role-permissions.constants';
 import type { AuthUser } from '../src/common/types/auth-user.type';
 
 type TestCase = { name: string; run: () => Promise<void> | void };
@@ -20,6 +24,26 @@ function test(name: string, run: TestCase['run']) {
 
 function config(values: Record<string, string>) {
   return { get: (key: string) => values[key] };
+}
+
+function settings(values?: { maxLoginAttempts?: number; sessionTimeoutMinutes?: number }) {
+  return {
+    getMaxLoginAttempts: async () => values?.maxLoginAttempts ?? 5,
+    getSessionTimeoutMinutes: async () => values?.sessionTimeoutMinutes ?? 0,
+    isStrongPasswordRequired: async () => false,
+  };
+}
+
+function assertRoutePermission(filePath: string, routeDecorator: string, permission: string) {
+  const source = readFileSync(filePath, 'utf8');
+  const routeIndex = source.indexOf(routeDecorator);
+  assert.notEqual(routeIndex, -1, `${filePath} deve conter ${routeDecorator}`);
+
+  const nearbyDecorators = source.slice(Math.max(0, routeIndex - 220), routeIndex);
+  assert(
+    nearbyDecorators.includes(`@RequirePermission('${permission}')`),
+    `${filePath} ${routeDecorator} deve exigir ${permission}`,
+  );
 }
 
 const cameras = [
@@ -149,7 +173,7 @@ test('auth: login normaliza email, retorna usuario sanitizado e token assinado',
       return 'signed-token';
     },
   };
-  const service = new AuthService(prisma as any, jwt as any, config({ jwtExpiresIn: '15m' }) as any);
+  const service = new AuthService(prisma as any, jwt as any, config({ jwtExpiresIn: '15m' }) as any, settings() as any);
 
   const result = await service.login(' ADMIN@Test.Local ', 'secret');
 
@@ -176,7 +200,7 @@ test('auth: senha invalida rejeita com UnauthorizedException', async () => {
       }),
     },
   };
-  const service = new AuthService(prisma as any, { signAsync: async () => 'never' } as any, config({}) as any);
+  const service = new AuthService(prisma as any, { signAsync: async () => 'never' } as any, config({}) as any, settings() as any);
 
   await assert.rejects(() => service.login('admin@test.local', 'wrong'), UnauthorizedException);
 });
@@ -266,13 +290,18 @@ test('camera-stream controller: cria token somente apos validar permissao de vis
       return { streamToken: 'stream-token', expiresAt: '2026-05-22T00:05:00.000Z' };
     },
   };
+  const commercialPolicy = {
+    assertFeature: async (feature: string) => {
+      order.push(`policy:${feature}`);
+    },
+  };
   const audit = { log: async () => order.push('audit') };
-  const controller = new CameraStreamController({} as any, {} as any, {} as any, auth as any, access as any, audit as any);
+  const controller = new CameraStreamController({} as any, {} as any, {} as any, auth as any, access as any, audit as any, commercialPolicy as any);
 
   const result = await controller.createStreamToken(user, 'cam-1', { headers: {} } as any);
 
   assert.deepEqual(result, { streamToken: 'stream-token', expiresAt: '2026-05-22T00:05:00.000Z' });
-  assert.deepEqual(order, ['access:cam-1', 'token:operator:cam-1', 'audit']);
+  assert.deepEqual(order, ['access:cam-1', 'policy:localLive', 'token:operator:cam-1', 'audit']);
 });
 
 test('recordings controller: listagem de operador usa cameras acessiveis', async () => {
@@ -364,6 +393,138 @@ test('recordings controller: download valida permissao e audita antes de enviar 
 
   assert.equal(result, 'streamed');
   assert.deepEqual(order, ['recording:rec-1', 'access:cam-1', 'audit', 'download:rec-1']);
+});
+
+test('permissions: defaults incluem PTZ para operador e bloqueiam viewer', () => {
+  assert.equal(DEFAULT_PERMISSIONS.OPERATOR.ptzControl, true);
+  assert.equal(DEFAULT_PERMISSIONS.VIEWER.ptzControl, false);
+});
+
+test('permissions: matriz persistida antiga herda novas chaves pelo default do papel', () => {
+  const storedBeforePtzKey = { liveView: true, playback: true };
+
+  assert.equal(normalizeMatrix(storedBeforePtzKey, DEFAULT_PERMISSIONS.OPERATOR).ptzControl, true);
+  assert.equal(normalizeMatrix({ ...storedBeforePtzKey, ptzControl: false }, DEFAULT_PERMISSIONS.OPERATOR).ptzControl, false);
+});
+
+test('permissions guard: bloqueia rota com permissao fina ausente', async () => {
+  const user: AuthUser = { id: 'viewer', email: 'viewer@test.local', name: 'Viewer', role: UserRole.VIEWER };
+  const reflector = { getAllAndOverride: () => 'ptzControl' };
+  const rolePermissions = { hasPermission: async () => false };
+  const context = {
+    getHandler: () => ({}),
+    getClass: () => ({}),
+    switchToHttp: () => ({ getRequest: () => ({ user }) }),
+  };
+  const guard = new PermissionsGuard(reflector as any, rolePermissions as any);
+
+  await assert.rejects(() => guard.canActivate(context as any), ForbiddenException);
+});
+
+test('permissions guard: super admin ignora bloqueio da matriz fina', async () => {
+  const user: AuthUser = { id: 'root', email: 'root@test.local', name: 'Root', role: UserRole.SUPER_ADMIN };
+  const reflector = { getAllAndOverride: () => 'serverConfig' };
+  const rolePermissions = { hasPermission: async () => false };
+  const context = {
+    getHandler: () => ({}),
+    getClass: () => ({}),
+    switchToHttp: () => ({ getRequest: () => ({ user }) }),
+  };
+  const guard = new PermissionsGuard(reflector as any, rolePermissions as any);
+
+  assert.equal(await guard.canActivate(context as any), true);
+});
+
+test('group tenancy: admin de grupo lista somente usuarios dos grupos administrados', async () => {
+  const actor: AuthUser = { id: 'manager', email: 'manager@test.local', name: 'Manager', role: UserRole.OPERATOR };
+  const prisma = {
+    user: {
+      findMany: async (args: any) => {
+        assert.deepEqual(args.where.cameraPermissions.some.groupId.in, ['group-car']);
+        return [{
+          id: 'client-user',
+          name: 'Cliente',
+          email: 'cliente@test.local',
+          role: UserRole.VIEWER,
+          isActive: true,
+          passwordHash: 'hidden',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }];
+      },
+    },
+  };
+  const access = { getAdminGroupIds: async () => ['group-car'] };
+  const service = new UsersService(prisma as any, { canAssignRole: () => false } as any, settings() as any, access as any);
+
+  const result = await service.list(actor);
+
+  assert.equal(result.length, 1);
+  assert.equal('passwordHash' in result[0], false);
+});
+
+test('group tenancy: admin de grupo cria usuario ja vinculado ao proprio grupo', async () => {
+  const actor: AuthUser = { id: 'manager', email: 'manager@test.local', name: 'Manager', role: UserRole.OPERATOR };
+  let createArgs: any = null;
+  const prisma = {
+    user: {
+      create: async (args: any) => {
+        createArgs = args;
+        return {
+          id: 'new-user',
+          name: args.data.name,
+          email: args.data.email,
+          role: args.data.role,
+          isActive: true,
+          passwordHash: args.data.passwordHash,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+      },
+    },
+  };
+  const access = { getAdminGroupIds: async () => ['group-car'] };
+  const service = new UsersService(prisma as any, { canAssignRole: () => false } as any, settings() as any, access as any);
+
+  const result = await service.create(actor, {
+    name: 'Operador Loja',
+    email: ' operador@loja.test ',
+    password: 'SenhaForte#123',
+    role: UserRole.VIEWER,
+    groupIds: ['group-car'],
+    permissionLevel: CameraPermissionLevel.CONTROL,
+  });
+
+  assert.equal(result.email, 'operador@loja.test');
+  assert.deepEqual(createArgs.data.cameraPermissions.create, [{ groupId: 'group-car', level: CameraPermissionLevel.CONTROL }]);
+});
+
+test('group tenancy: admin de grupo nao vincula usuario fora do proprio grupo', async () => {
+  const actor: AuthUser = { id: 'manager', email: 'manager@test.local', name: 'Manager', role: UserRole.OPERATOR };
+  const access = { getAdminGroupIds: async () => ['group-car'] };
+  const service = new UsersService({} as any, { canAssignRole: () => false } as any, settings() as any, access as any);
+
+  await assert.rejects(
+    () => service.create(actor, {
+      name: 'Intruso',
+      email: 'intruso@loja.test',
+      password: 'SenhaForte#123',
+      role: UserRole.VIEWER,
+      groupIds: ['group-other'],
+    }),
+    ForbiddenException,
+  );
+});
+
+test('permissions audit: rotas sensiveis mantem RequirePermission', () => {
+  assertRoutePermission('src/settings/settings.controller.ts', "@Patch()", 'serverConfig');
+  assertRoutePermission('src/role-permissions/role-permissions.controller.ts', "@Patch(':role')", 'roleManage');
+  assertRoutePermission('src/camera-stream/camera-stream.controller.ts', "@Post(':cameraId/token')", 'liveView');
+  assertRoutePermission('src/ptz/ptz.controller.ts', "@Post(':cameraId/move')", 'ptzControl');
+  assertRoutePermission('src/recordings/recordings.controller.ts', "@Post('recordings/:id/play-token')", 'playback');
+  assertRoutePermission('src/recordings/recordings.controller.ts', "@Post('recordings/:id/clips/export')", 'exportEvidence');
+  assertRoutePermission('src/evidence/evidence.controller.ts', "@Post('sign')", 'exportEvidence');
+  assertRoutePermission('src/alarms/alarms.controller.ts', "@Post('rules/:id/mute')", 'alarmAck');
 });
 
 async function main() {

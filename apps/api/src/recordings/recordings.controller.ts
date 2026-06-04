@@ -8,6 +8,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { type AuthUser } from '../common/types/auth-user.type';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { ListRecordingsQueryDto } from './dto/list-recordings-query.dto';
 import { BulkThumbnailTokensDto } from './dto/bulk-thumbnail-tokens.dto';
 import { BulkRecordingDiagnosticsDto } from './dto/bulk-recording-diagnostics.dto';
@@ -104,6 +105,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Get('cameras/:cameraId/recording/status')
   async getRecordingStatus(@CurrentUser() user: AuthUser, @Param('cameraId') cameraId: string) {
     await this.accessControlService.assertCanViewCamera(user, cameraId);
@@ -111,6 +113,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Get('recordings/statuses')
   async getRecordingStatuses(
     @CurrentUser() user: AuthUser,
@@ -192,6 +195,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Get('recordings')
   async listRecordings(@CurrentUser() user: AuthUser, @Query() query: ListRecordingsQueryDto) {
     if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
@@ -202,6 +206,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Delete('recordings')
   async deleteAllRecordings(@CurrentUser() user: AuthUser, @Req() req: Request) {
     await this.recordingManager.stopAll();
@@ -211,6 +216,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Get('recordings/health-summary')
   async getRecordingHealthSummary(
     @CurrentUser() user: AuthUser,
@@ -235,6 +241,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Get('recordings/gaps-report')
   async getRecordingGapsReport(
     @CurrentUser() user: AuthUser,
@@ -257,6 +264,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Get('recordings/playback-readiness')
   async getPlaybackReadiness(
     @CurrentUser() user: AuthUser,
@@ -279,6 +287,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Get('recordings/storage-usage')
   async getStorageUsage(
     @CurrentUser() user: AuthUser,
@@ -302,6 +311,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Post('recordings/:id/play-token')
   async createPlayToken(
     @CurrentUser() user: AuthUser,
@@ -327,6 +337,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Get('recordings/:id/diagnostics')
   async getDiagnostics(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     const recording = await this.recordingsService.ensureRecordingExists(id);
@@ -335,6 +346,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Get('recordings/:id/integrity')
   async getIntegrity(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     const recording = await this.recordingsService.ensureRecordingExists(id);
@@ -343,6 +355,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('exportEvidence')
   @Get('recordings/:id/snapshot')
   async snapshotFrame(
     @CurrentUser() user: AuthUser,
@@ -359,12 +372,14 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Post('recordings/thumbnail-tokens')
   async createThumbnailTokens(@CurrentUser() user: AuthUser, @Body() dto: BulkThumbnailTokensDto) {
     return this.recordingsService.createThumbnailTokens(user, dto.recordingIds);
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Post('recordings/diagnostics/bulk')
   async getBulkDiagnostics(@CurrentUser() user: AuthUser, @Body() dto: BulkRecordingDiagnosticsDto) {
     const ids = [...new Set(dto.recordingIds)].slice(0, 120);
@@ -415,6 +430,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('exportEvidence')
   @Get('recordings/:id/download')
   async downloadRecording(
     @CurrentUser() user: AuthUser,
@@ -429,6 +445,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('exportEvidence')
   @Post('recordings/:id/clips/export')
   async exportClip(
     @CurrentUser() user: AuthUser,
@@ -475,6 +492,7 @@ export class RecordingsController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('exportEvidence')
   @Get('recordings/clips/:clipId/download')
   async downloadExportedClip(
     @CurrentUser() user: AuthUser,

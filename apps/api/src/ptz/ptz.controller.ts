@@ -7,6 +7,7 @@ import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { type AuthUser } from '../common/types/auth-user.type';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { OnvifPtzService } from './onvif-ptz.service';
 import { PtzCommandDto } from './dto/ptz-command.dto';
 
@@ -20,6 +21,7 @@ export class PtzController {
   ) {}
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('ptzControl')
   @Post(':cameraId/move')
   async move(
     @CurrentUser() user: AuthUser,
@@ -85,6 +87,7 @@ export class PtzController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('ptzControl')
   @Get(':cameraId/diagnostics')
   async diagnostics(
     @CurrentUser() user: AuthUser,
@@ -99,6 +102,7 @@ export class PtzController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('ptzControl')
   @Get(':cameraId/relays')
   async relays(
     @CurrentUser() user: AuthUser,
@@ -116,6 +120,7 @@ export class PtzController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('ptzControl')
   @Post(':cameraId/relays/trigger')
   async triggerRelay(
     @CurrentUser() user: AuthUser,

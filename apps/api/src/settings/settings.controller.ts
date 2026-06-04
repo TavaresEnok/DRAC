@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AuthUser } from '../common/types/auth-user.type';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { SettingsService } from './settings.service';
 
 @Controller('settings')
@@ -20,6 +21,7 @@ export class SettingsController {
   }
 
   @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Patch()
   async update(@CurrentUser() actor: AuthUser, @Body() body: Record<string, unknown>, @Req() req: Request) {
     const updated = await this.settingsService.patch(body, actor.id);

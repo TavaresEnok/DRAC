@@ -4,6 +4,7 @@ import { UserRole } from '@prisma/client';
 export const PERMISSION_KEYS = [
   'liveView',
   'playback',
+  'ptzControl',
   'alarmAck',
   'cameraConfig',
   'userManage',
@@ -28,14 +29,14 @@ const fromList = (granted: PermissionKey[]): PermissionMatrix =>
 export const DEFAULT_PERMISSIONS: Record<UserRole, PermissionMatrix> = {
   SUPER_ADMIN: allTrue(),
   ADMIN: allTrue(),
-  OPERATOR: fromList(['liveView', 'playback', 'alarmAck', 'exportEvidence', 'reportGenerate']),
+  OPERATOR: fromList(['liveView', 'playback', 'ptzControl', 'alarmAck', 'exportEvidence', 'reportGenerate']),
   VIEWER: fromList(['liveView', 'playback']),
 };
 
-export function normalizeMatrix(input: unknown): PermissionMatrix {
+export function normalizeMatrix(input: unknown, fallback?: Partial<PermissionMatrix>): PermissionMatrix {
   const source = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
   return PERMISSION_KEYS.reduce(
-    (acc, key) => ({ ...acc, [key]: source[key] === true }),
+    (acc, key) => ({ ...acc, [key]: source[key] === true || (source[key] === undefined && fallback?.[key] === true) }),
     {} as PermissionMatrix,
   );
 }

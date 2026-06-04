@@ -4,6 +4,8 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import helmet from 'helmet';
+import { randomUUID } from 'node:crypto';
+import { type NextFunction, type Request, type Response } from 'express';
 
 // @ts-ignore
 BigInt.prototype.toJSON = function () {
@@ -12,6 +14,15 @@ BigInt.prototype.toJSON = function () {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const forwardedRequestId = req.headers['x-request-id'];
+    const requestId = typeof forwardedRequestId === 'string' && forwardedRequestId.trim()
+      ? forwardedRequestId.trim().slice(0, 128)
+      : randomUUID();
+    req.headers['x-request-id'] = requestId;
+    res.setHeader('X-Request-Id', requestId);
+    next();
+  });
   app.use(
     helmet({
       crossOriginOpenerPolicy: false,

@@ -74,6 +74,8 @@ export default function UsuariosPage() {
   const updateUserActive = useVmsDataStore((state) => state.updateUserActive);
   const loadData = useVmsDataStore((state) => state.load);
   const accessToken = useAuthStore((state) => state.accessToken);
+  const currentUser = useAuthStore((state) => state.user);
+  const canManageGlobalAccess = currentUser?.role === 'admin';
   const [addOpen, setAddOpen] = useState(false);
   const [editUser, setEditUser] = useState<(typeof userList)[number] | null>(null);
   const [search, setSearch] = useState('');
@@ -93,6 +95,8 @@ export default function UsuariosPage() {
     role: 'VIEWER' as ApiUserRole,
     isActive: true,
   });
+
+  const availableRoleOptions = canManageGlobalAccess ? roleOptions : roleOptions.filter((option) => option.value !== 'ADMIN');
 
   const filtered = userList.filter(u =>
     !search || u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase())
@@ -278,6 +282,7 @@ export default function UsuariosPage() {
           email,
           password: userForm.password,
           role: userForm.role,
+          ...(!canManageGlobalAccess && selectedGroup ? { groupIds: [selectedGroup.id], permissionLevel: selectedLevel } : {}),
         });
         toast({ title: 'Usuário criado', description: `${name} já pode receber acesso a grupos.` });
       }
@@ -418,28 +423,32 @@ export default function UsuariosPage() {
               </div>
             </div>
 
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-              <input
-                value={newGroupName}
-                onChange={(event) => setNewGroupName(event.target.value)}
-                placeholder="Ex.: Mercado São José"
-                className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-              <button
-                onClick={() => void createGroup()}
-                disabled={accessLoading || !newGroupName.trim()}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Criar
-              </button>
-            </div>
-            <input
-              value={newGroupDescription}
-              onChange={(event) => setNewGroupDescription(event.target.value)}
-              placeholder="Descrição opcional"
-              className="mt-2 h-9 w-full rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-            />
+            {canManageGlobalAccess ? (
+              <>
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                  <input
+                    value={newGroupName}
+                    onChange={(event) => setNewGroupName(event.target.value)}
+                    placeholder="Ex.: Mercado São José"
+                    className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <button
+                    onClick={() => void createGroup()}
+                    disabled={accessLoading || !newGroupName.trim()}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Criar
+                  </button>
+                </div>
+                <input
+                  value={newGroupDescription}
+                  onChange={(event) => setNewGroupDescription(event.target.value)}
+                  placeholder="Descrição opcional"
+                  className="mt-2 h-9 w-full rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </>
+            ) : null}
 
             <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
               {groups.map((group) => (
@@ -462,36 +471,38 @@ export default function UsuariosPage() {
             </div>
           </section>
 
-          <section className="rounded-xl border border-border bg-card/45 p-4">
-            <div className="mb-4 flex items-start gap-2">
-              <Camera className="mt-0.5 h-4 w-4 text-primary" />
-              <div>
-                <p className="text-sm font-semibold">Câmeras do grupo</p>
-                <p className="text-xs text-muted-foreground">{selectedGroup ? `Selecionado: ${selectedGroup.name}` : 'Crie ou selecione um grupo para vincular câmeras.'}</p>
+          {canManageGlobalAccess ? (
+            <section className="rounded-xl border border-border bg-card/45 p-4">
+              <div className="mb-4 flex items-start gap-2">
+                <Camera className="mt-0.5 h-4 w-4 text-primary" />
+                <div>
+                  <p className="text-sm font-semibold">Câmeras do grupo</p>
+                  <p className="text-xs text-muted-foreground">{selectedGroup ? `Selecionado: ${selectedGroup.name}` : 'Crie ou selecione um grupo para vincular câmeras.'}</p>
+                </div>
               </div>
-            </div>
 
-            <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
-              {cameras.map((camera) => {
-                const checked = groupCameraIds.has(camera.id);
-                return (
-                  <label key={camera.id} className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-background/55 px-3 py-2 text-xs hover:bg-accent/40">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">{camera.name}</p>
-                      <p className="truncate text-[11px] text-muted-foreground">{camera.zone} · {camera.resolution}</p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={!selectedGroup || accessLoading}
-                      onChange={(event) => void setCameraInGroup(camera.id, event.target.checked)}
-                      className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
-                    />
-                  </label>
-                );
-              })}
-            </div>
-          </section>
+              <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+                {cameras.map((camera) => {
+                  const checked = groupCameraIds.has(camera.id);
+                  return (
+                    <label key={camera.id} className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-background/55 px-3 py-2 text-xs hover:bg-accent/40">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{camera.name}</p>
+                        <p className="truncate text-[11px] text-muted-foreground">{camera.zone} · {camera.resolution}</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={!selectedGroup || accessLoading}
+                        onChange={(event) => void setCameraInGroup(camera.id, event.target.checked)}
+                        className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
 
           <section className="rounded-xl border border-border bg-card/45 p-4">
             <div className="mb-4 flex items-start gap-2">
@@ -587,7 +598,7 @@ export default function UsuariosPage() {
                 onChange={(event) => setUserForm((current) => ({ ...current, role: event.target.value as ApiUserRole }))}
                 className="h-8 w-full rounded border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
               >
-                {roleOptions.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
+                {availableRoleOptions.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
               </select>
             </div>
             <div>

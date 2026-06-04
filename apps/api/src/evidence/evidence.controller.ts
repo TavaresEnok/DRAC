@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AuthUser } from '../common/types/auth-user.type';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { SignEvidencePackageDto } from './dto/sign-evidence-package.dto';
 import { VerifyEvidencePackageDto } from './dto/verify-evidence-package.dto';
 import { EvidenceService } from './evidence.service';
@@ -17,6 +18,7 @@ export class EvidenceController {
   ) {}
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('exportEvidence')
   @Post('sign')
   async signPackage(@CurrentUser() user: AuthUser, @Body() dto: SignEvidencePackageDto, @Req() req: Request) {
     const result = this.evidenceService.signPackage(dto.payload);
@@ -37,6 +39,7 @@ export class EvidenceController {
   }
 
   @Roles(UserRole.VIEWER)
+  @RequirePermission('playback')
   @Post('verify')
   async verifyPackage(@CurrentUser() user: AuthUser, @Body() dto: VerifyEvidencePackageDto, @Req() req: Request) {
     const result = this.evidenceService.verifyPackage(dto.evidencePackage);
