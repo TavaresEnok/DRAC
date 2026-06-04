@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { HardDrive, Thermometer, RefreshCw, Cpu, MemoryStick, Activity, Trash2 } from 'lucide-react';
+import { HardDrive, Thermometer, RefreshCw, Cpu, MemoryStick, Activity, Trash2, Server, ShieldAlert } from 'lucide-react';
 import { useVmsDataStore } from '../store/vmsDataStore';
 import { useAuthStore } from '../store/authStore';
 import { getApiBaseUrl } from '../lib/api-base';
@@ -65,7 +65,7 @@ export default function MonitoramentoPage() {
     }).catch((error) => {
       if (cancelled) return;
       setAnalytics(null);
-      setAnalyticsError(error instanceof Error ? error.message : 'Falha ao carregar analytics de storage.');
+      setAnalyticsError(error instanceof Error ? error.message : 'Falha ao carregar análise de armazenamento.');
     }).finally(() => {
       if (!cancelled) setAnalyticsLoading(false);
     });
@@ -74,7 +74,7 @@ export default function MonitoramentoPage() {
 
   async function handleDeleteAllVideos() {
     if (!accessToken) return;
-    const confirmed = window.confirm('Apagar todas as gravações e clips exportados do storage? Esta ação não pode ser desfeita.');
+    const confirmed = window.confirm('Apagar todas as gravações e clipes exportados do armazenamento? Esta ação não pode ser desfeita.');
     if (!confirmed) return;
     setDeletingVideos(true);
     try {
@@ -219,7 +219,7 @@ export default function MonitoramentoPage() {
         <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">Uso por câmera</summary>
         <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
           <div>
-            <div className="text-xs font-semibold text-[hsl(var(--muted-foreground))]">Gravações e clips exportados no período selecionado</div>
+            <div className="text-xs font-semibold text-[hsl(var(--muted-foreground))]">Gravações e clipes exportados no período selecionado</div>
           </div>
           <div className="flex items-center gap-2">
             <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="h-8 rounded border border-border bg-background px-2 text-xs" />
@@ -231,7 +231,7 @@ export default function MonitoramentoPage() {
           {!analyticsLoading && analyticsError && analyticsError}
           {!analyticsLoading && analytics && (
             <span>
-              {analytics.summary.rows} linha(s) · gravações: {toGB(analytics.summary.totalRecordingsBytes)} GB · clips: {toGB(analytics.summary.totalClipsBytes)} GB · total: {toGB(analytics.summary.totalBytes)} GB
+              {analytics.summary.rows} linha(s) · gravações: {toGB(analytics.summary.totalRecordingsBytes)} GB · clipes: {toGB(analytics.summary.totalClipsBytes)} GB · total: {toGB(analytics.summary.totalBytes)} GB
             </span>
           )}
         </div>
@@ -242,7 +242,7 @@ export default function MonitoramentoPage() {
                 <th className="text-left px-5 py-3">Dia</th>
                 <th className="text-left px-5 py-3">Câmera</th>
                 <th className="text-left px-5 py-3">Gravações</th>
-                <th className="text-left px-5 py-3">Clips</th>
+                <th className="text-left px-5 py-3">Clipes</th>
                 <th className="text-left px-5 py-3">Total</th>
               </tr>
             </thead>

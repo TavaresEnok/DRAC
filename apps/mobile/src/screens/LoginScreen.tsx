@@ -31,14 +31,14 @@ export function LoginScreen({
           <View style={styles.logoMark}>
             <View style={styles.logoLens} />
           </View>
-          <Text style={styles.brand}>Drac</Text>
+          <Text style={styles.brand}>DRAC</Text>
           <Text style={styles.title}>Central de câmeras no bolso</Text>
-          <Text style={styles.subtitle}>Live, PTZ, playback, alarme e gravação com acesso filtrado por grupo.</Text>
+          <Text style={styles.subtitle}>Ao vivo, PTZ, reprodução, alertas e gravação com acesso filtrado por grupo.</Text>
         </View>
 
         <View style={styles.card}>
           <Text style={styles.label}>Servidor</Text>
-          <TextInput value={apiUrl} onChangeText={onApiUrlChange} autoCapitalize="none" style={styles.input} placeholder="API URL" placeholderTextColor="#8d877b" />
+          <TextInput value={apiUrl} onChangeText={onApiUrlChange} autoCapitalize="none" style={styles.input} placeholder="Endereço do servidor" placeholderTextColor="#8d877b" />
           <Text style={styles.label}>E-mail</Text>
           <TextInput value={email} onChangeText={onEmailChange} autoCapitalize="none" keyboardType="email-address" style={styles.input} placeholder="admin@local.dev" placeholderTextColor="#8d877b" />
           <Text style={styles.label}>Senha</Text>

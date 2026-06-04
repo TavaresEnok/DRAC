@@ -61,10 +61,7 @@ export function LiveScreen({
               {online ? 'Conectado' : 'Offline'}
             </Text>
           </View>
-          {/* Botão de settings desabilitado (em breve) */}
-          <View style={[styles.headerIconButton, styles.disabled]}>
-            <SvgIcon name="settings" size={22} color="#9ca3af" />
-          </View>
+          <View style={styles.headerIconButton} />
         </View>
 
         {/* ── Player Edge-to-Edge ─────────────────────────── */}
@@ -162,24 +159,6 @@ export function LiveScreen({
 
         {/* ── Quick Actions ───────────────────────────────── */}
         <View style={styles.quickActionsGrid}>
-          {/* Falar — em breve */}
-          <Pressable disabled style={[styles.quickActionButton, styles.disabled]}>
-            <View style={styles.quickActionIcon}>
-              <SvgIcon name="mic" size={22} color="#9ca3af" />
-            </View>
-            <Text style={styles.quickActionLabel}>Falar</Text>
-            <Text style={styles.quickActionSoon}>Em breve</Text>
-          </Pressable>
-
-          {/* Foto — em breve */}
-          <Pressable disabled style={[styles.quickActionButton, styles.disabled]}>
-            <View style={styles.quickActionIcon}>
-              <SvgIcon name="camera" size={22} color="#9ca3af" />
-            </View>
-            <Text style={styles.quickActionLabel}>Foto</Text>
-            <Text style={styles.quickActionSoon}>Em breve</Text>
-          </Pressable>
-
           {/* Gravar */}
           <Pressable
             disabled={!selectedCamera.canRecord}

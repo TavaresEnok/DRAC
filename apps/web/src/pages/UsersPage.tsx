@@ -41,7 +41,7 @@ const roleColor = (r: string) => {
 };
 
 const levelLabel: Record<PermissionLevel, string> = {
-  VIEW: 'Ver ao vivo e playback',
+  VIEW: 'Ver ao vivo e reprodução',
   CONTROL: 'Ver e controlar PTZ',
   RECORD: 'Ver, controlar e gravação',
   ADMIN: 'Administrar câmeras do grupo',

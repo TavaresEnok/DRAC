@@ -105,7 +105,6 @@ export const styles = StyleSheet.create({
   quickActionIcon:       { width: 56, height: 56, borderRadius: 18, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
   quickActionIconActive: { backgroundColor: C.accent, borderColor: C.accent },
   quickActionLabel:      { color: C.textSub, fontSize: 12, fontWeight: '700' },
-  quickActionSoon:       { color: C.textMuted, fontSize: 9, fontWeight: '800', marginTop: -4 },
 
   // ── Mosaico / Grid ────────────────────────────────────────
   mosaicHeader:    { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 2, marginBottom: 4 },
@@ -268,13 +267,10 @@ export const styles = StyleSheet.create({
   profileScreenTitle: { color: C.text, fontSize: 25, fontWeight: '900', marginBottom: 6 },
   profileSimpleCard:  { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: C.surface, borderRadius: 28, borderWidth: 1, borderColor: C.border, padding: 18, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 12, elevation: 2 },
   profileSimpleAvatar:{ width: 56, height: 56, borderRadius: 28, backgroundColor: C.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  profileSimpleInfo:  { flex: 1 },
   profileSimpleName:  { color: C.text, fontSize: 16, fontWeight: '800' },
   profileSimplePlan:  { color: C.accent, fontSize: 12, fontWeight: '700', marginTop: 3 },
-  settingsList:       { gap: 10 },
-  settingsRow:        { backgroundColor: C.surface, borderRadius: 16, borderWidth: 1, borderColor: C.border, padding: 16 },
-  settingsRowDisabled:{ opacity: 0.52 },
   settingsRowText:    { color: C.text, fontSize: 14, fontWeight: '700' },
-  settingsSoonText:   { color: C.textMuted, fontSize: 11, fontWeight: '700', marginTop: 4 },
   logoutButton:       { width: '100%', height: 54, borderRadius: 18, backgroundColor: C.dangerBg, borderWidth: 1, borderColor: C.dangerBorder, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   logoutText:         { color: C.dangerText, fontSize: 14, fontWeight: '900' },
 });

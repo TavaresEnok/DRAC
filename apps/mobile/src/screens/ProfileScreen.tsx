@@ -8,8 +8,6 @@ interface ProfileScreenProps {
   onLogout: () => void;
 }
 
-const settingsItems = ['Gerenciar Dispositivos', 'Armazenamento em Nuvem', 'Notificações', 'Ajuda e Suporte'];
-
 export function ProfileScreen({ session, onLogout }: ProfileScreenProps) {
   return (
     <View style={styles.page}>
@@ -23,13 +21,12 @@ export function ProfileScreen({ session, onLogout }: ProfileScreenProps) {
           <Text style={styles.profileSimplePlan}>{session.user.role}</Text>
         </View>
       </View>
-      <View style={styles.settingsList}>
-        {settingsItems.map((item) => (
-          <View key={item} style={[styles.settingsRow, styles.settingsRowDisabled]}>
-            <Text style={styles.settingsRowText}>{item}</Text>
-            <Text style={styles.settingsSoonText}>Em breve</Text>
-          </View>
-        ))}
+      <View style={styles.profileSimpleCard}>
+        <SvgIcon name="settings" size={22} color="#64748b" />
+        <View style={styles.profileSimpleInfo}>
+          <Text style={styles.settingsRowText}>Acesso sincronizado com o servidor</Text>
+          <Text style={styles.profileSimplePlan}>Permissões, câmeras e segurança são controladas pelo DRAC local.</Text>
+        </View>
       </View>
       <Pressable onPress={onLogout} style={styles.logoutButton}><Text style={styles.logoutText}>Sair do app</Text></Pressable>
     </View>

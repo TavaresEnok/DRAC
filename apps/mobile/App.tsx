@@ -272,10 +272,10 @@ export default function App() {
     try {
       const data = await request<{ playToken: string }>(session.apiUrl, `/recordings/${recording.id}/play-token`, session.token, { method: 'POST' });
       const url = normalizeServerUrl(`${session.apiUrl}/recordings/${recording.id}/play?token=${encodeURIComponent(data.playToken)}&compatible=1`, session.apiUrl);
-      if (!url) throw new Error('URL de playback indisponível.');
+      if (!url) throw new Error('URL de reprodução indisponível.');
       setActivePlayback({ recording, url });
     } catch (error) {
-      Alert.alert('Playback', error instanceof Error ? error.message : 'Não foi possível abrir a gravação.');
+      Alert.alert('Reprodução', error instanceof Error ? error.message : 'Não foi possível abrir a gravação.');
     }
   };
 

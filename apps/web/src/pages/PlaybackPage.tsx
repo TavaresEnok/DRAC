@@ -190,7 +190,7 @@ async function downloadGravação(recordingId: string, cameraCódigo: string, ac
 }
 
 async function downloadClip(downloadUrl: string, clipId: string, accessToken: string) {
-  const reason = window.prompt('Motivo do download do clip (obrigatório):')?.trim() ?? '';
+  const reason = window.prompt('Motivo do download do clipe (obrigatório):')?.trim() ?? '';
   if (!reason) throw new Error('Download cancelado: motivo obrigatório.');
   const sep = downloadUrl.includes('?') ? '&' : '?';
   const response = await axios.get(`${API_URL}${downloadUrl}${sep}reason=${encodeURIComponent(reason)}`, {
@@ -457,7 +457,7 @@ export default function ReproduçãoPage() {
       .catch((error) => {
         if (cancelled) return;
         setReproduçãoUrl(null);
-        setVideoError(error instanceof Error ? error.message : 'Falha ao gerar token de playback.');
+      setVideoError(error instanceof Error ? error.message : 'Falha ao preparar reprodução.');
       })
       .finally(() => {
         if (!cancelled) setLoadingReprodução(false);
@@ -480,7 +480,7 @@ export default function ReproduçãoPage() {
     const timeout = window.setTimeout(() => {
       if (playbackReadyRef.current) return;
       if (!playbackMayUseCompatible) {
-        setVideoError('O playback direto demorou além do esperado. Preparando versão compatível...');
+        setVideoError('A reprodução direta demorou além do esperado. Preparando versão compatível...');
         setCompatMode(true);
         return;
       }
@@ -585,10 +585,10 @@ export default function ReproduçãoPage() {
       )));
       setCompatMode(true);
       setReloadNonce((current) => current + 1);
-      toast({ title: 'Playback compatível pronto', description: 'A gravação foi preparada para reprodução no navegador.' });
+      toast({ title: 'Reprodução compatível pronta', description: 'A gravação foi preparada para reprodução no navegador.' });
     } catch (error) {
       toast({
-        title: 'Falha ao preparar playback',
+        title: 'Falha ao preparar reprodução',
         description: error instanceof Error ? error.message : 'Não foi possível preparar a gravação compatível.',
         variant: 'destructive',
       });
@@ -600,11 +600,11 @@ export default function ReproduçãoPage() {
   const exportClip = useCallback(async () => {
     if (!selectedGravação || !accessToken) return;
     if (clipStartSeconds == null || clipEndSeconds == null) {
-      toast({ title: 'Marque o intervalo', description: 'Defina o início e o fim do clip antes de exportar.', variant: 'destructive' });
+      toast({ title: 'Marque o intervalo', description: 'Defina o início e o fim do clipe antes de exportar.', variant: 'destructive' });
       return;
     }
     if (clipEndSeconds <= clipStartSeconds) {
-      toast({ title: 'Intervalo inválido', description: 'O fim do clip precisa ser maior que o início.', variant: 'destructive' });
+      toast({ title: 'Intervalo inválido', description: 'O fim do clipe precisa ser maior que o início.', variant: 'destructive' });
       return;
     }
 
@@ -615,7 +615,7 @@ export default function ReproduçãoPage() {
         endSeconds: Math.ceil(clipEndSeconds),
         investigationId: selectedInvestigaçãoId === '__none__' ? undefined : selectedInvestigaçãoId,
         label: `Clipe - ${selectedCam?.name ?? 'Câmera'}`,
-        notes: `Exportado do playback em ${new Date().toISOString()}`,
+        notes: `Exportado da reprodução em ${new Date().toISOString()}`,
       });
       setLastExportedClip(data);
       toast({
@@ -624,8 +624,8 @@ export default function ReproduçãoPage() {
       });
     } catch (error) {
       toast({
-        title: 'Falha ao exportar clip',
-        description: error instanceof Error ? error.message : 'Não foi possível exportar o clip.',
+        title: 'Falha ao exportar clipe',
+        description: error instanceof Error ? error.message : 'Não foi possível exportar o clipe.',
         variant: 'destructive',
       });
     } finally {
@@ -643,17 +643,17 @@ export default function ReproduçãoPage() {
     setSavingBookmark(true);
     try {
       await client.post(`/investigations/${selectedInvestigaçãoId}/bookmarks`, {
-        label: `Bookmark ${selectedCam.name} @ ${format(ts, 'HH:mm:ss')}`,
+        label: `Marcador ${selectedCam.name} @ ${format(ts, 'HH:mm:ss')}`,
         timestamp: ts.toISOString(),
         cameraId: selectedCam.id,
         cameraName: selectedCam.name,
-        notes: 'Bookmark criado no playback',
+        notes: 'Marcador criado na reprodução',
       });
       toast({ title: 'Marcador salvo', description: 'O marcador foi anexado à investigação.' });
     } catch (error) {
       toast({
-        title: 'Falha ao salvar bookmark',
-        description: error instanceof Error ? error.message : 'Não foi possível salvar o bookmark.',
+        title: 'Falha ao salvar marcador',
+        description: error instanceof Error ? error.message : 'Não foi possível salvar o marcador.',
         variant: 'destructive',
       });
     } finally {
@@ -891,7 +891,7 @@ export default function ReproduçãoPage() {
                   }}
                   onError={() => {
                     if (!playbackMayUseCompatible) {
-                      setVideoError('Falha no playback direto. Preparando versão compatível...');
+                      setVideoError('Falha na reprodução direta. Preparando versão compatível...');
                       setCompatMode(true);
                       return;
                     }

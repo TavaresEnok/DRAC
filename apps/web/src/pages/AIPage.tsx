@@ -122,7 +122,7 @@ export default function AIPage() {
         {message && <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">{message}</div>}
         {settings && !settings.enabled && (
           <div className="rounded-lg border border-border bg-card/80 px-4 py-3 text-sm text-muted-foreground">
-            IA desligada neste servidor. O sistema continua operando normalmente com câmeras, WebRTC, gravação e playback.
+            IA desligada neste servidor. O sistema continua operando normalmente com câmeras, WebRTC, gravação e reprodução.
           </div>
         )}
         {health?.model_registry?.lastError && <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">{health.model_registry.lastError}</div>}

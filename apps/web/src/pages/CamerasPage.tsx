@@ -1037,7 +1037,7 @@ export default function CamerasPage() {
         await axios.post(`${API_URL}/cameras/${camera.id}/recording/stop`, {}, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        window.alert(`Clip por movimento parado: ${camera.name}\nA câmera continua armada para o próximo movimento.`);
+        window.alert(`Clipe por movimento parado: ${camera.name}\nA câmera continua armada para o próximo movimento.`);
       } else if (!isMotionRecordingMode(camera)) {
         setRecordingOverrides((current) => ({ ...current, [camera.id]: false }));
         await axios.post(`${API_URL}/cameras/${camera.id}/recording/motion`, { enabled: true }, {
@@ -1291,7 +1291,7 @@ export default function CamerasPage() {
                         : 'border-emerald-500/55 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15'
                     }`}
                     disabled={motionRecordingLoadingCameraId === selectedCam.id}
-                    title={motionActive ? 'Parar clip atual por movimento' : 'Armar gravação por movimento'}
+                    title={motionActive ? 'Parar clipe atual por movimento' : 'Armar gravação por movimento'}
                   >
                     <Radar className={`w-4 h-4 ${motionRecordingLoadingCameraId === selectedCam.id ? 'animate-pulse' : ''}`} />
                     Movimento

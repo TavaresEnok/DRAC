@@ -75,7 +75,6 @@ export function PlaybackScreen({
     else if (diff > 0) for (let i = 0; i < diff; i++) onNextDate();
   }
 
-  // In a real app this would filter by recording.type; stub for now
   const filtered = useMemo(
     () => (activeFilter === 'all' ? recordings : recordings),
     [recordings, activeFilter],
@@ -154,12 +153,12 @@ export function PlaybackScreen({
         </View>
       ) : null}
 
-      {/* ── Cloud Replay player ─────────────────────────────── */}
+      {/* ── Playback player ─────────────────────────────────── */}
       {activePlayback ? (
         <View style={styles.playbackPlayerCard}>
           <View style={styles.playbackHeader}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.playbackTitle}>Cloud Replay</Text>
+              <Text style={styles.playbackTitle}>Reprodução</Text>
               <Text style={{ color: C.textSub, fontSize: 12, fontWeight: '700', marginTop: 2 }}>
                 {formatTime(activePlayback.recording.startedAt)} → {formatTime(activePlayback.recording.endedAt)}
               </Text>
@@ -171,7 +170,7 @@ export function PlaybackScreen({
           <View style={styles.cloudReplayStage}>
             <PlaybackVideo uri={activePlayback.url} style={styles.playbackVideo} />
             <View style={styles.cloudReplayTopBar}>
-              <Text style={styles.cloudReplayBadge}>CLOUD REPLAY</Text>
+              <Text style={styles.cloudReplayBadge}>REPRODUÇÃO</Text>
               <Text style={styles.cloudReplayTime}>
                 {formatDuration(activePlayback.recording.durationSeconds)}
               </Text>
