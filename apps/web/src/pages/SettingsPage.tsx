@@ -253,9 +253,19 @@ export default function ConfiguracoesPage() {
           </aside>
 
           <main className="space-y-6">
-            {loading || !settings ? (
+            {loading ? (
               <Card className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground">
                 <LoaderCircle className="h-4 w-4 animate-spin" /> Carregando configurações...
+              </Card>
+            ) : !settings ? (
+              <Card className="flex flex-col items-center justify-center gap-3 p-10 text-center text-sm text-muted-foreground">
+                <p>Não foi possível carregar as configurações. Verifique sua conexão e permissões.</p>
+                <button
+                  onClick={() => void loadSettings()}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border px-4 text-xs hover:bg-accent"
+                >
+                  <LoaderCircle className="h-3.5 w-3.5" /> Tentar novamente
+                </button>
               </Card>
             ) : (
               <>
@@ -302,7 +312,7 @@ export default function ConfiguracoesPage() {
                             {users.map((user) => (
                               <tr key={user.id} className="hover:bg-accent/50">
                                 <td className="px-4 py-3 font-medium">{user.name}</td>
-                                <td className="px-4 py-3"><Pill tone={user.role === 'admin' ? 'danger' : user.role === 'supervisor' ? 'warning' : 'neutral'}>{user.role}</Pill></td>
+                                <td className="px-4 py-3"><Pill tone={user.role === 'admin' ? 'danger' : 'neutral'}>{user.role === 'admin' ? 'Administrador' : user.role === 'operator' ? 'Operador' : 'Visualizador'}</Pill></td>
                                 <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{user.email}</td>
                                 <td className="px-4 py-3"><Pill tone={user.active ? 'success' : 'neutral'}>{user.active ? 'Ativo' : 'Inativo'}</Pill></td>
                               </tr>

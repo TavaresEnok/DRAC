@@ -459,6 +459,7 @@ function publicInstallation(item) {
     alertHistory: Array.isArray(item.alertHistory) ? item.alertHistory : [],
     server: item.server || null,
     storage: item.storage || null,
+    production: item.production || null,
     heartbeatHistory: Array.isArray(item.heartbeatHistory) ? item.heartbeatHistory : [],
     licenseHistory: Array.isArray(item.licenseHistory) ? item.licenseHistory.slice(-30) : [],
     provisionedAt: item.provisionedAt || null,
@@ -499,6 +500,12 @@ function fleetSummary(installations) {
     acc.cameraOffline += cameraOffline;
     acc.cameraError += cameraError;
     acc.openAlarms += openAlarms;
+    acc.streamHighCpuRiskCameras += Number(item.metrics?.streamHighCpuRiskCameras || 0);
+    acc.streamLiveTranscodeLikely += Number(item.metrics?.streamLiveTranscodeLikely || 0);
+    acc.streamLiveFailuresLast24h += Number(item.metrics?.streamLiveFailuresLast24h || 0);
+    acc.streamOptimizationSafeActions += Number(item.metrics?.streamOptimizationSafeActions || 0);
+    acc.recordingGapSecondsLast24h += Number(item.metrics?.recordingGapSecondsLast24h || 0);
+    acc.recordingAttentionCameras += Number(item.metrics?.recordingAttentionCameras || 0);
     acc.maxDiskUsagePercent = Math.max(acc.maxDiskUsagePercent, diskUsagePercent);
     return acc;
   }, {
@@ -514,6 +521,12 @@ function fleetSummary(installations) {
     cameraOffline: 0,
     cameraError: 0,
     openAlarms: 0,
+    streamHighCpuRiskCameras: 0,
+    streamLiveTranscodeLikely: 0,
+    streamLiveFailuresLast24h: 0,
+    streamOptimizationSafeActions: 0,
+    recordingGapSecondsLast24h: 0,
+    recordingAttentionCameras: 0,
     maxDiskUsagePercent: 0,
   });
 
@@ -667,6 +680,13 @@ async function handleHeartbeat(req, res) {
     load1: Array.isArray(body.server?.loadAverage) ? body.server.loadAverage[0] ?? null : null,
     recordingCount: Number(metrics.recordingCount || 0),
     activeRecordingCount: Number(metrics.activeRecordingCount || 0),
+    streamHighCpuRiskCameras: Number(metrics.streamHighCpuRiskCameras || 0),
+    streamLiveTranscodeLikely: Number(metrics.streamLiveTranscodeLikely || 0),
+    streamLiveFailuresLast24h: Number(metrics.streamLiveFailuresLast24h || 0),
+    streamMediaMtxReaders: Number(metrics.streamMediaMtxReaders || 0),
+    streamOptimizationSafeActions: Number(metrics.streamOptimizationSafeActions || 0),
+    recordingGapSecondsLast24h: Number(metrics.recordingGapSecondsLast24h || 0),
+    recordingAttentionCameras: Number(metrics.recordingAttentionCameras || 0),
     activeUsers: Number(metrics.activeUsers || 0),
   });
   while (heartbeatHistory.length > HEARTBEAT_HISTORY_LIMIT) heartbeatHistory.shift();
@@ -686,6 +706,7 @@ async function handleHeartbeat(req, res) {
     alertHistory,
     server: body.server || existing.server || null,
     storage: body.storage || existing.storage || null,
+    production: body.production || existing.production || null,
     heartbeatHistory,
     lastPayloadHash: crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex'),
     licenseStatus: existing.licenseStatus || LICENSE_ACTIVE,
@@ -696,6 +717,39 @@ async function handleHeartbeat(req, res) {
   return json(req, res, 200, {
     accepted: true,
     serverTime: now,
+    ...licenseResponse(item),
+  });
+}
+
+async function handleAgentStatus(req, res) {
+  const installationId = String(req.headers['x-drac-installation-id'] || '').trim();
+  const licenseKey = String(req.headers['x-drac-license-key'] || '').trim();
+  if (!installationId || !licenseKey) {
+    return json(req, res, 401, { error: 'missing_installation_or_license' });
+  }
+
+  const db = await loadDb();
+  const item = db.installations[installationId];
+  if (!item) {
+    return json(req, res, 404, { error: 'installation_not_found' });
+  }
+  if (!timingSafeTextEquals(item.licenseKey || '', licenseKey)) {
+    addAuditEvent(db, req, { type: 'agent.status_denied', actor: installationId, result: 'denied' });
+    await saveDb(db);
+    return json(req, res, 403, { error: 'invalid_license_key' });
+  }
+
+  const lastHeartbeatAt = item.lastHeartbeatAt || null;
+  const ageSeconds = lastHeartbeatAt
+    ? Math.max(0, Math.floor((Date.now() - new Date(lastHeartbeatAt).getTime()) / 1000))
+    : null;
+  return json(req, res, 200, {
+    accepted: true,
+    installationId,
+    customerName: item.customerName || null,
+    lastHeartbeatAt,
+    heartbeatAgeSeconds: ageSeconds,
+    online: ageSeconds !== null && ageSeconds <= ONLINE_THRESHOLD_SECONDS,
     ...licenseResponse(item),
   });
 }
@@ -829,6 +883,9 @@ async function route(req, res) {
     }
     if (req.method === 'POST' && url.pathname === '/api/agent/heartbeat') {
       return handleHeartbeat(req, res);
+    }
+    if (req.method === 'GET' && url.pathname === '/api/agent/status') {
+      return handleAgentStatus(req, res);
     }
     const installerMatch = url.pathname.match(/^\/install\/([^/]+)\/([^/]+)$/);
     if (req.method === 'GET' && installerMatch) {

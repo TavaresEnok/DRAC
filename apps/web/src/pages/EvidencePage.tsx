@@ -162,7 +162,7 @@ export default function EvidencePage() {
     <div className="p-6 max-w-6xl space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold">Evidências e Exportação</h2>
+          <h2 className="text-[18px] font-semibold tracking-tight">Evidências e Exportação</h2>
           <p className="text-[11px] text-[hsl(var(--muted-foreground))]">Fluxo real com aprovação, execução e assinatura de pacote.</p>
         </div>
         <button onClick={() => void load(investigationId)} className="h-8 px-3 rounded border border-border text-xs hover:bg-[hsl(var(--accent))]">Atualizar</button>

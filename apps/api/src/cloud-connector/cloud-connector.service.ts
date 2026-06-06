@@ -7,6 +7,7 @@ import { statfs } from 'node:fs/promises';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { AiService } from '../ai/ai.service';
 import { RecordingProcessManagerService } from '../recordings/recording-process-manager.service';
+import { StreamResourceAdvisorService } from '../camera-stream/stream-resource-advisor.service';
 
 type LicenseStatus = 'UNKNOWN' | 'ACTIVE' | 'GRACE' | 'RESTRICTED' | 'SUSPENDED';
 
@@ -152,10 +153,11 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
     const now = new Date();
     const launchProfile = this.getLaunchProfile();
 
-    const [disk, cameraCounts, cameraOperational, recordings, recentRecordings, activeRecordings, openAlarms, activeUsers] = await Promise.all([
+    const [disk, cameraCounts, cameraOperational, streamPerformance, recordings, recentRecordings, activeRecordings, openAlarms, activeUsers] = await Promise.all([
       this.getDiskStats(recordingsRoot),
       this.getCameraCounts(),
       this.getCameraOperationalStats(),
+      this.getStreamPerformanceSummary(),
       this.prisma.recording.aggregate({
         _count: { id: true },
         _sum: { sizeBytes: true },
@@ -184,6 +186,20 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
     }
     if (cameraCounts.total > 0 && cameraCounts.online === 0) {
       alerts.push({ level: 'critical', code: 'no_online_cameras', message: 'Nenhuma camera online.' });
+    }
+    if (streamPerformance?.summary?.highCpuRiskCameras > 0) {
+      alerts.push({
+        level: streamPerformance.summary.highCpuRiskCameras >= 3 ? 'critical' : 'warning',
+        code: 'stream_high_cpu_risk',
+        message: `${streamPerformance.summary.highCpuRiskCameras} camera(s) com risco alto de CPU/transcode.`,
+      });
+    }
+    if (streamPerformance?.summary?.liveFailuresLast24h > 0) {
+      alerts.push({
+        level: streamPerformance.summary.liveFailuresLast24h >= 10 ? 'critical' : 'warning',
+        code: 'live_failures_recent',
+        message: `${streamPerformance.summary.liveFailuresLast24h} falha(s) de live nas ultimas 24h.`,
+      });
     }
     if (recordings._count.id > 0 && !recordings._max.startedAt) {
       alerts.push({ level: 'warning', code: 'recording_without_last_segment', message: 'Gravacoes sem ultimo segmento detectado.' });
@@ -248,6 +264,13 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         activeRecordingCount: recordingRuntime?.activeCount ?? activeRecordings,
         recordingCapacityStatus: recordingCapacity.status,
         recordingCapacityEnforced,
+        streamHighCpuRiskCameras: streamPerformance?.summary?.highCpuRiskCameras ?? 0,
+        streamLiveTranscodeLikely: streamPerformance?.summary?.liveTranscodeLikely ?? 0,
+        streamLiveFailuresLast24h: streamPerformance?.summary?.liveFailuresLast24h ?? 0,
+        streamMediaMtxReaders: streamPerformance?.summary?.mediaMtxReaders ?? 0,
+        streamOptimizationSafeActions: streamPerformance?.optimizationPlan?.safeActionCount ?? 0,
+        recordingGapSecondsLast24h: streamPerformance?.summary?.recordingGapSecondsLast24h ?? 0,
+        recordingAttentionCameras: streamPerformance?.summary?.camerasWithRecordingAttention ?? 0,
         activeUsers,
         diskUsagePercent: disk?.usagePercent ?? null,
         alerts,
@@ -286,6 +309,7 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
           capacity: recordingCapacity,
           capacityEnforced: recordingCapacityEnforced,
         },
+        streams: streamPerformance,
         ai: {
           autoStartEnabled: String(process.env.AI_AUTO_START_ENABLED ?? 'true') !== 'false',
           usesMediamtx: String(process.env.AI_USE_MEDIAMTX ?? 'false') === 'true',
@@ -331,6 +355,47 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
       return typeof manager.getRuntimeSummary === 'function' ? manager.getRuntimeSummary() : null;
     } catch {
       return null;
+    }
+  }
+
+  private async getStreamPerformanceSummary() {
+    try {
+      const advisor = this.moduleRef.get(StreamResourceAdvisorService, { strict: false });
+      const report = await advisor.getFleetReport();
+      return {
+        generatedAt: report.generatedAt,
+        summary: report.summary,
+        recommendations: report.recommendations.slice(0, 8).map((item: any) => ({
+          code: item.code,
+          severity: item.severity,
+          message: item.message,
+          action: item.action,
+          cameras: Array.isArray(item.cameras) ? item.cameras.slice(0, 8) : [],
+        })),
+        optimizationPlan: {
+          safeActionCount: report.optimizationPlan.safeActionCount,
+          manualActionCount: report.optimizationPlan.manualActionCount,
+          canApplySafely: report.optimizationPlan.canApplySafely,
+        },
+      };
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : String(error),
+        summary: {
+          highCpuRiskCameras: 0,
+          liveTranscodeLikely: 0,
+          liveFailuresLast24h: 0,
+          mediaMtxReaders: 0,
+          recordingGapSecondsLast24h: 0,
+          camerasWithRecordingAttention: 0,
+        },
+        recommendations: [],
+        optimizationPlan: {
+          safeActionCount: 0,
+          manualActionCount: 0,
+          canApplySafely: false,
+        },
+      };
     }
   }
 

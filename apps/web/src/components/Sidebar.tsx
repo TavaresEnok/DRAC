@@ -3,12 +3,13 @@ import { motion } from 'framer-motion';
 import {
   Monitor, PlaySquare,
   Camera, Settings,
-  Gauge, ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
-  Server, Users, Radar, Brain
+  Gauge, Activity, ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
+  Server, Users, Radar, Brain, FolderKey, ShieldCheck, Search, Sun, Moon
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSidebarStore } from '../store/sidebarStore';
 import { useAuthStore } from '../store/authStore';
+import { useThemeStore } from '../store/themeStore';
 
 const NAV_SECTIONS = [
   {
@@ -17,7 +18,7 @@ const NAV_SECTIONS = [
     items: [
       { path: '/live', label: 'Ao Vivo', icon: Monitor },
       { path: '/playback', label: 'Reprodução', icon: PlaySquare },
-      { path: '/ai', label: 'IA', icon: Brain },
+      { path: '/ai', label: 'Inteligência', icon: Brain },
     ],
   },
   {
@@ -26,6 +27,7 @@ const NAV_SECTIONS = [
     items: [
       { path: '/cameras', label: 'Câmeras', icon: Camera },
       { path: '/storage', label: 'Armazenamento', icon: Gauge },
+      { path: '/performance', label: 'Desempenho', icon: Activity },
     ],
   },
   {
@@ -33,6 +35,8 @@ const NAV_SECTIONS = [
     icon: Users,
     items: [
       { path: '/users', label: 'Usuários', icon: Users },
+      { path: '/groups', label: 'Grupos', icon: FolderKey },
+      { path: '/roles', label: 'Funções', icon: ShieldCheck },
       { path: '/settings', label: 'Configurações', icon: Settings },
     ],
   },
@@ -45,10 +49,18 @@ const ROLE_COLOR: Record<string, string> = {
   operator:   'text-[hsl(var(--muted-foreground))]',
 };
 
-export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
+export function Sidebar({
+  onAtalhosOpen,
+  onSearchOpen,
+}: {
+  onAtalhosOpen?: () => void;
+  onSearchOpen?: () => void;
+}) {
   const { isExpanded, toggle } = useSidebarStore();
   const { user, logout } = useAuthStore();
+  const { theme, setTheme } = useThemeStore();
   const [location] = useLocation();
+  const isDark = theme === 'dark' || theme === 'dim';
 
   const roleColor = ROLE_COLOR[user?.role ?? 'operator'] ?? ROLE_COLOR.operator;
   const visibleSections = NAV_SECTIONS
@@ -147,15 +159,33 @@ export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
 
       {/* ── Bottom controls ── */}
       <div className="sidebar-footer px-2 py-2 shrink-0 space-y-2">
-        {/* Keyboard shortcuts — only when expanded */}
+        <div className={`grid gap-1.5 ${isExpanded ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          <button
+            onClick={onSearchOpen}
+            className="sidebar-footer-btn flex h-9 items-center justify-center gap-2 rounded-lg text-[hsl(var(--muted-foreground))] transition-colors hover:text-sidebar-foreground"
+            title="Buscar"
+            data-testid="button-command-palette"
+          >
+            <Search className="h-3.5 w-3.5 shrink-0" />
+            {isExpanded && <span className="text-[11px]">Buscar</span>}
+          </button>
+          <button
+            onClick={() => setTheme(isDark ? 'light' : 'dark')}
+            className="sidebar-footer-btn flex h-9 items-center justify-center gap-2 rounded-lg text-[hsl(var(--muted-foreground))] transition-colors hover:text-sidebar-foreground"
+            title={isDark ? 'Modo claro' : 'Modo escuro'}
+          >
+            {isDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+            {isExpanded && <span className="text-[11px]">Tema</span>}
+          </button>
+        </div>
         {isExpanded && (
           <button
             onClick={onAtalhosOpen}
-            className="sidebar-footer-btn w-full flex items-center gap-3 h-10 px-3 rounded-xl text-[hsl(var(--muted-foreground))] hover:text-sidebar-foreground transition-colors"
+            className="sidebar-footer-btn flex h-8 w-full items-center gap-2 rounded-lg px-3 text-[hsl(var(--muted-foreground))] transition-colors hover:text-sidebar-foreground"
           >
-            <Keyboard className="w-4 h-4 shrink-0" />
-            <span className="text-[12.5px]">Atalhos</span>
-            <span className="ml-auto font-mono text-[9px] text-[hsl(var(--muted-foreground)_/_0.6)] bg-[hsl(var(--border)_/_0.7)] px-1.5 py-0.5 rounded-md">?</span>
+            <Keyboard className="h-3.5 w-3.5 shrink-0" />
+            <span className="text-[11px]">Atalhos</span>
+            <span className="ml-auto font-mono text-[9px] opacity-60">?</span>
           </button>
         )}
 

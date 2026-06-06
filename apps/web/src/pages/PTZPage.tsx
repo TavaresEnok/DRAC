@@ -306,6 +306,7 @@ export default function PTZPage() {
                 className="absolute inset-0 h-full w-full"
                 muted
                 showOverlay
+                aiEnabled={selectedCam.aiEnabled}
                 liveViewMode="selected"
               />
             ) : null}

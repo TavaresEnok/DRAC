@@ -27,6 +27,13 @@ import { getApiBaseUrl } from '../lib/api-base';
 import { sendPtzCommand, type PTZDirection } from '../lib/ptz';
 import { useAuthStore } from '../store/authStore';
 import { useVmsDataStore } from '../store/vmsDataStore';
+import {
+  getRecordingModeCopy,
+  normalizePreferredLiveProtocol,
+  normalizeVideoCodec,
+  type RecordingMode,
+  type VideoCodec,
+} from '../lib/camera-format';
 
 const API_URL = getApiBaseUrl();
 
@@ -38,36 +45,7 @@ const RESOLUTION_PRESETS = [
 ] as const;
 
 type CommandState = 'idle' | 'sending' | 'ok' | 'error';
-type VideoCodec = 'original' | 'h264' | 'h265' | 'mjpeg';
-type RecordingMode = 'continuous' | 'motion' | 'schedule' | 'manual';
 type LiveSourceMode = 'original' | 'economical' | 'advanced';
-
-const RECORDING_MODE_COPY: Record<RecordingMode, { label: string; detail: string; className: string }> = {
-  manual: {
-    label: 'Manual',
-    detail: 'Só grava quando o operador liga.',
-    className: 'border-slate-500/35 bg-slate-500/10 text-slate-300',
-  },
-  motion: {
-    label: 'Movimento',
-    detail: 'Armada: grava quando detectar movimento e para após o período sem movimento.',
-    className: 'border-amber-500/35 bg-amber-500/10 text-amber-300',
-  },
-  continuous: {
-    label: 'Contínua',
-    detail: 'Intenção 24h: o sistema tenta manter gravando.',
-    className: 'border-sky-500/35 bg-sky-500/10 text-sky-300',
-  },
-  schedule: {
-    label: 'Agenda',
-    detail: 'Segue janela de agenda configurada.',
-    className: 'border-indigo-500/35 bg-indigo-500/10 text-indigo-300',
-  },
-};
-
-function getRecordingModeCopy(mode?: RecordingMode | null) {
-  return RECORDING_MODE_COPY[mode ?? 'manual'] ?? RECORDING_MODE_COPY.manual;
-}
 
 type CameraConfig = {
   name: string;
@@ -103,6 +81,7 @@ type CameraConfig = {
   recordingFps: string;
   recordingBitrateKbps: string;
   audioEnabled: boolean;
+  alarmsEnabled: boolean;
   hasEdgeAi: boolean;
   motionTrigger: string;
 };
@@ -207,27 +186,10 @@ const emptyConfig: CameraConfig = {
   recordingFps: '',
   recordingBitrateKbps: '',
   audioEnabled: false,
+  alarmsEnabled: true,
   hasEdgeAi: false,
   motionTrigger: 'SYSTEM',
 };
-
-function normalizeVideoCodec(codec?: string | null): VideoCodec {
-  const value = codec?.trim().toLowerCase();
-  if (!value || value === 'original' || value === 'source' || value === 'passthrough' || value === 'pass-through') {
-    return 'original';
-  }
-  if (value === 'hevc' || value === 'h.265' || value === 'h265') return 'h265';
-  if (value === 'mjpeg' || value === 'mjpg' || value === 'jpeg') return 'mjpeg';
-  return 'h264';
-}
-
-function normalizePreferredLiveProtocol(protocol?: string | null): CameraConfig['preferredLiveProtocol'] {
-  const value = String(protocol ?? '').trim().toLowerCase();
-  if (value === 'webrtc' || value === 'hls' || value === 'llhls' || value === 'll-hls' || value === 'mjpeg') {
-    return value === 'll-hls' ? 'llhls' : value;
-  }
-  return 'webrtc';
-}
 
 function resolveLiveSourceMode(liveSubtype: string, fallbackSubtype: string): LiveSourceMode {
   const selectedSubtype = Number(liveSubtype.trim() ? liveSubtype : fallbackSubtype);
@@ -315,6 +277,16 @@ function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'neutra
       {label}
     </span>
   );
+}
+
+// Relógio do OSD isolado: atualiza a cada segundo sem re-renderizar a página inteira.
+function LiveClock({ className }: { className?: string }) {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <span className={className}>{now.toISOString().replace('T', ' ').substring(0, 19)}</span>;
 }
 
 function PtzButton({
@@ -474,6 +446,7 @@ export default function CameraDetailPage() {
           recordingFps: data.recordingFps == null ? '' : String(data.recordingFps),
           recordingBitrateKbps: data.recordingBitrateKbps == null ? '' : String(data.recordingBitrateKbps),
           audioEnabled: Boolean(data.audioEnabled),
+          alarmsEnabled: data.alarmsEnabled !== false,
           hasEdgeAi: Boolean(data.hasEdgeAi),
           motionTrigger: data.motionTrigger ?? 'SYSTEM',
         });
@@ -622,6 +595,13 @@ export default function CameraDetailPage() {
     document.body.style.overflow = '';
   }, []);
 
+  // Só trava o scroll da página quando o vídeo está com zoom (>1), para o arrasto/pan
+  // funcionar. Sem zoom, passar o mouse sobre o vídeo não deve impedir rolar a página.
+  useEffect(() => {
+    if (videoZoom > 1) lockPageScroll();
+    else unlockPageScroll();
+  }, [videoZoom, lockPageScroll, unlockPageScroll]);
+
   const updateField = <K extends keyof CameraConfig>(key: K, value: CameraConfig[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
   };
@@ -740,6 +720,9 @@ export default function CameraDetailPage() {
           recordingFps: parseOptionalPositive(form.recordingFps),
           recordingBitrateKbps: parseOptionalPositive(form.recordingBitrateKbps),
           audioEnabled: form.audioEnabled,
+          alarmsEnabled: form.alarmsEnabled,
+          hasEdgeAi: form.hasEdgeAi,
+          motionTrigger: form.motionTrigger,
         },
         {
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -1160,11 +1143,7 @@ export default function CameraDetailPage() {
               onMouseDown={handleVideoMouseDown}
               onMouseMove={handleVideoMouseMove}
               onMouseUp={handleVideoMouseUp}
-              onMouseLeave={() => {
-                handleVideoMouseUp();
-                unlockPageScroll();
-              }}
-              onMouseEnter={lockPageScroll}
+              onMouseLeave={handleVideoMouseUp}
               style={{ cursor: videoZoom > 1 ? (draggingVideo ? 'grabbing' : 'grab') : 'default', touchAction: 'none', overscrollBehavior: 'contain' }}
             >
               {cam.isOnline ? (
@@ -1179,6 +1158,7 @@ export default function CameraDetailPage() {
                     className="absolute inset-0 h-full w-full"
                     muted
                     showOverlay
+                    aiEnabled={cam.aiEnabled}
                     liveViewMode="selected"
                     onStatusChange={setLivePlayerStatus}
                   />
@@ -1192,9 +1172,7 @@ export default function CameraDetailPage() {
               </div>
               <div className="absolute bottom-2 left-2 right-2 z-10 flex justify-between">
                 <span className="rounded bg-black/60 px-1.5 text-[10px] font-mono text-white/70">{cam.ipAddress}</span>
-                <span className="rounded bg-black/60 px-1.5 text-[10px] font-mono text-white/70">
-                  {new Date().toISOString().replace('T', ' ').substring(0, 19)}
-                </span>
+                <LiveClock className="rounded bg-black/60 px-1.5 text-[10px] font-mono text-white/70" />
               </div>
             </div>
           </div>
@@ -1468,7 +1446,7 @@ export default function CameraDetailPage() {
                             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Gravação</div>
                             <div className="mt-1 text-sm font-medium text-foreground">Principal · canal {pipelineSummary?.recording?.channel ?? (form.recordingChannel || form.channel || '1')} / subtipo {pipelineSummary?.recording?.subtype ?? (form.recordingSubtype || '0')}</div>
                             <div className="mt-1 text-[11px] text-muted-foreground">
-                              Arquivo {(pipelineSummary?.recording?.targetCodec ?? 'h265').toUpperCase()} · {pipelineSummary?.recording?.enabled ? 'habilitada' : 'opcional'}
+                              Arquivo {pipelineSummary?.recording?.targetCodec ? pipelineSummary.recording.targetCodec.toUpperCase() : 'cópia da fonte'} · {pipelineSummary?.recording?.enabled ? 'habilitada' : 'opcional'}
                             </div>
                           </div>
                           <div className={cn(
@@ -1575,6 +1553,12 @@ export default function CameraDetailPage() {
                           label="Áudio habilitado"
                           description="Usa áudio no perfil operacional quando o stream suportar."
                         />
+                        <SettingsSwitch
+                          checked={form.alarmsEnabled}
+                          onChange={(value) => updateField('alarmsEnabled', value)}
+                          label="Alarmes habilitados"
+                          description="Quando desligado, esta câmera não abre novos alarmes (eventos continuam registrados)."
+                        />
                       </SettingsCard>
 
                       <SettingsCard title="Gravação">
@@ -1593,9 +1577,9 @@ export default function CameraDetailPage() {
                           <details className="rounded-lg border border-border/70 bg-card/60 px-3 py-2">
                             <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Avançado</summary>
                             <div className="mt-3 grid gap-3 border-t border-border/70 pt-3">
-                              <SettingsField label="Codec de arquivo">
-                                <SettingsSelect value="h265" disabled>
-                                  <option value="h265">H.265 / HEVC</option>
+                              <SettingsField label="Codec de arquivo" hint="A gravação arquiva o codec original da câmera (cópia, sem reconversão).">
+                                <SettingsSelect value="copy" disabled>
+                                  <option value="copy">Original da câmera (cópia)</option>
                                 </SettingsSelect>
                               </SettingsField>
                               <SettingsField label="Resolução">

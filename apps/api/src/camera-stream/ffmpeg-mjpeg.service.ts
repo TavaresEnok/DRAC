@@ -362,6 +362,21 @@ export class FfmpegMjpegService {
     }
 
     const inFlight = this.posterInFlight.get(cameraId);
+    if (cached) {
+      if (!inFlight) {
+        const refresh = this.generateLivePosterFrame(cameraId)
+          .catch((error) => {
+            this.logger.debug(`Falha ao atualizar poster live camera=${cameraId}: ${(error as Error).message}`);
+            return cached;
+          })
+          .finally(() => {
+            this.posterInFlight.delete(cameraId);
+          });
+        this.posterInFlight.set(cameraId, refresh);
+      }
+      return cached;
+    }
+
     if (inFlight) return inFlight;
 
     const promise = this.generateLivePosterFrame(cameraId).finally(() => {

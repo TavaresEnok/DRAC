@@ -14,10 +14,13 @@ export default function RelatóriosPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-6 py-3 border-b border-border shrink-0">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
+        <div className="flex items-center gap-2.5">
           <FileText className="h-4 w-4 text-primary" />
-          <h1 className="text-lg font-semibold">Relatórios</h1>
+          <div>
+            <h1 className="text-[18px] font-semibold tracking-tight">Relatórios</h1>
+            <p className="text-[11px] text-muted-foreground mt-0.5">Gere e exporte relatórios operacionais</p>
+          </div>
         </div>
       </div>
 

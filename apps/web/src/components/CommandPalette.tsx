@@ -3,7 +3,7 @@ import { useLocation } from 'wouter';
 import {
   Monitor, PlaySquare,
   Camera, Settings,
-  Gauge, LogOut, Sun, Moon, Shield, Clock, Users
+  Gauge, LogOut, Sun, Moon, Shield, Clock, Users, FolderKey, ShieldCheck
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command';
@@ -17,6 +17,8 @@ const PAGES = [
   { label: 'Câmeras', path: '/cameras', icon: Camera, description: 'Gestão e configuração de câmeras' },
   { label: 'Monitoramento', path: '/storage', icon: Gauge, description: 'Disco, retenção e saúde operacional' },
   { label: 'Usuários', path: '/users', icon: Users, description: 'Gestão de usuários' },
+  { label: 'Grupos', path: '/groups', icon: FolderKey, description: 'Câmeras e acessos por grupo' },
+  { label: 'Funções', path: '/roles', icon: ShieldCheck, description: 'Perfis e permissões' },
   { label: 'Configurações', path: '/settings', icon: Settings, description: 'Configuração do sistema' },
 ];
 
@@ -31,7 +33,7 @@ export function CommandPalette({ open, onClose }: Props) {
   const { theme, setTheme } = useThemeStore();
   const cameras = useVmsDataStore((state) => state.cameras);
   const visiblePages = PAGES.filter((page) => {
-    if (page.path === '/settings') return user?.role === 'admin';
+    if (page.path === '/settings' || page.path === '/groups' || page.path === '/roles') return user?.role === 'admin';
     if (page.path === '/users') return user?.role === 'admin' || user?.role === 'operator';
     return true;
   });

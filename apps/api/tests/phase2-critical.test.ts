@@ -5,7 +5,10 @@ import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { CameraPermissionLevel, UserRole } from '@prisma/client';
 import { AccessControlService } from '../src/access-control/access-control.service';
 import { AuthService } from '../src/auth/auth.service';
+import { AiManagerService } from '../src/ai/ai-manager.service';
+import { AiService } from '../src/ai/ai.service';
 import { CameraStreamController } from '../src/camera-stream/camera-stream.controller';
+import { StreamResourceAdvisorService } from '../src/camera-stream/stream-resource-advisor.service';
 import { CamerasController } from '../src/cameras/cameras.controller';
 import { EvidenceService } from '../src/evidence/evidence.service';
 import { RecordingsController } from '../src/recordings/recordings.controller';
@@ -13,6 +16,8 @@ import { RecordingsService } from '../src/recordings/recordings.service';
 import { UsersService } from '../src/users/users.service';
 import { PermissionsGuard } from '../src/role-permissions/permissions.guard';
 import { DEFAULT_PERMISSIONS, normalizeMatrix } from '../src/role-permissions/role-permissions.constants';
+import { assessCameraCompatibility } from '../src/cameras/helpers/camera-compatibility.helper';
+import { assessLiveReadiness } from '../src/camera-stream/helpers/live-readiness.helper';
 import type { AuthUser } from '../src/common/types/auth-user.type';
 
 type TestCase = { name: string; run: () => Promise<void> | void };
@@ -145,6 +150,97 @@ test('access-control: usuario sem permissao recebe ForbiddenException', async ()
   const viewer: AuthUser = { id: 'viewer', email: 'viewer@test.local', name: 'Viewer', role: UserRole.VIEWER };
 
   await assert.rejects(() => service.assertCanViewCamera(viewer, 'cam-1'), ForbiddenException);
+});
+
+test('camera compatibility: escolhe perfis separados e alerta substream HEVC', () => {
+  const assessment = assessCameraCompatibility({
+    selectedPath: '/cam/realmonitor?channel=1&subtype=0',
+    onvifProfileNames: ['MainStream', 'SubStream'],
+    mainMetadata: { codec: 'hevc', width: 2304, height: 1296, fps: 15 },
+    subMetadata: { codec: 'hevc', width: 704, height: 480, fps: 10 },
+    rtspAuthenticated: true,
+    onvifProfilesFound: 2,
+  });
+
+  assert.equal(assessment.detectedFamily, 'dahua');
+  assert.equal(assessment.state, 'compatible');
+  assert.match(assessment.automaticProfile.recording, /H\.265 direto/);
+  assert.equal(assessment.hints.some((hint) => hint.code === 'substream_hevc'), true);
+});
+
+test('camera compatibility: configuração ideal H264 separada não gera alerta crítico', () => {
+  const assessment = assessCameraCompatibility({
+    selectedPath: '/Streaming/Channels/101',
+    mainMetadata: { codec: 'h264', width: 1920, height: 1080, fps: 15 },
+    subMetadata: { codec: 'h264', width: 1280, height: 720, fps: 10 },
+    rtspAuthenticated: true,
+    onvifProfilesFound: 2,
+  });
+
+  assert.equal(assessment.detectedFamily, 'hikvision');
+  assert.equal(assessment.hints.some((hint) => hint.severity === 'critical'), false);
+  assert.match(assessment.automaticProfile.live, /1920x1080/);
+});
+
+test('live readiness: bloqueia mixed content WebRTC em painel HTTPS', () => {
+  const readiness = assessLiveReadiness({
+    requestOrigin: 'https://vms.exemplo.com',
+    publicAppUrl: 'https://vms.exemplo.com',
+    mediamtxEnabled: true,
+    pathReady: true,
+    whepUrl: 'http://media.exemplo.com/cam-1/whep',
+    hlsUrl: 'https://media.exemplo.com/cam-1/index.m3u8',
+    webrtcAllowOrigin: 'https://vms.exemplo.com',
+  });
+
+  assert.equal(readiness.state, 'blocked');
+  assert.equal(readiness.readyForWebrtc, false);
+  assert.equal(readiness.fallbackAvailable, true);
+  assert.equal(readiness.checks.some((check) => check.code === 'whep_mixed_content'), true);
+});
+
+test('live readiness: aprova WHEP na mesma origem segura', () => {
+  const readiness = assessLiveReadiness({
+    requestOrigin: 'https://vms.exemplo.com',
+    publicAppUrl: 'https://vms.exemplo.com',
+    mediamtxEnabled: true,
+    pathReady: true,
+    whepUrl: 'https://vms.exemplo.com/live/cam-1/whep',
+    hlsUrl: 'https://vms.exemplo.com/live/cam-1/index.m3u8',
+    webrtcAllowOrigin: 'https://vms.exemplo.com',
+  });
+
+  assert.equal(readiness.state, 'ready');
+  assert.equal(readiness.readyForWebrtc, true);
+});
+
+test('ai service: modo desativado nao tenta acessar container ausente', async () => {
+  const previous = process.env.AI_AUTO_START_ENABLED;
+  process.env.AI_AUTO_START_ENABLED = 'false';
+  let requests = 0;
+  try {
+    const service = new AiService(
+      {
+        get: () => {
+          requests += 1;
+          throw new Error('não deveria acessar');
+        },
+        post: () => {
+          requests += 1;
+          throw new Error('não deveria acessar');
+        },
+      } as any,
+      config({ aiBaseUrl: 'http://ai-service:8000' }) as any,
+    );
+
+    assert.equal((await service.getHealth()).status, 'disabled');
+    assert.equal((await service.getLatestDetections('cam-1')).status, 'disabled');
+    assert.equal((await service.heartbeatLiveViewSession('cam-1', 'session-123')).status, 'disabled');
+    assert.equal(requests, 0);
+  } finally {
+    if (previous === undefined) delete process.env.AI_AUTO_START_ENABLED;
+    else process.env.AI_AUTO_START_ENABLED = previous;
+  }
 });
 
 test('auth: login normaliza email, retorna usuario sanitizado e token assinado', async () => {
@@ -296,7 +392,7 @@ test('camera-stream controller: cria token somente apos validar permissao de vis
     },
   };
   const audit = { log: async () => order.push('audit') };
-  const controller = new CameraStreamController({} as any, {} as any, {} as any, auth as any, access as any, audit as any, commercialPolicy as any);
+  const controller = new CameraStreamController({} as any, {} as any, {} as any, auth as any, access as any, audit as any, commercialPolicy as any, {} as any);
 
   const result = await controller.createStreamToken(user, 'cam-1', { headers: {} } as any);
 
@@ -319,6 +415,127 @@ test('recordings controller: listagem de operador usa cameras acessiveis', async
   await controller.listRecordings(user, { limit: 20 } as any);
 
   assert.deepEqual(calls[0], { query: { limit: 20 }, ids: ['cam-1'] });
+});
+
+test('stream resource advisor: identifica cameras que exigem transcode e analytics acoplado', async () => {
+  const updates: any[] = [];
+  const service = new StreamResourceAdvisorService(
+    {
+      findAllInternal: async () => [{
+        id: 'cam-heavy',
+        name: 'Portaria HEVC',
+        status: 'ONLINE',
+        channel: 1,
+        subtype: 0,
+        liveChannel: 1,
+        liveSubtype: 0,
+        recordingChannel: 1,
+        recordingSubtype: 0,
+        analyticsChannel: 1,
+        analyticsSubtype: 0,
+        preferredLiveProtocol: 'webrtc',
+        streamVideoCodec: 'original',
+        recordingVideoCodec: 'h265',
+        detectedVideoCodec: 'hevc',
+        detectedWidth: 2304,
+        detectedHeight: 1296,
+        detectedFps: 15,
+        audioEnabled: true,
+        recordingEnabled: true,
+        recordingMode: 'continuous',
+        updatedAt: new Date('2026-06-04T00:00:00.000Z'),
+      }],
+      getCameraOrThrow: async () => ({
+        id: 'cam-heavy',
+        name: 'Portaria HEVC',
+        status: 'ONLINE',
+        channel: 1,
+        subtype: 0,
+        liveChannel: 1,
+        liveSubtype: 0,
+        recordingChannel: 1,
+        recordingSubtype: 0,
+        analyticsChannel: 1,
+        analyticsSubtype: 0,
+        preferredLiveProtocol: 'webrtc',
+        streamVideoCodec: 'original',
+        recordingVideoCodec: 'h265',
+        detectedVideoCodec: 'hevc',
+        detectedWidth: 2304,
+        detectedHeight: 1296,
+        detectedFps: 15,
+        audioEnabled: true,
+        recordingEnabled: true,
+        recordingMode: 'continuous',
+        updatedAt: new Date('2026-06-04T00:00:00.000Z'),
+      }),
+    } as any,
+    {
+      getPathRuntimeSummaryForCamera: async () => ({
+        pathName: 'cam_camheavy',
+        available: true,
+        ready: true,
+        readerCount: 2,
+        readers: [{ id: 'reader-1', protocol: 'webrtc', remoteAddr: '10.0.0.20:*' }],
+        bytesReceived: 100,
+        bytesSent: 200,
+        error: null,
+      }),
+      invalidateMainCodecCache: () => undefined,
+    } as any,
+    {
+      auditLog: {
+        findMany: async () => [
+          {
+            createdAt: new Date(),
+            metadata: {
+              protocol: 'webrtc',
+              stage: 'ice',
+              reason: 'ICE failed',
+              state: 'failed',
+            },
+          },
+          { createdAt: new Date(), metadata: { protocol: 'webrtc', stage: 'startup', reason: 'sem resposta' } },
+          { createdAt: new Date(), metadata: { protocol: 'webrtc', stage: 'startup', reason: 'sem resposta' } },
+        ],
+      },
+      recording: {
+        findMany: async () => [],
+        count: async (args: any) => args.where?.endedAt === null ? 0 : 0,
+        findFirst: async () => null,
+      },
+      camera: {
+        update: async (args: any) => {
+          updates.push(args);
+          return args;
+        },
+      },
+    } as any,
+  );
+
+  const report = await service.getFleetReport(['cam-heavy']);
+  const camera = report.cameras[0];
+
+  assert.equal(report.summary.totalCameras, 1);
+  assert.equal(report.summary.liveTranscodeLikely, 1);
+  assert.equal(report.summary.audioTranscodeLikely, 1);
+  assert.equal(report.summary.highCpuRiskCameras, 1);
+  assert.equal(camera.profiles.live.transcodeForBrowser, true);
+  assert.equal(camera.profiles.analytics.separatedFromLive, false);
+  assert.equal(camera.profiles.recording.copyFriendly, true);
+  assert.equal(camera.operations.live.failuresLast24h, 3);
+  assert.equal(camera.operations.recording.state, 'attention');
+  assert.equal(camera.resource.findings.some((item) => item.code === 'hevc_live_transcode'), true);
+  assert.equal(camera.resource.findings.some((item) => item.code === 'analytics_reuses_live'), true);
+  assert.equal(camera.resource.findings.some((item) => item.code === 'repeated_live_failures'), true);
+  assert.equal(camera.resource.findings.some((item) => item.code === 'recording_recent_segments_missing' || item.code === 'recording_large_gap'), true);
+  assert.equal(report.recommendations.some((item) => item.code === 'multi_reader_transcode_pressure'), true);
+  assert.equal(report.optimizationPlan.safeActionCount, 1);
+
+  const applied = await service.applySafeOptimizations(['cam-heavy']);
+
+  assert.equal(applied.totalChanged, 1);
+  assert.deepEqual(updates[0].data, { analyticsSubtype: 1 });
 });
 
 test('recordings controller: play-token valida camera da gravacao e grava cookie httpOnly', async () => {
@@ -516,11 +733,205 @@ test('group tenancy: admin de grupo nao vincula usuario fora do proprio grupo', 
   );
 });
 
+test('ai intelligence: agrega health e cameras sem iniciar processadores', async () => {
+  const originalFilters = {
+    AI_FORCE_SINGLE_CAMERA: process.env.AI_FORCE_SINGLE_CAMERA,
+    AI_SINGLE_CAMERA_ID: process.env.AI_SINGLE_CAMERA_ID,
+    AI_ENABLED_CAMERA_IDS: process.env.AI_ENABLED_CAMERA_IDS,
+    AI_ACTIVE_CAMERA_IDS: process.env.AI_ACTIVE_CAMERA_IDS,
+    AI_ANALYTICS_CAMERA_IDS: process.env.AI_ANALYTICS_CAMERA_IDS,
+  };
+  delete process.env.AI_FORCE_SINGLE_CAMERA;
+  delete process.env.AI_SINGLE_CAMERA_ID;
+  delete process.env.AI_ENABLED_CAMERA_IDS;
+  delete process.env.AI_ACTIVE_CAMERA_IDS;
+  delete process.env.AI_ANALYTICS_CAMERA_IDS;
+
+  try {
+    const settingsRow = { id: 'global', enabled: true, mode: 'general', updatedAt: new Date('2026-06-04T00:00:00.000Z') };
+    const camerasService = {
+      findAllInternal: async () => [{
+        id: 'cam-ai',
+        name: 'Entrada',
+        ip: '10.0.0.10',
+        status: 'ONLINE',
+        aiEnabled: true,
+        channel: 1,
+        subtype: 0,
+        liveChannel: 1,
+        liveSubtype: 0,
+        recordingChannel: 1,
+        recordingSubtype: 0,
+        analyticsChannel: 1,
+        analyticsSubtype: 1,
+        preferredLiveProtocol: 'webrtc',
+        streamVideoCodec: 'h264',
+        recordingVideoCodec: 'h265',
+        recordingMode: 'continuous',
+        recordingEnabled: true,
+      }],
+    };
+    const aiService = {
+      getHealth: async () => ({
+        status: 'online',
+        active_processors: ['cam-ai'],
+        static_profiles: {
+          general: {
+            model: 'yolo26n',
+            runtime: 'openvino_cpu',
+            precision: 'int8',
+            analysis_width: 960,
+            analysis_height: 540,
+            imgsz: 640,
+            detection_fps: 4,
+            classes: ['person', 'bicycle', 'car', 'motorcycle'],
+            class_ids: [0, 1, 2, 3],
+            tracker: 'bytetrack',
+            overlay_mode: 'triangle',
+            overlay_ttl_ms: 600,
+            lost_ttl_ms: 600,
+          },
+        },
+        model_registry: {
+          detectors: {
+            general: {
+              model: 'yolo26n',
+              active_precision: 'int8',
+              available_input_sizes: [640],
+              last_selected_input_size: 640,
+              pool_busy_drops: 0,
+              inference_threads: 8,
+              infer_workers: 1,
+              active_class_ids: [0, 1, 2, 3],
+              openvino_device: 'CPU',
+            },
+          },
+        },
+        processors: {
+          'cam-ai': {
+            running: true,
+            analysis_type: 'general',
+            advanced_analysis_type: 'general',
+            process_fps: 4,
+            advanced_process_fps: 4,
+            capture_frames_enqueued: 100,
+            capture_frames_dropped: 0,
+            source: {
+              kind: 'direct_camera',
+              usesMediaMtx: false,
+              audioRequested: false,
+              analyticsSourceUrlSanitized: 'rtsp://entrada:***@10.0.0.10:554/cam/realmonitor?channel=1&subtype=1',
+              analyticsSourceCodec: 'h264',
+            },
+            stream: {
+              codec: 'h264',
+              width: 640,
+              height: 360,
+              capture_fps: 3.9,
+              inference_fps: 3.8,
+              frame_age_avg_ms: 80,
+              latest_frame_only: true,
+              buffer_size: 1,
+              queue_size: 0,
+              dropped_frames: 0,
+            },
+            live_view: {
+              active_sessions: 1,
+              feature_flags: { qos_live_enabled: true, adaptive_enabled_for_camera: false },
+              adaptive: { metrics: {} },
+            },
+            performance: {
+              advanced_infer_runs: 20,
+              advanced_infer_errors: 0,
+              advanced_infer_avg_ms: 22,
+              advanced_infer_p95_ms: 30,
+              pool_busy_drops: 0,
+              overlay_payload_frames: 10,
+              overlay_empty_frames: 2,
+              overlay_payload_ratio: 0.83,
+            },
+          },
+        },
+      }),
+      getLatestDetections: async () => ({ status: 'ok', detections: [] }),
+      stopAnalysis: async () => ({ status: 'stopped' }),
+      startAnalysisWithConfig: async () => ({ status: 'started' }),
+    };
+    const prisma = { aiSettings: { upsert: async () => settingsRow } };
+    const commercialPolicy = { isAllowed: async () => true };
+    const service = new AiManagerService(
+      camerasService as any,
+      aiService as any,
+      {} as any,
+      prisma as any,
+      {} as any,
+      commercialPolicy as any,
+    );
+
+    const overview = await service.getIntelligenceOverview(['cam-ai']);
+
+    assert.equal(overview.status, 'ok');
+    assert.equal(overview.summary.runningProcessors, 1);
+    assert.equal(overview.summary.directCameraSources, 1);
+    assert.equal(overview.summary.mediaMtxSources, 0);
+    assert.equal(overview.cameras[0].source.directCamera, true);
+    assert.equal(overview.cameras[0].profiles.analytics.separatedFromLive, true);
+    assert.equal(overview.cameras[0].health.state, 'healthy');
+    assert.equal(overview.model.profile.model, 'yolo26n');
+  } finally {
+    for (const [key, value] of Object.entries(originalFilters)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('ai intelligence: sinaliza camera habilitada sem processador', async () => {
+  const settingsRow = { id: 'global', enabled: true, mode: 'general', updatedAt: new Date('2026-06-04T00:00:00.000Z') };
+  const service = new AiManagerService(
+    {
+      findAllInternal: async () => [{
+        id: 'cam-missing',
+        name: 'Portao',
+        ip: '10.0.0.11',
+        status: 'ONLINE',
+        aiEnabled: true,
+        channel: 1,
+        subtype: 0,
+        liveChannel: 1,
+        liveSubtype: 0,
+        recordingChannel: 1,
+        recordingSubtype: 0,
+        analyticsChannel: 1,
+        analyticsSubtype: 1,
+        preferredLiveProtocol: 'webrtc',
+        recordingEnabled: true,
+      }],
+    } as any,
+    { getHealth: async () => ({ status: 'online', processors: {} }) } as any,
+    {} as any,
+    { aiSettings: { upsert: async () => settingsRow } } as any,
+    {} as any,
+    { isAllowed: async () => true } as any,
+  );
+
+  const overview = await service.getIntelligenceOverview(['cam-missing']);
+
+  assert.equal(overview.status, 'critical');
+  assert.equal(overview.summary.expectedProcessors, 1);
+  assert.equal(overview.summary.runningProcessors, 0);
+  assert.equal(overview.cameras[0].health.state, 'stopped');
+  assert.equal(overview.recommendations.some((item) => item.code === 'missing_processors'), true);
+});
+
 test('permissions audit: rotas sensiveis mantem RequirePermission', () => {
   assertRoutePermission('src/settings/settings.controller.ts', "@Patch()", 'serverConfig');
   assertRoutePermission('src/role-permissions/role-permissions.controller.ts', "@Patch(':role')", 'roleManage');
   assertRoutePermission('src/camera-stream/camera-stream.controller.ts', "@Post(':cameraId/token')", 'liveView');
   assertRoutePermission('src/camera-stream/camera-stream.controller.ts', "@Post(':cameraId/live-failure')", 'liveView');
+  assertRoutePermission('src/camera-stream/camera-stream.controller.ts', "@Get('resource-diagnostics')", 'liveView');
+  assertRoutePermission('src/camera-stream/camera-stream.controller.ts', "@Get('optimization-plan')", 'cameraConfig');
+  assertRoutePermission('src/camera-stream/camera-stream.controller.ts', "@Post('optimization/apply-safe')", 'cameraConfig');
   assertRoutePermission('src/ptz/ptz.controller.ts', "@Post(':cameraId/move')", 'ptzControl');
   assertRoutePermission('src/recordings/recordings.controller.ts', "@Post('recordings/:id/play-token')", 'playback');
   assertRoutePermission('src/recordings/recordings.controller.ts', "@Post('recordings/:id/compatible/prepare')", 'playback');

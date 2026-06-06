@@ -23,11 +23,13 @@ const PTZPage = lazy(() => import('./pages/PTZPage'));
 const InvestigationPage = lazy(() => import('./pages/InvestigationPage'));
 const EvidencePage = lazy(() => import('./pages/EvidencePage'));
 const StoragePage = lazy(() => import('./pages/StoragePage'));
+const PerformancePage = lazy(() => import('./pages/PerformancePage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const AIPage = lazy(() => import('./pages/AIPage'));
 const CameraDetailPage = lazy(() => import('./pages/CameraDetailPage'));
 const WallModePage = lazy(() => import('./pages/WallModePage'));
 const UsersPage = lazy(() => import('./pages/UsersPage'));
+const GroupsPage = lazy(() => import('./pages/GroupsPage'));
 const RolesPage = lazy(() => import('./pages/RolesPage'));
 const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 const AuditLogsPage = lazy(() => import('./pages/AuditLogsPage'));
@@ -118,6 +120,9 @@ function AppRoutes() {
       <Route path="/storage">
         {() => <ProtectedRoute component={StoragePage} />}
       </Route>
+      <Route path="/performance">
+        {() => <ProtectedRoute component={PerformancePage} />}
+      </Route>
       <Route path="/settings">
         {() => <ProtectedRoute component={SettingsPage} adminOnly />}
       </Route>
@@ -132,6 +137,9 @@ function AppRoutes() {
       </Route>
       <Route path="/users">
         {() => <ProtectedRoute component={UsersPage} />}
+      </Route>
+      <Route path="/groups">
+        {() => <ProtectedRoute component={GroupsPage} adminOnly />}
       </Route>
       <Route path="/roles">
         {() => <ProtectedRoute component={RolesPage} adminOnly />}

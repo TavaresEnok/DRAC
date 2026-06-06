@@ -42,7 +42,14 @@ export class AiService {
     return token ? { 'x-service-token': token } : undefined;
   }
 
+  private isDisabled() {
+    return String(process.env.AI_AUTO_START_ENABLED ?? 'true').trim().toLowerCase() === 'false';
+  }
+
   async getHealth() {
+    if (this.isDisabled()) {
+      return { status: 'disabled', processors: {} };
+    }
     try {
       const response: any = await firstValueFrom(this.httpService.get(`${this.aiBaseUrl}/health`));
       return response.data;
@@ -136,7 +143,23 @@ export class AiService {
     }
   }
 
+  // Busca detecções de várias câmeras numa única chamada. A página Live faz polling
+  // de overlay por câmera; sem o lote, uma grade 4x4 geraria 32 req/s e estouraria o
+  // rate-limit do endpoint individual. Aqui o cliente faz 1 requisição por ciclo.
+  async getLatestDetectionsBatch(cameraIds: string[], maxAgeMs = 5000, limit = 12) {
+    const cameras: Record<string, any> = {};
+    await Promise.all(
+      cameraIds.map(async (cameraId) => {
+        cameras[cameraId] = await this.getLatestDetections(cameraId, maxAgeMs, limit);
+      }),
+    );
+    return { cameras, generatedAt: new Date().toISOString() };
+  }
+
   async getLatestDetections(cameraId: string, maxAgeMs = 5000, limit = 12) {
+    if (this.isDisabled()) {
+      return { status: 'disabled', camera_id: cameraId, detections: [] };
+    }
     try {
       const response: any = await firstValueFrom(this.httpService.get(
         `${this.aiBaseUrl}/detections/latest/${cameraId}`,
@@ -153,6 +176,9 @@ export class AiService {
   }
 
   async startLiveViewSession(cameraId: string, sessionId: string, ttlSeconds = 20, viewMode: 'selected' | 'grid' = 'grid') {
+    if (this.isDisabled()) {
+      return { status: 'disabled', camera_id: cameraId, session_id: sessionId };
+    }
     try {
       const response: any = await firstValueFrom(this.httpService.post(
         `${this.aiBaseUrl}/live-view/start/${cameraId}`,
@@ -167,6 +193,9 @@ export class AiService {
   }
 
   async heartbeatLiveViewSession(cameraId: string, sessionId: string, ttlSeconds = 20, viewMode: 'selected' | 'grid' = 'grid') {
+    if (this.isDisabled()) {
+      return { status: 'disabled', camera_id: cameraId, session_id: sessionId };
+    }
     try {
       const response: any = await firstValueFrom(this.httpService.post(
         `${this.aiBaseUrl}/live-view/heartbeat/${cameraId}`,
@@ -181,6 +210,9 @@ export class AiService {
   }
 
   async stopLiveViewSession(cameraId: string, sessionId: string) {
+    if (this.isDisabled()) {
+      return { status: 'disabled', camera_id: cameraId, session_id: sessionId };
+    }
     try {
       const response: any = await firstValueFrom(this.httpService.post(
         `${this.aiBaseUrl}/live-view/stop/${cameraId}`,

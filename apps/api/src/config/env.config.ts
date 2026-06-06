@@ -23,6 +23,13 @@ export const envConfig = () => ({
   recordingMinFreePercent: Number(process.env.RECORDING_MIN_FREE_PERCENT ?? 5),
   ffmpegRecordingFormat: process.env.FFMPEG_RECORDING_FORMAT ?? 'mp4',
   ffmpegRecordingCopyCodec: process.env.FFMPEG_RECORDING_COPY_CODEC ?? 'true',
+  // Política de codec da gravação: 'copy' (padrão) arquiva o bitstream original
+  // (H.264 ou H.265) sem reencode. 'h265'/'h264' transcodam quando a fonte difere.
+  // Retrocompat: quem setou FFMPEG_RECORDING_COPY_CODEC=false mantém o antigo
+  // comportamento de forçar H.265.
+  recordingCodecMode:
+    process.env.FFMPEG_RECORDING_CODEC_MODE ??
+    (process.env.FFMPEG_RECORDING_COPY_CODEC === 'false' ? 'h265' : 'copy'),
   recordingControlMode: process.env.RECORDING_CONTROL_MODE ?? 'local',
   workerCommandChannel: process.env.WORKER_COMMAND_CHANNEL ?? 'camera:commands',
   recordingThumbnailSecond: Number(process.env.RECORDING_THUMBNAIL_SECOND ?? 2),
@@ -64,6 +71,7 @@ export const envConfig = () => ({
   mediaMtxSourceOnDemand: String(process.env.MEDIAMTX_SOURCE_ON_DEMAND ?? 'false') === 'true',
   mediaMtxSourceOnDemandStartTimeout: process.env.MEDIAMTX_SOURCE_ON_DEMAND_START_TIMEOUT ?? '6s',
   mediaMtxSourceOnDemandCloseAfter: process.env.MEDIAMTX_SOURCE_ON_DEMAND_CLOSE_AFTER ?? '5m',
+  mediaMtxRunOnDemandCloseAfter: process.env.MEDIAMTX_RUN_ON_DEMAND_CLOSE_AFTER ?? '5m',
   mediaMtxWarmPathsOnBoot: String(process.env.MEDIAMTX_WARM_PATHS_ON_BOOT ?? 'true') !== 'false',
   adminEmail: process.env.ADMIN_EMAIL ?? 'admin@local.dev',
   adminPassword: process.env.ADMIN_PASSWORD ?? '',

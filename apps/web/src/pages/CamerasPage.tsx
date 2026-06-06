@@ -8,10 +8,29 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Camera, useVmsDataStore } from '../store/vmsDataStore';
+import { CameraEditSheet } from '../components/CameraEditSheet';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useLocation } from 'wouter';
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
+import { toast } from '../hooks/use-toast';
+import {
+  getRecordingModeCopy,
+  normalizePreferredLiveProtocol,
+  normalizeVideoCodec,
+  type PreferredLiveProtocol,
+  type VideoCodec,
+} from '../lib/camera-format';
 const STATUSES = ['all', 'online', 'recording', 'motion', 'alarm', 'offline', 'no_signal', 'maintenance'] as const;
 const STATUS_LABEL: Record<(typeof STATUSES)[number], string> = {
   all: 'Todos os status',
@@ -34,6 +53,18 @@ const STATUS_BADGE: Record<string, string> = {
   maintenance: 'bg-[hsl(var(--chart-2)_/_0.12)] text-[hsl(var(--chart-2))] border-[hsl(var(--chart-2)_/_0.3)]',
 };
 
+const STATUS_DOT: Record<string, string> = {
+  online: 'bg-[hsl(var(--status-online))]',
+  recording: 'bg-[hsl(var(--status-rec))] rec-pulse',
+  motion: 'bg-[hsl(var(--status-motion))]',
+  alarm: 'bg-[hsl(var(--status-alarm))] rec-pulse',
+  offline: 'bg-[hsl(var(--status-offline))]',
+  no_signal: 'bg-[hsl(var(--status-offline))]',
+  maintenance: 'bg-[hsl(var(--status-warning))]',
+};
+
+const STATUS_PILLS = ['all', 'online', 'recording', 'motion', 'alarm', 'offline'] as const;
+
 function getRequestErrorMessage(error: unknown, fallback: string) {
   if (axios.isAxiosError(error)) {
     const message = error.response?.data?.message;
@@ -45,48 +76,9 @@ function getRequestErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
-type VideoCodec = 'original' | 'h264' | 'h265' | 'mjpeg';
-type RecordingMode = Camera['recordingMode'];
-type PreferredLiveProtocol = 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
-
 const DEFAULT_CAMERA_CHANNEL = 1;
 const MAIN_STREAM_SUBTYPE = 0;
 const ANALYTICS_STREAM_SUBTYPE = 1;
-
-const RECORDING_MODE_COPY: Record<RecordingMode, { label: string; detail: string; className: string }> = {
-  manual: {
-    label: 'Manual',
-    detail: 'Só grava quando o operador liga.',
-    className: 'border-slate-500/35 bg-slate-500/10 text-slate-300',
-  },
-  motion: {
-    label: 'Movimento',
-    detail: 'Armada: grava quando detectar movimento.',
-    className: 'border-amber-500/35 bg-amber-500/10 text-amber-300',
-  },
-  continuous: {
-    label: 'Contínua',
-    detail: 'Intenção 24h: o sistema tenta manter gravando.',
-    className: 'border-sky-500/35 bg-sky-500/10 text-sky-300',
-  },
-  schedule: {
-    label: 'Agenda',
-    detail: 'Segue janela de agenda configurada.',
-    className: 'border-indigo-500/35 bg-indigo-500/10 text-indigo-300',
-  },
-};
-
-function getRecordingModeCopy(mode?: RecordingMode | null) {
-  return RECORDING_MODE_COPY[mode ?? 'manual'] ?? RECORDING_MODE_COPY.manual;
-}
-
-function normalizeVideoCodec(codec?: string | null): VideoCodec {
-  const value = codec?.trim().toLowerCase();
-  if (!value || value === 'original' || value === 'source' || value === 'passthrough' || value === 'pass-through') return 'original';
-  if (value === 'hevc' || value === 'h.265' || value === 'h265') return 'h265';
-  if (value === 'mjpeg' || value === 'mjpg' || value === 'jpeg') return 'mjpeg';
-  return 'h264';
-}
 
 function formatLiveProtocol(protocol?: string | null) {
   switch (String(protocol ?? '').toLowerCase()) {
@@ -142,23 +134,21 @@ function formatRecordingMode(mode: string) {
   }
 }
 
-function normalizePreferredLiveProtocol(protocol?: string | null): PreferredLiveProtocol {
-  const value = String(protocol ?? '').trim().toLowerCase();
-  if (value === 'webrtc' || value === 'hls' || value === 'llhls' || value === 'll-hls' || value === 'mjpeg') {
-    return value === 'll-hls' ? 'llhls' : value;
-  }
-  return 'webrtc';
-}
+type LocationOption = { id: string; name: string; siteId?: string | null };
 
 function WizardModal({
   onClose,
-  zones,
+  sites,
+  areas,
   onCreated,
   onTestConnection,
 }: {
   onClose: () => void;
-  zones: string[];
+  sites: LocationOption[];
+  areas: LocationOption[];
   onCreated: (payload: {
+    siteId?: string;
+    areaId?: string;
     name: string;
     ip: string;
     rtspPort: number;
@@ -262,6 +252,20 @@ function WizardModal({
       durationMs: number;
       detail?: string | null;
     }>;
+    compatibility?: {
+      state: 'ideal' | 'compatible' | 'attention';
+      detectedFamily: string;
+      confidence: 'high' | 'medium' | 'low';
+      summary: string;
+      automaticProfile: { live: string; recording: string; analytics: string };
+      hints: Array<{
+        code: string;
+        severity: 'info' | 'warning' | 'critical';
+        title: string;
+        message: string;
+        action?: string;
+      }>;
+    };
   }>;
 }) {
   const [step, setStep] = useState(0);
@@ -272,7 +276,6 @@ function WizardModal({
     bitrateKbps: number | null;
   } | null>(null);
   const steps = ['Conexão', 'Identidade', 'Gravação', 'Confirmar'];
-  const validZones = zones.filter((zone) => zone !== 'all');
   const [form, setForm] = useState({
     ip: '',
     port: '554',
@@ -286,8 +289,8 @@ function WizardModal({
     channel: '1',
     subtype: '0',
     name: '',
-    zone: validZones[0] ?? '',
-    building: validZones[0] ?? '',
+    siteId: '',
+    areaId: '',
     recordingMode: 'continuous',
     retentionDays: '90',
     preferredRtspTransport: 'tcp',
@@ -309,6 +312,7 @@ function WizardModal({
   const [testingStage, setTestingStage] = useState('');
   const [autoProfiles, setAutoProfiles] = useState<Awaited<ReturnType<typeof onTestConnection>>['autoProfiles'] | null>(null);
   const [probeSteps, setProbeSteps] = useState<NonNullable<Awaited<ReturnType<typeof onTestConnection>>['probeSteps']>>([]);
+  const [compatibility, setCompatibility] = useState<Awaited<ReturnType<typeof onTestConnection>>['compatibility'] | null>(null);
 
   const updateField = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -373,13 +377,16 @@ function WizardModal({
       const recordingBitrateKbps = parseOptionalPositive(form.recordingBitrateKbps);
 
       if (adjusted.length) {
-        window.alert(
-          `Alguns valores foram ajustados para o máximo detectado da câmera:\n- ${adjusted.join('\n- ')}`,
-        );
+        toast({
+          title: 'Valores ajustados ao máximo detectado',
+          description: adjusted.join(' | '),
+        });
       }
 
       await onCreated({
         name: form.name.trim(),
+        siteId: form.siteId || undefined,
+        areaId: form.areaId || undefined,
         ip: form.ip.trim(),
         rtspPort: Number(form.port),
         onvifPort: form.onvifPort.trim() ? Number(form.onvifPort) : undefined,
@@ -415,7 +422,11 @@ function WizardModal({
       });
       onClose();
     } catch (error) {
-      window.alert(getRequestErrorMessage(error, 'Não foi possível adicionar a câmera.'));
+      toast({
+        title: 'Erro ao adicionar câmera',
+        description: getRequestErrorMessage(error, 'Não foi possível adicionar a câmera.'),
+        variant: 'destructive',
+      });
     } finally {
       setIsSaving(false);
     }
@@ -423,14 +434,16 @@ function WizardModal({
 
   const handleTestConnection = async (showResult = true): Promise<boolean> => {
     if (!form.ip.trim() || !form.port.trim()) {
-      window.alert('Preencha IP e porta RTSP antes de testar conexão.');
+      toast({ title: 'Dados incompletos', description: 'Preencha IP e porta RTSP antes de testar conexão.', variant: 'destructive' });
       return false;
     }
     setIsTesting(true);
     setTestingStage('Conectando portas RTSP/ONVIF...');
+    const stageTimers = [
+      window.setTimeout(() => setTestingStage((current) => current || 'Lendo perfis de vídeo...'), 300),
+      window.setTimeout(() => setTestingStage('Testando stream principal e substream...'), 1200),
+    ];
     try {
-      window.setTimeout(() => setTestingStage((current) => current || 'Lendo perfis de vídeo...'), 300);
-      window.setTimeout(() => setTestingStage('Testando stream principal e substream...'), 1200);
       const result = await onTestConnection({
         ip: form.ip.trim(),
         rtspPort: Number(form.port),
@@ -448,6 +461,7 @@ function WizardModal({
       if (result.detectedStream?.codec) updateField('streamVideoCodec', normalizeVideoCodec(result.detectedStream.codec));
       setAutoProfiles(result.autoProfiles ?? null);
       setProbeSteps(result.probeSteps ?? []);
+      setCompatibility(result.compatibility ?? null);
       setDetectedMax({
         width: typeof result.detectedStream?.width === 'number' ? result.detectedStream.width : null,
         height: typeof result.detectedStream?.height === 'number' ? result.detectedStream.height : null,
@@ -467,16 +481,17 @@ function WizardModal({
       if (result.detectedOnvifProfileToken) updateField('onvifProfileToken', result.detectedOnvifProfileToken);
       if (showResult) {
         if (result.rtspAuthOk || result.rtspReachable || result.rtspReachableAny) {
-          window.alert('Câmera detectada. O DRAC escolheu automaticamente live principal, gravação principal e substream para IA.');
+          toast({ title: 'Câmera detectada', description: 'O DRAC escolheu automaticamente live principal, gravação principal e substream para IA.' });
         } else {
-          window.alert('Não foi possível confirmar o vídeo desta câmera. Verifique IP, porta, usuário e senha.');
+          toast({ title: 'Vídeo não confirmado', description: 'Verifique IP, porta, usuário e senha.', variant: 'destructive' });
         }
       }
       return true;
     } catch (error) {
-      window.alert(getRequestErrorMessage(error, 'Falha ao testar conexão.'));
+      toast({ title: 'Falha ao testar conexão', description: getRequestErrorMessage(error, 'Falha ao testar conexão.'), variant: 'destructive' });
       return false;
     } finally {
+      stageTimers.forEach((timer) => window.clearTimeout(timer));
       setIsTesting(false);
       setTestingStage('');
     }
@@ -590,6 +605,37 @@ function WizardModal({
                   </details>
                 </div>
               )}
+              {compatibility && (
+                <div className={`rounded border px-3 py-2 text-[11px] ${
+                  compatibility.state === 'ideal'
+                    ? 'border-emerald-500/25 bg-emerald-500/10'
+                    : compatibility.state === 'attention'
+                      ? 'border-red-500/25 bg-red-500/10'
+                      : 'border-amber-500/25 bg-amber-500/10'
+                }`}>
+                  <div className="font-medium text-foreground">{compatibility.summary}</div>
+                  <div className="mt-1 text-[hsl(var(--muted-foreground))]">
+                    Família detectada: <span className="uppercase text-foreground">{compatibility.detectedFamily}</span>
+                  </div>
+                  <details className="mt-2">
+                    <summary className="cursor-pointer font-medium text-[hsl(var(--muted-foreground))]">Perfis escolhidos e recomendações</summary>
+                    <div className="mt-2 space-y-2 border-t border-border pt-2 text-[hsl(var(--muted-foreground))]">
+                      <div>Live: <span className="text-foreground">{compatibility.automaticProfile.live}</span></div>
+                      <div>Gravação: <span className="text-foreground">{compatibility.automaticProfile.recording}</span></div>
+                      <div>Análise: <span className="text-foreground">{compatibility.automaticProfile.analytics}</span></div>
+                      {compatibility.hints.map((hint) => (
+                        <div key={hint.code} className="border-t border-border pt-2">
+                          <div className={hint.severity === 'critical' ? 'text-red-300' : hint.severity === 'warning' ? 'text-amber-300' : 'text-sky-300'}>
+                            {hint.title}
+                          </div>
+                          <div>{hint.message}</div>
+                          {hint.action && <div className="mt-0.5 text-foreground">{hint.action}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              )}
             </div>
           )}
           {step === 1 && (
@@ -600,16 +646,33 @@ function WizardModal({
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Local</label>
-                    <Select value={form.zone} onValueChange={(value) => updateField('zone', value)}><SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Selecionar zona..." /></SelectTrigger>
-                    <SelectContent>{validZones.map((zone) => <SelectItem key={zone} value={zone} className="text-xs">{zone}</SelectItem>)}</SelectContent>
+                  <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Unidade</label>
+                  <Select
+                    value={form.siteId || '__none__'}
+                    onValueChange={(value) => {
+                      const nextSiteId = value === '__none__' ? '' : value;
+                      setForm((current) => ({ ...current, siteId: nextSiteId, areaId: '' }));
+                    }}
+                  >
+                    <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Selecionar unidade..." /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__" className="text-xs">Sem unidade</SelectItem>
+                      {sites.map((site) => <SelectItem key={site.id} value={site.id} className="text-xs">{site.name}</SelectItem>)}
+                    </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Unidade</label>
-                  <Select value={form.building} onValueChange={(value) => updateField('building', value)}><SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                  <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Área</label>
+                  <Select
+                    value={form.areaId || '__none__'}
+                    onValueChange={(value) => updateField('areaId', value === '__none__' ? '' : value)}
+                  >
+                    <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Selecionar área..." /></SelectTrigger>
                     <SelectContent>
-                      {validZones.map((zone) => <SelectItem key={zone} value={zone} className="text-xs">{zone}</SelectItem>)}
+                      <SelectItem value="__none__" className="text-xs">Sem área</SelectItem>
+                      {areas
+                        .filter((area) => !form.siteId || area.siteId === form.siteId)
+                        .map((area) => <SelectItem key={area.id} value={area.id} className="text-xs">{area.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
@@ -638,7 +701,7 @@ function WizardModal({
                     <input value={form.retentionDays} onChange={(e) => updateField('retentionDays', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
                   </div>
                   <div className="col-span-2 rounded border border-border bg-card px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-                    A live usa a imagem principal em alta qualidade original. A gravação usa o perfil principal da câmera e salva em H.265 quando disponível.
+                    A live usa a imagem principal em alta qualidade original. A gravação usa o perfil principal da câmera e arquiva o codec original (cópia, sem reconversão).
                   </div>
                 </div>
               </div>
@@ -681,10 +744,10 @@ function WizardModal({
                   </div>
                   <div className="space-y-1">
                     <label className="text-[11px] font-medium text-[hsl(var(--muted-foreground))]">Arquivo</label>
-                    <Select value="h265" disabled>
+                    <Select value="copy" disabled>
                       <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="h265" className="text-xs">H.265 / HEVC</SelectItem>
+                        <SelectItem value="copy" className="text-xs">Original da câmera (cópia)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -697,8 +760,8 @@ function WizardModal({
               <div className="rounded-lg border border-border bg-background p-4 space-y-2 text-xs">
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Endereço IP</span><span className="font-mono">{form.ip || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Nome</span><span>{form.name || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Local</span><span>{form.zone || '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Unidade</span><span>{form.building || '-'}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Unidade</span><span>{sites.find((s) => s.id === form.siteId)?.name ?? '-'}</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Área</span><span>{areas.find((a) => a.id === form.areaId)?.name ?? '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Live</span><span>Imagem principal original</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">IA</span><span>Substream reservado</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Gravação</span><span>{formatRecordingMode(form.recordingMode)}</span></div>
@@ -748,13 +811,17 @@ export default function CamerasPage() {
   const accessToken = useAuthStore((state) => state.accessToken);
   const cameras = useVmsDataStore((state) => state.cameras);
   const loadData = useVmsDataStore((state) => state.load);
-  const [viewMode, setViewMode] = useState<'table' | 'card'>('table');
+  const [viewMode, setViewMode] = useState<'table' | 'card'>('card');
   const [search, setSearch] = useState('');
   const [zoneFilter, setZoneFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<(typeof STATUSES)[number]>('all');
   const [showWizard, setShowWizard] = useState(false);
   const [selectedCam, setSelectedCam] = useState<Camera | null>(null);
-  const [reconnectingStale, setReconnectingStale] = useState(false);
+  const [editCamera, setEditCamera] = useState<Camera | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Camera | null>(null);
+  const [wizardSites, setWizardSites] = useState<LocationOption[]>([]);
+  const [wizardAreas, setWizardAreas] = useState<LocationOption[]>([]);
+  const [locationOptionsLoaded, setLocationOptionsLoaded] = useState(false);
   const [reconnectingSingleCameraId, setReconnectingSingleCameraId] = useState<string | null>(null);
   const [manualRecordingLoading, setManualRecordingLoading] = useState<{ cameraId: string; action: 'start' | 'stop' } | null>(null);
   const [motionRecordingLoadingCameraId, setMotionRecordingLoadingCameraId] = useState<string | null>(null);
@@ -771,14 +838,10 @@ export default function CamerasPage() {
     needsAttention?: boolean;
     alertReason?: string | null;
   }>>({});
-  const zones = ['all', ...Array.from(new Set(cameras.map((camera) => camera.zone)))];
+  const zones = useMemo(() => ['all', ...Array.from(new Set(cameras.map((camera) => camera.zone)))], [cameras]);
   const isRecordingAutoRecovering = useCallback((camera: Camera | null | undefined) => (
     camera?.recordingStatusDetail === 'auto_reconnecting'
   ), []);
-  const staleCameras = useMemo(
-    () => cameras.filter((camera) => camera.recordingStale && !isRecordingAutoRecovering(camera)),
-    [cameras, isRecordingAutoRecovering],
-  );
   const isCameraRecording = useCallback((camera: Camera | null | undefined) => {
     if (!camera) return false;
     const override = recordingOverrides[camera.id];
@@ -817,34 +880,65 @@ export default function CamerasPage() {
     }).catch(() => setRecordingHealthByCamera({}));
   }, [API_URL, accessToken]);
 
-  const filtered = cameras.filter(c => {
-    if (search && !c.name.toLowerCase().includes(search.toLowerCase()) && !c.code.toLowerCase().includes(search.toLowerCase())) return false;
+  // Carrega unidades (sites) e áreas para o assistente de nova câmera, sob demanda.
+  useEffect(() => {
+    if (!showWizard || !accessToken || locationOptionsLoaded) return;
+    const headers = { Authorization: `Bearer ${accessToken}` };
+    void Promise.all([
+      axios.get(`${API_URL}/sites`, { headers }).then(({ data }) => (Array.isArray(data) ? data : [])).catch(() => []),
+      axios.get(`${API_URL}/areas`, { headers }).then(({ data }) => (Array.isArray(data) ? data : [])).catch(() => []),
+    ]).then(([sites, areas]) => {
+      setWizardSites(sites.map((s: any) => ({ id: s.id, name: s.name })));
+      setWizardAreas(areas.map((a: any) => ({ id: a.id, name: a.name, siteId: a.siteId ?? null })));
+      setLocationOptionsLoaded(true);
+    });
+  }, [API_URL, accessToken, showWizard, locationOptionsLoaded]);
+
+  // Reconcilia o override otimista de gravação com o estado real do servidor: quando
+  // camera.status passa a refletir o valor esperado, o override é descartado (senão
+  // ele teria precedência permanente e mostraria "Gravando" indefinidamente).
+  useEffect(() => {
+    setRecordingOverrides((current) => {
+      if (!Object.keys(current).length) return current;
+      let changed = false;
+      const next = { ...current };
+      for (const camera of cameras) {
+        if (camera.id in next && next[camera.id] === (camera.status === 'recording')) {
+          delete next[camera.id];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [cameras]);
+
+  const filtered = useMemo(() => cameras.filter(c => {
+    if (search && !c.name.toLowerCase().includes(search.toLowerCase()) && !c.code.toLowerCase().includes(search.toLowerCase()) && !c.ipAddress.toLowerCase().includes(search.toLowerCase())) return false;
     if (zoneFilter !== 'all' && c.zone !== zoneFilter) return false;
     if (statusFilter !== 'all' && c.status !== statusFilter) return false;
     return true;
-  });
-  const recordingAttentionItems = useMemo(
-    () => filtered.filter((camera) => recordingHealthByCamera[camera.id]?.needsAttention && !isRecordingAutoRecovering(camera)),
-    [filtered, recordingHealthByCamera, isRecordingAutoRecovering],
-  );
+  }), [cameras, search, zoneFilter, statusFilter]);
 
-  const deleteCamera = async (camera: Camera) => {
-    if (!accessToken) return;
-    const confirmed = window.confirm(`Excluir câmera "${camera.name}" (${camera.code})?`);
-    if (!confirmed) return;
+  const confirmDeleteCamera = async () => {
+    if (!accessToken || !deleteTarget) return;
+    const camera = deleteTarget;
+    setDeleteTarget(null);
     try {
       await axios.delete(`${API_URL}/cameras/${camera.id}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       if (selectedCam?.id === camera.id) setSelectedCam(null);
       await loadData();
+      toast({ title: 'Câmera excluída', description: `${camera.name} (${camera.code})` });
     } catch {
-      window.alert('Não foi possível excluir a câmera.');
+      toast({ title: 'Erro ao excluir câmera', description: 'Não foi possível excluir a câmera.', variant: 'destructive' });
     }
   };
 
   const createCamera = async (payload: {
     name: string;
+    siteId?: string;
+    areaId?: string;
     ip: string;
     rtspPort: number;
     onvifPort?: number;
@@ -918,31 +1012,22 @@ export default function CamerasPage() {
       detectedOnvifProfileToken?: string | null;
       rtspProbeError?: string | null;
       status: string;
+      detectedStream?: {
+        codec?: string | null;
+        width?: number | null;
+        height?: number | null;
+        fps?: number | null;
+        bitrateKbps?: number | null;
+      } | null;
+      compatibility?: {
+        state: 'ideal' | 'compatible' | 'attention';
+        detectedFamily: string;
+        confidence: 'high' | 'medium' | 'low';
+        summary: string;
+        automaticProfile: { live: string; recording: string; analytics: string };
+        hints: Array<{ code: string; severity: 'info' | 'warning' | 'critical'; title: string; message: string; action?: string }>;
+      };
     };
-  };
-
-  const reconnectStaleRecordings = async () => {
-    if (!accessToken) return;
-    if (!staleCameras.length) {
-      window.alert('Nenhuma câmera pendente para reconectar.');
-      return;
-    }
-    const confirmed = window.confirm(`Reconectar gravação em ${staleCameras.length} câmera(s)?`);
-    if (!confirmed) return;
-    setReconnectingStale(true);
-    try {
-      const { data } = await axios.post(
-        `${API_URL}/recordings/reconnect-stale`,
-        { cameraIds: staleCameras.map((camera) => camera.id) },
-        { headers: { Authorization: `Bearer ${accessToken}` } },
-      );
-      window.alert(`Reconexão concluída\nReiniciadas: ${data.restarted ?? 0}\nIgnoradas: ${data.skipped ?? 0}`);
-      await loadData();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Falha ao reconectar gravações.');
-    } finally {
-      setReconnectingStale(false);
-    }
   };
 
   const reconnectSingleCamera = async (cameraId: string) => {
@@ -954,7 +1039,7 @@ export default function CamerasPage() {
         { cameraIds: [cameraId] },
         { headers: { Authorization: `Bearer ${accessToken}` } },
       );
-      window.alert(`Reconexão da câmera concluída\nReiniciadas: ${data.restarted ?? 0}\nIgnoradas: ${data.skipped ?? 0}`);
+      toast({ title: 'Reconexão concluída', description: `Reiniciadas: ${data.restarted ?? 0} | Ignoradas: ${data.skipped ?? 0}` });
       await loadData();
       const today = format(new Date(), 'yyyy-MM-dd');
       const summary = await axios.get(`${API_URL}/recordings/health-summary?date=${encodeURIComponent(today)}`, {
@@ -977,7 +1062,7 @@ export default function CamerasPage() {
       }
       setRecordingHealthByCamera(map);
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Falha ao reconectar a câmera.');
+      toast({ title: 'Falha ao reconectar', description: error instanceof Error ? error.message : 'Falha ao reconectar a câmera.', variant: 'destructive' });
     } finally {
       setReconnectingSingleCameraId(null);
     }
@@ -986,7 +1071,7 @@ export default function CamerasPage() {
   const diagnosePtzCamera = async (camera: Camera) => {
     if (!accessToken) return;
     if (!camera.ptzCapable) {
-      window.alert('Esta câmera não possui PTZ habilitado.');
+      toast({ title: 'PTZ indisponível', description: 'Esta câmera não possui PTZ habilitado.' });
       return;
     }
     if (diagnosingPtzCameraId) return;
@@ -1000,11 +1085,11 @@ export default function CamerasPage() {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
-      window.alert(data?.ptzLikelyWorking
-        ? `Controle PTZ pronto para ${camera.name}.`
-        : `Não foi possível confirmar o controle PTZ de ${camera.name}.`);
+      toast(data?.ptzLikelyWorking
+        ? { title: 'Controle PTZ pronto', description: camera.name }
+        : { title: 'PTZ não confirmado', description: `Não foi possível confirmar o controle PTZ de ${camera.name}.`, variant: 'destructive' });
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Falha no diagnóstico PTZ.');
+      toast({ title: 'Falha no diagnóstico PTZ', description: error instanceof Error ? error.message : 'Falha no diagnóstico PTZ.', variant: 'destructive' });
     } finally {
       setDiagnosingPtzCameraId(null);
     }
@@ -1019,10 +1104,10 @@ export default function CamerasPage() {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       await loadData();
-      window.alert(action === 'start' ? `Gravação iniciada: ${camera.name}` : `Gravação parada: ${camera.name}`);
+      toast({ title: action === 'start' ? 'Gravação iniciada' : 'Gravação parada', description: camera.name });
     } catch (error) {
       setRecordingOverrides((current) => ({ ...current, [camera.id]: camera.status === 'recording' }));
-      window.alert(error instanceof Error ? error.message : `Falha ao ${action === 'start' ? 'iniciar' : 'parar'} gravação manual.`);
+      toast({ title: 'Falha na gravação manual', description: error instanceof Error ? error.message : `Falha ao ${action === 'start' ? 'iniciar' : 'parar'} gravação manual.`, variant: 'destructive' });
     } finally {
       setManualRecordingLoading(null);
     }
@@ -1037,69 +1122,97 @@ export default function CamerasPage() {
         await axios.post(`${API_URL}/cameras/${camera.id}/recording/stop`, {}, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        window.alert(`Clipe por movimento parado: ${camera.name}\nA câmera continua armada para o próximo movimento.`);
+        toast({ title: 'Clipe por movimento parado', description: `${camera.name} — a câmera continua armada para o próximo movimento.` });
       } else if (!isMotionRecordingMode(camera)) {
         setRecordingOverrides((current) => ({ ...current, [camera.id]: false }));
         await axios.post(`${API_URL}/cameras/${camera.id}/recording/motion`, { enabled: true }, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        window.alert(`Gravação por movimento ativada: ${camera.name}\nDetectou movimento, grava. Sem novo movimento por 60s, para sozinho.`);
+        toast({ title: 'Gravação por movimento ativada', description: `${camera.name} — grava ao detectar movimento e para após 60s sem novo movimento.` });
       } else {
-        window.alert(`Gravação por movimento já está armada: ${camera.name}\nO botão ficará vermelho quando a câmera estiver gravando um movimento.`);
+        toast({ title: 'Gravação por movimento já armada', description: `${camera.name} — o botão fica vermelho quando estiver gravando um movimento.` });
       }
       await loadData();
     } catch (error) {
       setRecordingOverrides((current) => ({ ...current, [camera.id]: camera.status === 'recording' }));
-      window.alert(error instanceof Error ? error.message : 'Falha ao atualizar gravação por movimento.');
+      toast({ title: 'Falha na gravação por movimento', description: error instanceof Error ? error.message : 'Falha ao atualizar gravação por movimento.', variant: 'destructive' });
     } finally {
       setMotionRecordingLoadingCameraId(null);
     }
   };
 
-  return (
-    <div className="flex h-full min-h-0 p-5">
-      <div className="flex-1 flex flex-col min-w-0 min-h-0 gap-4">
-        {/* Toolbar */}
-        <div className="flex items-center gap-3 px-5 py-4 border border-card-border bg-card rounded-xl shrink-0 flex-wrap gap-y-3 shadow-sm">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-            <input
-              type="search"
-              placeholder="Buscar câmeras..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="h-8 pl-8 pr-3 w-48 rounded border border-border bg-background text-xs focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))] placeholder:text-[hsl(var(--muted-foreground)_/_0.5)]"
-            />
-          </div>
-          <Select value={zoneFilter} onValueChange={setZoneFilter}>
-            <SelectTrigger className="w-36 h-8 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>{zones.map(z => <SelectItem key={z} value={z} className="text-xs">{z === 'all' ? 'Todas as zonas' : z}</SelectItem>)}</SelectContent>
-          </Select>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-28 h-8 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>{STATUSES.map(s => <SelectItem key={s} value={s} className="text-xs">{STATUS_LABEL[s]}</SelectItem>)}</SelectContent>
-          </Select>
+  const onlineCount = cameras.filter((c) => c.isOnline).length;
+  const alarmCount = cameras.filter((c) => c.status === 'alarm').length;
+  const countFor = (s: (typeof STATUS_PILLS)[number]) => (s === 'all' ? cameras.length : cameras.filter((c) => c.status === s).length);
 
-          <div className="ml-auto flex items-center gap-2">
-            <span className="font-mono text-[11px] text-[hsl(var(--muted-foreground))]">{filtered.length} câmeras</span>
-            <div className="flex items-center gap-0.5 p-0.5 rounded bg-[hsl(var(--muted))] border border-border">
-              <button onClick={() => setViewMode('table')} className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${viewMode === 'table' ? 'bg-card text-foreground' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`}><List className="w-3.5 h-3.5" /></button>
-              <button onClick={() => setViewMode('card')} className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${viewMode === 'card' ? 'bg-card text-foreground' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`}><LayoutGrid className="w-3.5 h-3.5" /></button>
+  return (
+    <div className="flex h-full min-h-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {/* Page header */}
+        <div className="px-6 pt-5 pb-4 border-b border-border shrink-0">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h1 className="text-[18px] font-semibold tracking-tight">Câmeras</h1>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {cameras.length} cadastradas · {onlineCount} online
+                {alarmCount > 0 && <span className="text-[hsl(var(--status-alarm))] ml-2">· {alarmCount} em alarme</span>}
+              </p>
             </div>
-            <button
-              onClick={() => setShowWizard(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold hover:opacity-90 transition-opacity"
-              data-testid="button-add-camera"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Adicionar Câmera
-            </button>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-[hsl(var(--muted))] border border-border">
+                <button onClick={() => setViewMode('table')} className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${viewMode === 'table' ? 'bg-card text-foreground shadow-sm' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`} title="Tabela"><List className="w-3.5 h-3.5" /></button>
+                <button onClick={() => setViewMode('card')} className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${viewMode === 'card' ? 'bg-card text-foreground shadow-sm' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`} title="Cards"><LayoutGrid className="w-3.5 h-3.5" /></button>
+              </div>
+              <button
+                onClick={() => setShowWizard(true)}
+                className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold hover:opacity-90 transition-opacity"
+                data-testid="button-add-camera"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Adicionar câmera
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Filters */}
+        <div className="px-6 py-3 border-b border-border shrink-0 flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {STATUS_PILLS.map((s) => (
+              <button key={s} onClick={() => setStatusFilter(s)}
+                className={`h-7 px-3 rounded-full text-[11px] font-medium border transition-colors ${
+                  statusFilter === s
+                    ? 'bg-[hsl(var(--primary)_/_0.1)] text-[hsl(var(--primary))] border-[hsl(var(--primary)_/_0.3)]'
+                    : 'bg-background text-muted-foreground border-border hover:text-foreground'
+                }`}>
+                {STATUS_LABEL[s]}
+                <span className="ml-1.5 font-mono text-[9px] opacity-60">{countFor(s)}</span>
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <Select value={zoneFilter} onValueChange={setZoneFilter}>
+              <SelectTrigger className="w-40 h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>{zones.map(z => <SelectItem key={z} value={z} className="text-xs">{z === 'all' ? 'Todas as zonas' : z}</SelectItem>)}</SelectContent>
+            </Select>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+              <input
+                type="search"
+                placeholder="Buscar câmera ou IP..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="h-8 pl-8 pr-3 w-56 rounded-lg border border-border bg-background text-xs focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))] placeholder:text-[hsl(var(--muted-foreground)_/_0.5)]"
+              />
+            </div>
           </div>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-auto bg-card border border-card-border rounded-xl shadow-sm">
+        <div className="flex-1 overflow-auto">
           {viewMode === 'table' ? (
+            <div className="p-5">
+            <div className="bg-card border border-border rounded-xl overflow-hidden">
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 bg-card z-10">
                 <tr className="border-b border-border">
@@ -1115,7 +1228,7 @@ export default function CamerasPage() {
                   <tr
                     key={cam.id}
                     className="hover:bg-[hsl(var(--accent))] transition-colors cursor-pointer"
-                    onClick={() => setLocation(`/cameras/${cam.id}`)}
+                    onClick={() => setEditCamera(cam)}
                   >
                     <td className="px-3 py-2.5">
                       <div className="font-medium max-w-72 truncate">{cam.name}</div>
@@ -1137,8 +1250,8 @@ export default function CamerasPage() {
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-                        <button onClick={() => setLocation(`/cameras/${cam.id}?tab=settings`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors" title="Editar câmera"><Edit className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => void deleteCamera(cam)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors" title="Excluir câmera"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setEditCamera(cam)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors" title="Editar câmera"><Edit className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setDeleteTarget(cam)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors" title="Excluir câmera"><Trash2 className="w-3.5 h-3.5" /></button>
                       </div>
                     </td>
                   </tr>
@@ -1146,36 +1259,73 @@ export default function CamerasPage() {
                 })}
               </tbody>
             </table>
+            </div>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground py-20">
+              <Wifi className="w-10 h-10 opacity-20" />
+              <p className="text-sm">Nenhuma câmera encontrada</p>
+            </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4 p-5">
+            <div className="grid gap-4 p-5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
               {filtered.map(cam => {
-                const recordingModeCopy = getRecordingModeCopy(cam.recordingMode);
+                const isOffline = ['offline', 'no_signal'].includes(cam.status);
                 return (
                 <div
                   key={cam.id}
-                  className="bg-card border border-card-border rounded-xl overflow-hidden hover:border-[hsl(var(--primary)_/_0.4)] cursor-pointer transition-colors shadow-sm"
-                  onClick={() => setLocation(`/cameras/${cam.id}`)}
+                  className="ops-card overflow-hidden hover:-translate-y-px transition-transform cursor-pointer"
+                  onClick={() => setEditCamera(cam)}
                 >
-                  <div className="h-24 relative flex items-center justify-center" style={{ background: 'hsl(210,15%,8%)' }}>
-                    <CameraIcon className="w-8 h-8 text-[hsl(var(--muted-foreground)_/_0.2)]" />
-                    <div className="absolute top-2 left-2 font-mono text-[9px] text-white/50 bg-black/40 px-1.5 py-0.5 rounded">{cam.code}</div>
-                    <div className="absolute top-2 right-2">
-                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[9px] ${STATUS_BADGE[cam.status] ?? STATUS_BADGE.offline}`}>
+                  <div className="relative h-36 overflow-hidden" style={{ background: cam.thumbnailColor ? `hsl(${cam.thumbnailColor})` : 'hsl(222 20% 9%)' }}>
+                    <div className={`absolute top-0 inset-x-0 h-[2.5px] ${STATUS_DOT[cam.status] ?? STATUS_DOT.offline}`} />
+                    <div className="absolute top-2 left-2 z-10">
+                      <span className="text-[9px] text-white/60 bg-black/40 px-1.5 py-px rounded-sm font-mono">{cam.code}</span>
+                    </div>
+                    {cam.status === 'recording' && (
+                      <div className="absolute top-2 right-2 z-10">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-rec))] rec-pulse inline-block" />
+                      </div>
+                    )}
+                    {isOffline ? (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/40">
+                        <CameraIcon className="w-5 h-5 text-muted-foreground/50" />
+                        <span className="text-[9px] text-muted-foreground/60 font-mono uppercase tracking-widest">
+                          {cam.status === 'no_signal' ? 'Sem sinal' : 'Offline'}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="absolute inset-0 camera-scanline" />
+                    )}
+                    <div className="absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/60 to-transparent" />
+                  </div>
+                  <div className="p-3.5 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-semibold truncate">{cam.name}</div>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[cam.status] ?? STATUS_DOT.offline}`} />
+                          <span className="text-[10px] text-muted-foreground">{formatCameraStatus(cam.status)}</span>
+                        </div>
+                      </div>
+                      <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${STATUS_BADGE[cam.status] ?? STATUS_BADGE.offline}`}>
                         {formatCameraStatus(cam.status)}
                       </span>
                     </div>
-                  </div>
-                  <div className="p-3">
-                    <div className="text-xs font-medium truncate mb-1">{cam.name}</div>
-                    <div className="text-[10px] text-[hsl(var(--muted-foreground))] space-y-0.5">
-                      <div>{cam.zone} · {cam.building}</div>
-                      <div className={`mt-1 inline-flex rounded-md border px-1.5 py-0.5 text-[9px] ${recordingModeCopy.className}`}>
-                        {recordingModeCopy.label}
-                      </div>
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
+                      <span className="truncate">{cam.zone}</span>
+                      <span className="opacity-40">·</span>
+                      <span>{cam.ipAddress}</span>
                     </div>
-                    <div className="mt-2 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => setLocation(`/cameras/${cam.id}?tab=settings`)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors" title="Editar câmera"><Edit className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => void deleteCamera(cam)} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors" title="Excluir câmera"><Trash2 className="w-3.5 h-3.5" /></button>
+                    <div className="flex items-center gap-2 pt-0.5" onClick={(e) => e.stopPropagation()}>
+                      <button onClick={() => setLocation(`/playback?cameraId=${cam.id}`)} className="flex-1 h-7 rounded-md text-[11px] flex items-center justify-center gap-1.5 text-muted-foreground hover:text-foreground hover:bg-[hsl(var(--accent))] transition-colors">
+                        <PlaySquare className="w-3.5 h-3.5" /> Playback
+                      </button>
+                      <button onClick={() => setEditCamera(cam)} className="flex-1 h-7 rounded-md text-[11px] flex items-center justify-center gap-1.5 text-muted-foreground hover:text-foreground hover:bg-[hsl(var(--accent))] transition-colors">
+                        <Edit className="w-3.5 h-3.5" /> Editar
+                      </button>
+                      <button onClick={() => setDeleteTarget(cam)} title="Excluir" className="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1199,10 +1349,10 @@ export default function CamerasPage() {
             animate={{ width: 320, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className="ml-4 border border-card-border rounded-xl bg-card flex flex-col overflow-hidden shrink-0 shadow-sm"
+            className="ml-4 border border-border rounded-xl bg-card flex flex-col overflow-hidden shrink-0"
           >
             <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
-              <h3 className="text-sm font-semibold truncate">{selectedCam.code}</h3>
+              <h3 className="text-sm font-semibold truncate">{liveCam.code}</h3>
               <button onClick={() => setSelectedCam(null)} className="w-7 h-7 flex items-center justify-center rounded hover:bg-[hsl(var(--accent))] transition-colors shrink-0">
                 <X className="w-4 h-4" />
               </button>
@@ -1212,7 +1362,7 @@ export default function CamerasPage() {
                 <CameraIcon className="w-10 h-10 text-[hsl(var(--muted-foreground)_/_0.2)]" />
               </div>
               <div>
-                <div className="text-sm font-semibold mb-0.5">{selectedCam.name}</div>
+                <div className="text-sm font-semibold mb-0.5">{liveCam.name}</div>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] ${STATUS_BADGE[liveCam.status] ?? STATUS_BADGE.offline}`}>
                     {formatCameraStatus(liveCam.status)}
@@ -1224,14 +1374,14 @@ export default function CamerasPage() {
               </div>
               <div className="space-y-2 text-xs">
                 {[
-                  ['Código', selectedCam.code],
-                  ['Local', selectedCam.zone],
-                  ['Unidade', selectedCam.building],
-                  ['Andar', selectedCam.floor],
+                  ['Código', liveCam.code],
+                  ['Local', liveCam.zone],
+                  ['Unidade', liveCam.building],
+                  ['Andar', liveCam.floor],
                   ['Gravação', recordingModeCopy.label],
-                  ['Retenção', `${selectedCam.retentionDays} dias`],
-                  ['PTZ', selectedCam.ptzCapable ? 'Sim' : 'Não'],
-                  ['Áudio', selectedCam.hasAudio ? 'Sim' : 'Não'],
+                  ['Retenção', `${liveCam.retentionDays} dias`],
+                  ['PTZ', liveCam.ptzCapable ? 'Sim' : 'Não'],
+                  ['Áudio', liveCam.hasAudio ? 'Sim' : 'Não'],
                 ].map(([k, v]) => (
                   <div key={k} className="flex justify-between">
                     <span className="text-[hsl(var(--muted-foreground))]">{k}</span>
@@ -1243,10 +1393,10 @@ export default function CamerasPage() {
                 <summary className="cursor-pointer font-medium text-[hsl(var(--muted-foreground))]">Informações da câmera</summary>
                 <div className="mt-2 space-y-2 border-t border-border pt-2">
                   {[
-                    ['Endereço IP', selectedCam.ipAddress],
-                    ['Modelo', selectedCam.model],
-                    ['Resolução', selectedCam.resolution],
-                    ['FPS', selectedCam.fps.toString()],
+                    ['Endereço IP', liveCam.ipAddress],
+                    ['Modelo', liveCam.model],
+                    ['Resolução', liveCam.resolution],
+                    ['FPS', liveCam.fps.toString()],
                     ['Codec', liveCam.streamVideoCodec ?? liveCam.detectedVideoCodec ?? '-'],
                   ].map(([k, v]) => (
                     <div key={k} className="flex justify-between">
@@ -1304,7 +1454,7 @@ export default function CamerasPage() {
                 <button onClick={() => setLocation(`/cameras/${selectedCam.id}?tab=settings`)} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors">
                   <Edit className="w-4 h-4" /> Editar Câmera
                 </button>
-                <button onClick={() => void deleteCamera(selectedCam)} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors text-[hsl(var(--destructive))]">
+                <button onClick={() => setDeleteTarget(selectedCam)} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors text-[hsl(var(--destructive))]">
                   <Trash2 className="w-4 h-4" /> Excluir Câmera
                 </button>
                 <button onClick={() => setLocation('/playback')} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors">
@@ -1332,7 +1482,29 @@ export default function CamerasPage() {
         })()}
       </AnimatePresence>
 
-      {showWizard && <WizardModal onClose={() => setShowWizard(false)} zones={zones} onCreated={createCamera} onTestConnection={testConnectionDraft} />}
+      <CameraEditSheet
+        camera={editCamera}
+        open={!!editCamera}
+        onClose={() => setEditCamera(null)}
+        onDeleted={(id) => { if (selectedCam?.id === id) setSelectedCam(null); }}
+      />
+
+      {showWizard && <WizardModal onClose={() => setShowWizard(false)} sites={wizardSites} areas={wizardAreas} onCreated={createCamera} onTestConnection={testConnectionDraft} />}
+
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir câmera</AlertDialogTitle>
+            <AlertDialogDescription>
+              Excluir a câmera "{deleteTarget?.name}" ({deleteTarget?.code})? Esta ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmDeleteCamera()}>Excluir</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

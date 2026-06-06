@@ -12,6 +12,8 @@ import { type AuthUser } from '../common/types/auth-user.type';
 import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { FfmpegMjpegService } from './ffmpeg-mjpeg.service';
 import { MediamtxProxyService } from './mediamtx-proxy.service';
+import { StreamResourceAdvisorService } from './stream-resource-advisor.service';
+import { assessLiveReadiness } from './helpers/live-readiness.helper';
 import { CamerasService } from '../cameras/cameras.service';
 import {
   isHevcCodec,
@@ -34,6 +36,7 @@ export class CameraStreamController {
     private readonly accessControlService: AccessControlService,
     private readonly auditService: AuditService,
     private readonly commercialPolicy: CommercialPolicyService,
+    private readonly streamResourceAdvisor: StreamResourceAdvisorService,
   ) {}
 
   private extractBearerToken(req: Request): string | null {
@@ -90,6 +93,43 @@ export class CameraStreamController {
 
   @Roles(UserRole.VIEWER)
   @RequirePermission('liveView')
+  @Get('resource-diagnostics')
+  async getResourceDiagnostics(@CurrentUser() user: AuthUser) {
+    const accessibleCameraIds = await this.accessControlService.getAccessibleCameraIds(user);
+    return this.streamResourceAdvisor.getFleetReport(accessibleCameraIds);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
+  @Get('optimization-plan')
+  async getOptimizationPlan(@CurrentUser() user: AuthUser) {
+    const accessibleCameraIds = await this.accessControlService.getAccessibleCameraIds(user);
+    return this.streamResourceAdvisor.getOptimizationPlan(accessibleCameraIds);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
+  @Post('optimization/apply-safe')
+  async applySafeOptimization(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    const accessibleCameraIds = await this.accessControlService.getAccessibleCameraIds(user);
+    const result = await this.streamResourceAdvisor.applySafeOptimizations(accessibleCameraIds);
+    await this.auditService.log(user.id, 'stream.optimization.apply_safe', 'Camera', null, result as any, req);
+    return result;
+  }
+
+  @Roles(UserRole.VIEWER)
+  @RequirePermission('liveView')
+  @Get(':cameraId/resource-diagnostics')
+  async getCameraResourceDiagnostics(
+    @CurrentUser() user: AuthUser,
+    @Param('cameraId') cameraId: string,
+  ) {
+    await this.accessControlService.assertCanViewCamera(user, cameraId);
+    return this.streamResourceAdvisor.getCameraReport(cameraId);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @RequirePermission('liveView')
   @Post(':cameraId/live-failure')
   async recordLiveFailure(
     @CurrentUser() user: AuthUser,
@@ -123,16 +163,12 @@ export class CameraStreamController {
     await this.accessControlService.assertCanViewCamera(user, cameraId);
     await this.commercialPolicy.assertFeature('localLive', user);
     const token = await this.authService.createStreamToken(user.id, cameraId);
-    let camera = await this.camerasService.getCameraOrThrow(cameraId);
+    const camera = await this.camerasService.getCameraOrThrow(cameraId);
 
-    // Se ainda não temos metadados detectados, tenta uma sondagem rápida do perfil live.
+    // Atualiza metadados em segundo plano. Abrir uma live nunca deve esperar
+    // uma sonda RTSP/ffprobe, que pode levar vários segundos em câmera instável.
     if (!camera.detectedVideoCodec || !camera.detectedWidth || !camera.detectedHeight) {
-      try {
-        await this.camerasService.getStatus(cameraId);
-        camera = await this.camerasService.getCameraOrThrow(cameraId);
-      } catch {
-        // Não bloqueia o live; segue com fallback de protocolo no frontend.
-      }
+      void this.camerasService.getStatus(cameraId).catch(() => undefined);
     }
 
     let mediaBridge = this.mediamtxProxyService.buildPublicUrls(req, null, null);
@@ -170,6 +206,16 @@ export class CameraStreamController {
     const supportsOriginalOnClient = this.supportsHevcWebPlayback(req);
 
     const { sourceUrl: _sourceUrl, ...safeMediaBridge } = mediaBridge;
+    const requestOrigin = `${reqProto}://${apiHost}`;
+    const liveReadiness = assessLiveReadiness({
+      requestOrigin,
+      publicAppUrl: process.env.PUBLIC_APP_URL || null,
+      mediamtxEnabled: this.mediamtxProxyService.isEnabled(),
+      pathReady: Boolean(safeMediaBridge.enabled && safeMediaBridge.pathName),
+      whepUrl: safeMediaBridge.whepUrl,
+      hlsUrl: safeMediaBridge.hlsUrl,
+      webrtcAllowOrigin: process.env.MEDIAMTX_WEBRTC_ALLOW_ORIGIN || null,
+    });
     const fallbackManualOrder: LiveProtocol[] = (() => {
       switch (configuredPreferred as LiveProtocol) {
         case 'webrtc':
@@ -236,6 +282,7 @@ export class CameraStreamController {
         deliveryProfile,
         preferredProtocol: configuredPreferred,
         protocolOrder,
+        readiness: liveReadiness,
       },
       protocols: {
         flvUrl,

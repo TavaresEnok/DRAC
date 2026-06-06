@@ -11,7 +11,7 @@ interface CacheEntry<T> {
 class StreamUrlsCache {
   private cache = new Map<string, CacheEntry<any>>();
   private inflight = new Map<string, Promise<any>>();
-  private readonly defaultTtlMs = 8000; // 8 seconds
+  private readonly defaultTtlMs = 60_000;
 
   /**
    * Get a cached value if it exists and hasn't expired.
@@ -64,7 +64,7 @@ class StreamUrlsCache {
     ttlMs?: number,
   ): Promise<T> {
     const cached = this.get<T>(key);
-    if (cached) return cached;
+    if (cached !== null) return cached;
 
     const existing = this.inflight.get(key) as Promise<T> | undefined;
     if (existing) return existing;

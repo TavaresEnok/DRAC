@@ -151,6 +151,15 @@ export class AlarmsService {
       return this.autoResolveForCamera(input.cameraId, source, input.eventId, input.occurredAt, input.message);
     }
 
+    // Respeita o liga/desliga de alarme por câmera (definido pelo admin). Câmera com
+    // alarmes desligados não abre novos alarmes (eventos de recuperação acima ainda
+    // fecham alarmes antigos normalmente).
+    const cameraAlarmConfig = await this.prisma.camera.findUnique({
+      where: { id: input.cameraId },
+      select: { alarmsEnabled: true },
+    });
+    if (cameraAlarmConfig && cameraAlarmConfig.alarmsEnabled === false) return null;
+
     const rule = await this.getRule(source, input.type);
     // Regra explícita é obrigatória para abrir alarme operacional real.
     if (!rule) return null;
