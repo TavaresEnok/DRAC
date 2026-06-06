@@ -1,9 +1,9 @@
 import axios from 'axios';
-import { useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, Camera, CheckCircle2, Clock, Cpu, HardDrive, Radio, RefreshCw, Router, Video } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Cpu, MemoryStick, HardDrive, Activity, Gauge, RefreshCw,
+  Server, Video, Brain, Wifi, ArrowUp, ArrowDown, Minus, CheckCircle2, AlertTriangle,
+} from 'lucide-react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,432 +15,333 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { getApiBaseUrl } from '@/lib/api-base';
-import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
-import { toast } from '@/hooks/use-toast';
-
-type Severity = 'info' | 'warning' | 'critical';
-type RiskLevel = 'ok' | 'attention' | 'high' | 'critical';
-
-type ResourceFinding = {
-  code: string;
-  severity: Severity;
-  message: string;
-  action: string;
-};
-
-type ResourceCamera = {
-  cameraId: string;
-  cameraName: string;
-  status: string;
-  profiles: {
-    live: {
-      source: string;
-      channel: number;
-      subtype: number;
-      protocol: string;
-      codec?: string | null;
-      width?: number | null;
-      height?: number | null;
-      fps?: number | null;
-      bitrateKbps?: number | null;
-      transcodeForBrowser: boolean;
-      audioForcesTranscode: boolean;
-      deliveryCodec?: string | null;
-    };
-    recording: {
-      source: string;
-      channel: number;
-      subtype: number;
-      codec?: string | null;
-      width?: number | null;
-      height?: number | null;
-      fps?: number | null;
-      enabled: boolean;
-      mode?: string | null;
-      copyFriendly: boolean;
-    };
-    analytics: {
-      source: string;
-      channel: number;
-      subtype: number;
-      codec?: string | null;
-      separatedFromLive: boolean;
-      usesMediaMtx: boolean;
-      audioRequested: boolean;
-    };
-  };
-  mediaMtx: {
-    pathName: string;
-    available: boolean;
-    ready: boolean;
-    readerCount: number;
-    error?: string | null;
-  };
-  playback: {
-    originalCodec?: string | null;
-    browserNativeLikely: boolean;
-    compatibilityCacheRecommended: boolean;
-  };
-  operations: {
-    live: {
-      failuresLast24h: number;
-      lastFailureAt?: string | null;
-      lastFailure?: {
-        protocol?: string | null;
-        stage?: string | null;
-        reason?: string | null;
-        state?: string | null;
-      } | null;
-    };
-    recording: {
-      state: string;
-      segmentsLast24h: number;
-      activeSegments: number;
-      coveragePercentLast24h: number;
-      coveredSecondsLast24h: number;
-      gapSecondsLast24h: number;
-      largestGapSecondsLast24h: number;
-      usableSegmentsLast24h: number;
-      lastSegmentAt?: string | null;
-      lastSegmentAgeMs?: number | null;
-    };
-    playback: {
-      state: string;
-      lastPlayableCandidateAt?: string | null;
-    };
-  };
-  resource: {
-    level: RiskLevel;
-    score: number;
-    findings: ResourceFinding[];
-    cpuHotspots: string[];
-  };
-};
-
-type PerformanceReport = {
-  generatedAt: string;
-  summary: {
-    totalCameras: number;
-    onlineCameras: number;
-    webrtcPreferred: number;
-    analyticsSeparated: number;
-    liveTranscodeLikely: number;
-    audioTranscodeLikely: number;
-    highCpuRiskCameras: number;
-    playbackCompatibilityRisk: number;
-    mediaMtxReaders: number;
-    liveFailuresLast24h: number;
-    recordingSegmentsLast24h: number;
-    recordingGapSecondsLast24h: number;
-    camerasWithRecordingAttention: number;
-    warningCount: number;
-    criticalCount: number;
-  };
-  cameras: ResourceCamera[];
-  optimizationPlan: {
-    safeActionCount: number;
-    manualActionCount: number;
-    canApplySafely: boolean;
-  };
-  recommendations: Array<ResourceFinding & { cameras: string[] }>;
-};
+import { useVmsDataStore } from '@/store/vmsDataStore';
+import { toast } from '../hooks/use-toast';
 
 const API_URL = getApiBaseUrl();
+const HISTORY = 40; // samples in sparkline
 
-function levelLabel(level: RiskLevel) {
-  if (level === 'critical') return 'Crítico';
-  if (level === 'high') return 'Alto';
-  if (level === 'attention') return 'Atenção';
-  return 'OK';
-}
+type Sample = { cpu: number; ram: number; disk: number };
 
-function severityTone(severity: Severity) {
-  if (severity === 'critical') return 'border-[hsl(var(--destructive)_/_0.35)] bg-[hsl(var(--destructive)_/_0.08)] text-[hsl(var(--destructive))]';
-  if (severity === 'warning') return 'border-[hsl(var(--chart-4)_/_0.35)] bg-[hsl(var(--chart-4)_/_0.10)] text-[hsl(var(--chart-4))]';
-  return 'border-[hsl(var(--border))] bg-[hsl(var(--muted)_/_0.45)] text-[hsl(var(--muted-foreground))]';
-}
+type OptimizationReport = {
+  optimizationPlan?: { safeActionCount?: number; manualActionCount?: number; canApplySafely?: boolean };
+  recommendations?: Array<{ code: string; severity: 'info' | 'warning' | 'critical'; message: string; action: string; cameras: string[] }>;
+};
 
-function riskTone(level: RiskLevel) {
-  if (level === 'critical') return 'text-[hsl(var(--destructive))]';
-  if (level === 'high') return 'text-[hsl(var(--chart-4))]';
-  if (level === 'attention') return 'text-[hsl(var(--primary))]';
-  return 'text-[hsl(var(--chart-2))]';
-}
-
-function codecLabel(codec?: string | null) {
-  const value = String(codec ?? '').toLowerCase();
-  if (!value) return 'sem dado';
-  if (value.includes('265') || value.includes('hevc')) return 'H.265';
-  if (value.includes('264') || value.includes('avc')) return 'H.264';
-  return value.toUpperCase();
-}
-
-function resolution(width?: number | null, height?: number | null) {
-  if (!width || !height) return 'sem resolução';
-  return `${width}x${height}`;
-}
-
-function durationLabel(seconds?: number | null) {
-  const value = Math.max(0, Number(seconds ?? 0));
-  if (value < 60) return `${Math.round(value)}s`;
-  if (value < 3600) return `${Math.round(value / 60)}min`;
-  return `${(value / 3600).toFixed(value >= 10 * 3600 ? 0 : 1)}h`;
-}
-
-function dateTimeLabel(value?: string | null) {
-  if (!value) return 'sem leitura';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'sem leitura';
-  return new Intl.DateTimeFormat('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
-}
-
-function riskSummaryLabel(summary?: PerformanceReport['summary']) {
-  if (!summary) return 'Aguardando diagnóstico';
-  if (summary.criticalCount > 0) return `${summary.criticalCount} crítico(s)`;
-  if (summary.warningCount > 0) return `${summary.warningCount} alerta(s)`;
-  return 'Operação estável';
-}
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  detail,
-}: {
-  icon: typeof Activity;
-  label: string;
-  value: string | number;
-  detail: string;
-}) {
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+  if (data.length < 2) return <div className="h-10" />;
+  const w = 100, h = 40;
+  const max = 100;
+  const pts = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * w;
+    const y = h - (Math.min(v, max) / max) * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const area = `0,${h} ${pts.join(' ')} ${w},${h}`;
   return (
-    <div className="ops-card p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[10px] font-mono uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))]">{label}</p>
-          <p className="mt-1 text-2xl font-semibold tracking-normal text-foreground">{value}</p>
-        </div>
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-[hsl(var(--primary)_/_0.16)] bg-[hsl(var(--primary)_/_0.10)] text-[hsl(var(--primary))]">
-          <Icon className="h-4 w-4" />
-        </div>
-      </div>
-      <p className="mt-3 min-h-4 truncate text-[11px] text-[hsl(var(--muted-foreground))]">{detail}</p>
-    </div>
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="h-10 w-full">
+      <polygon points={area} fill={color} fillOpacity="0.12" />
+      <polyline points={pts.join(' ')} fill="none" stroke={color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    </svg>
   );
 }
 
+function Trend({ now, prev }: { now: number; prev: number }) {
+  const d = now - prev;
+  if (Math.abs(d) < 1) return <span className="inline-flex items-center text-muted-foreground"><Minus className="h-3 w-3" /></span>;
+  if (d > 0) return <span className="inline-flex items-center gap-0.5 text-[hsl(38_58%_58%)]"><ArrowUp className="h-3 w-3" />{Math.abs(d)}%</span>;
+  return <span className="inline-flex items-center gap-0.5 text-[hsl(152_46%_55%)]"><ArrowDown className="h-3 w-3" />{Math.abs(d)}%</span>;
+}
+
+function toneFor(pct: number) {
+  if (pct >= 85) return 'hsl(354,52%,52%)';
+  if (pct >= 65) return 'hsl(38,58%,54%)';
+  return 'hsl(var(--primary))';
+}
+
+function severityTone(s: 'info' | 'warning' | 'critical') {
+  if (s === 'critical') return 'border-[hsl(var(--destructive)_/_0.35)] bg-[hsl(var(--destructive)_/_0.08)] text-[hsl(var(--destructive))]';
+  if (s === 'warning') return 'border-[hsl(38_58%_54%_/_0.35)] bg-[hsl(38_58%_54%_/_0.10)] text-[hsl(38_58%_58%)]';
+  return 'border-border bg-[hsl(var(--muted)_/_0.4)] text-muted-foreground';
+}
+
+function fmtUptime(seconds?: number) {
+  if (!seconds) return '—';
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
 export default function PerformancePage() {
-  const accessToken = useAuthStore((state) => state.accessToken);
-  const user = useAuthStore((state) => state.user);
-  const [report, setReport] = useState<PerformanceReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [applying, setApplying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
-  const [nonce, setNonce] = useState(0);
-
-  useEffect(() => {
-    if (!accessToken) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-
-    void axios.get(`${API_URL}/camera-stream/resource-diagnostics`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }).then(({ data }) => {
-      if (!cancelled) setReport(data);
-    }).catch((err) => {
-      if (cancelled) return;
-      const message = axios.isAxiosError(err) ? (err.response?.data?.message ?? err.message) : 'Falha ao carregar desempenho.';
-      setError(Array.isArray(message) ? message.join(' | ') : String(message));
-      setReport(null);
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-
-    return () => { cancelled = true; };
-  }, [accessToken, nonce]);
-
-  const orderedCameras = useMemo(() => {
-    const order: Record<RiskLevel, number> = { critical: 0, high: 1, attention: 2, ok: 3 };
-    return [...(report?.cameras ?? [])].sort((a, b) => order[a.resource.level] - order[b.resource.level] || a.cameraName.localeCompare(b.cameraName));
-  }, [report?.cameras]);
-
-  const summary = report?.summary;
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
+  const cameras = useVmsDataStore((s) => s.cameras);
+  const system = useVmsDataStore((s) => s.system);
+  const load = useVmsDataStore((s) => s.load);
   const isAdmin = user?.role === 'admin';
 
-  async function applySafeOptimizations() {
+  const [history, setHistory] = useState<Sample[]>([]);
+  const [aiHealth, setAiHealth] = useState<any>(null);
+  const [report, setReport] = useState<OptimizationReport | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [auto, setAuto] = useState(true);
+  const [applying, setApplying] = useState(false);
+  const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
+  const refreshRef = useRef(false);
+
+  const cpu = system ? Math.min(100, Math.round(((system.server.loadAverage[0] ?? 0) / Math.max(system.server.cpuCount, 1)) * 100)) : 0;
+  const ram = system ? Math.min(100, Math.round(((system.server.totalMemoryBytes - system.server.freeMemoryBytes) / Math.max(system.server.totalMemoryBytes, 1)) * 100)) : 0;
+  const disk = system?.disk.usagePercent ?? 0;
+  const onlineCams = cameras.filter((c) => c.isOnline).length;
+  const aiCams = cameras.filter((c) => c.aiEnabled).length;
+  const processors: Record<string, any> = aiHealth?.processors ?? {};
+  const runningProc = Object.values(processors).filter((p: any) => p?.running).length;
+
+  const refresh = async () => {
+    if (refreshRef.current) return;
+    refreshRef.current = true;
+    setRefreshing(true);
+    try {
+      await load();
+      if (accessToken) {
+        const headers = { Authorization: `Bearer ${accessToken}` };
+        const [healthRes, diagRes] = await Promise.all([
+          axios.get(`${API_URL}/ai/health`, { headers }).catch(() => null),
+          axios.get(`${API_URL}/camera-stream/resource-diagnostics`, { headers }).catch(() => null),
+        ]);
+        if (healthRes) setAiHealth(healthRes.data);
+        if (diagRes) setReport(diagRes.data);
+      }
+    } finally {
+      refreshRef.current = false;
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, []);
+
+  useEffect(() => {
+    if (!system) return;
+    setHistory((prev) => [...prev, { cpu, ram, disk }].slice(-HISTORY));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [system]);
+
+  useEffect(() => {
+    if (!auto) return;
+    const t = window.setInterval(() => { void refresh(); }, 5000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auto, accessToken]);
+
+  const applySafeOptimizations = async () => {
     if (!accessToken || !isAdmin || !report?.optimizationPlan?.canApplySafely) return;
     setConfirmApplyOpen(false);
     setApplying(true);
-    setError(null);
     try {
-      await axios.post(`${API_URL}/camera-stream/optimization/apply-safe`, {}, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      await axios.post(`${API_URL}/camera-stream/optimization/apply-safe`, {}, { headers: { Authorization: `Bearer ${accessToken}` } });
       toast({ title: 'Ajustes seguros aplicados', description: 'O diagnóstico foi atualizado com a nova configuração.' });
-      setNonce((value) => value + 1);
+      await refresh();
     } catch (err) {
       const message = axios.isAxiosError(err) ? (err.response?.data?.message ?? err.message) : 'Falha ao aplicar otimização segura.';
-      setError(Array.isArray(message) ? message.join(' | ') : String(message));
+      toast({ title: 'Falha ao otimizar', description: Array.isArray(message) ? message.join(' | ') : String(message), variant: 'destructive' });
     } finally {
       setApplying(false);
     }
-  }
+  };
+
+  const cpuHist = history.map((h) => h.cpu);
+  const ramHist = history.map((h) => h.ram);
+  const diskHist = history.map((h) => h.disk);
+  const prev = history.length > 1 ? history[history.length - 2] : { cpu, ram, disk };
+
+  const load1 = system?.server.loadAverage[0] ?? 0;
+  const load5 = system?.server.loadAverage[1] ?? 0;
+  const load15 = system?.server.loadAverage[2] ?? 0;
+  const totalRamGB = system ? (system.server.totalMemoryBytes / 1024 / 1024 / 1024).toFixed(1) : '0';
+  const usedRamGB = system ? ((system.server.totalMemoryBytes - system.server.freeMemoryBytes) / 1024 / 1024 / 1024).toFixed(1) : '0';
+
+  const METRICS = [
+    { key: 'cpu', label: 'CPU', value: cpu, sub: `${load1.toFixed(2)} carga · ${system?.server.cpuCount ?? '—'} núcleos`, hist: cpuHist, icon: Cpu },
+    { key: 'ram', label: 'Memória', value: ram, sub: `${usedRamGB} / ${totalRamGB} GB`, hist: ramHist, icon: MemoryStick },
+    { key: 'disk', label: 'Disco', value: disk, sub: system ? `${(system.disk.usedBytes / 1024 ** 4).toFixed(1)} / ${(system.disk.totalBytes / 1024 ** 4).toFixed(1)} TB` : '—', hist: diskHist, icon: HardDrive },
+  ];
+
+  const canApplySafely = isAdmin && Boolean(report?.optimizationPlan?.canApplySafely);
+  const recommendations = report?.recommendations ?? [];
 
   return (
-    <div className="space-y-5 p-4 sm:p-6">
-      <div className="flex flex-col gap-4 border-b border-[hsl(var(--border)_/_0.65)] pb-5 xl:flex-row xl:items-end xl:justify-between">
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="ops-chip">
-              <Activity className="h-3 w-3" />
-              Diagnóstico
-            </span>
-            <span className="ops-chip">
-              <AlertTriangle className="h-3 w-3" />
-              {riskSummaryLabel(summary)}
-            </span>
-            <span className="ops-chip">
-              <Clock className="h-3 w-3" />
-              {dateTimeLabel(report?.generatedAt)}
-            </span>
-          </div>
-          <div>
-            <h2 className="text-[20px] font-semibold tracking-normal text-foreground">Desempenho operacional</h2>
-            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">
-              Streaming, gravação, playback e custo por câmera, com recomendações acionáveis para reduzir transcode e risco operacional.
-            </p>
-          </div>
+    <div className="p-4 md:p-6 space-y-5">
+      {/* ── Header ── */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Desempenho</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Carga do servidor, saúde de streams e processadores de IA em tempo real.
+          </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setNonce((value) => value + 1)} disabled={loading}>
-            <RefreshCw className={cn('mr-2 h-3.5 w-3.5', loading && 'animate-spin')} />
-            Atualizar
-          </Button>
-          {isAdmin && report?.optimizationPlan?.canApplySafely && (
-            <Button size="sm" onClick={() => setConfirmApplyOpen(true)} disabled={applying}>
-              <CheckCircle2 className={cn('mr-2 h-3.5 w-3.5', applying && 'animate-pulse')} />
-              Ajustar seguro
-            </Button>
+        <div className="flex items-center gap-2">
+          {canApplySafely && (
+            <button
+              onClick={() => setConfirmApplyOpen(true)}
+              disabled={applying}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.08)] px-3 py-2 text-xs font-medium text-[hsl(var(--primary))] transition hover:bg-[hsl(var(--primary)_/_0.14)] disabled:opacity-50"
+            >
+              <CheckCircle2 className={`h-3.5 w-3.5 ${applying ? 'animate-pulse' : ''}`} /> Ajustar seguro
+              {report?.optimizationPlan?.safeActionCount ? ` (${report.optimizationPlan.safeActionCount})` : ''}
+            </button>
           )}
+          <button
+            onClick={() => setAuto((v) => !v)}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition ${auto ? 'border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.08)] text-[hsl(var(--primary))]' : 'border-border bg-card text-muted-foreground hover:bg-accent'}`}
+          >
+            <Activity className="h-3.5 w-3.5" /> {auto ? 'Ao vivo' : 'Pausado'}
+          </button>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-xs font-medium transition hover:bg-accent disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} /> Atualizar
+          </button>
         </div>
       </div>
 
-      {error && (
-        <div className="rounded-lg border border-[hsl(var(--destructive)_/_0.35)] bg-[hsl(var(--destructive)_/_0.08)] px-4 py-3 text-sm text-[hsl(var(--destructive))]">
-          {error}
+      {/* ── Primary metrics ── */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        {METRICS.map((m) => {
+          const Icon = m.icon;
+          const tone = toneFor(m.value);
+          return (
+            <div key={m.key} className="rounded-xl border border-border bg-card p-5">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-background border border-border">
+                    <Icon className="h-4 w-4 text-muted-foreground" />
+                  </span>
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{m.label}</div>
+                    <div className="text-[10px] text-muted-foreground">{m.sub}</div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-3xl font-semibold tabular-nums leading-none" style={{ color: tone }}>{m.value}<span className="text-base">%</span></div>
+                  <div className="mt-1 text-[10px]"><Trend now={m.value} prev={(prev as any)[m.key]} /></div>
+                </div>
+              </div>
+              <div className="mt-3"><Sparkline data={m.hist} color={tone} /></div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Secondary KPIs ── */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          { label: 'Streams ativos', value: `${onlineCams}/${cameras.length}`, icon: Video, hint: 'câmeras online' },
+          { label: 'Processadores IA', value: `${runningProc}/${aiCams || 0}`, icon: Brain, hint: 'rodando / habilitados' },
+          { label: 'Load average', value: `${load1.toFixed(1)} ${load5.toFixed(1)} ${load15.toFixed(1)}`, icon: Gauge, hint: '1m · 5m · 15m', mono: true },
+          { label: 'Uptime', value: fmtUptime(system?.server.uptimeSeconds), icon: Server, hint: system?.server.hostname ?? 'servidor' },
+        ].map((k) => {
+          const Icon = k.icon;
+          return (
+            <div key={k.label} className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{k.label}</span>
+                <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+              </div>
+              <div className={`mt-2 text-xl font-semibold ${k.mono ? 'font-mono text-lg' : ''}`}>{k.value}</div>
+              <div className="mt-0.5 text-[10px] text-muted-foreground">{k.hint}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Recomendações de otimização (resource advisor) ── */}
+      {recommendations.length > 0 && (
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="flex items-center gap-2 px-5 py-3.5 border-b border-border">
+            <AlertTriangle className="h-4 w-4 text-[hsl(var(--primary))]" />
+            <h2 className="text-[13px] font-semibold">Recomendações de otimização</h2>
+          </div>
+          <div className="divide-y divide-border/60">
+            {recommendations.map((r) => (
+              <div key={r.code} className="px-5 py-3 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className={`rounded-md border px-1.5 py-0.5 text-[10px] font-semibold ${severityTone(r.severity)}`}>
+                    {r.severity === 'critical' ? 'crítico' : r.severity === 'warning' ? 'atenção' : 'info'}
+                  </span>
+                  <span className="text-[12.5px] font-medium">{r.message}</span>
+                </div>
+                <p className="text-[11px] text-muted-foreground">{r.action}</p>
+                {r.cameras?.length ? <p className="truncate text-[10px] text-muted-foreground/80">{r.cameras.join(', ')}</p> : null}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        <StatCard icon={Camera} label="Câmeras online" value={summary ? `${summary.onlineCameras}/${summary.totalCameras}` : '-'} detail={`${summary?.webrtcPreferred ?? 0} com WebRTC como padrão`} />
-        <StatCard icon={Cpu} label="Transcode live" value={summary?.liveTranscodeLikely ?? '-'} detail={`${summary?.audioTranscodeLikely ?? 0} com áudio convertendo para Opus`} />
-        <StatCard icon={Radio} label="Falhas de live" value={summary?.liveFailuresLast24h ?? '-'} detail="Últimas 24 horas" />
-        <StatCard icon={Router} label="Ajustes seguros" value={report?.optimizationPlan?.safeActionCount ?? '-'} detail={`${report?.optimizationPlan?.manualActionCount ?? 0} ação(ões) manuais sugeridas`} />
-        <StatCard icon={HardDrive} label="Gaps gravação" value={durationLabel(summary?.recordingGapSecondsLast24h)} detail={`${summary?.camerasWithRecordingAttention ?? 0} câmera(s) em atenção`} />
-        <StatCard icon={Video} label="Segmentos 24h" value={summary?.recordingSegmentsLast24h ?? '-'} detail={`${summary?.mediaMtxReaders ?? 0} leitor(es) MediaMTX`} />
+      {/* ── Stream health table ── */}
+      <div className="rounded-xl border border-border bg-card overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border">
+          <div className="flex items-center gap-2">
+            <Wifi className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-[13px] font-semibold">Saúde dos streams</h2>
+          </div>
+          <span className="text-[10px] font-mono text-muted-foreground">{cameras.length} câmeras</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-border">
+                {['Câmera', 'Zona', 'Estado', 'Protocolo', 'IA', 'Processador'].map((h) => (
+                  <th key={h} className="px-5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {cameras.map((cam) => {
+                const proc = processors[cam.id];
+                const procState = !cam.aiEnabled ? '—' : proc?.running ? 'ativo' : 'parado';
+                const procTone = procState === 'ativo' ? 'text-[hsl(152_46%_55%)]' : procState === 'parado' ? 'text-[hsl(38_58%_60%)]' : 'text-muted-foreground';
+                return (
+                  <tr key={cam.id} className="border-b border-border/60 last:border-0 hover:bg-accent/40 transition-colors">
+                    <td className="px-5 py-3">
+                      <div className="text-[12.5px] font-medium">{cam.name}</div>
+                      <div className="font-mono text-[10px] text-muted-foreground">{cam.code ?? cam.id}</div>
+                    </td>
+                    <td className="px-5 py-3 text-[11px] text-muted-foreground">{cam.zone}</td>
+                    <td className="px-5 py-3">
+                      <span className="inline-flex items-center gap-1.5 text-[11px]">
+                        <span className={`h-1.5 w-1.5 rounded-full ${cam.isOnline ? 'bg-[hsl(152_46%_44%)]' : 'bg-muted-foreground/40'}`} />
+                        {cam.isOnline ? 'Online' : 'Offline'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 font-mono text-[11px] text-muted-foreground uppercase">
+                      {(cam as any).preferredLiveProtocol ?? 'webrtc'}
+                    </td>
+                    <td className="px-5 py-3">
+                      <span className={`text-[11px] ${cam.aiEnabled ? 'text-foreground' : 'text-muted-foreground'}`}>
+                        {cam.aiEnabled ? 'Sim' : 'Não'}
+                      </span>
+                    </td>
+                    <td className={`px-5 py-3 text-[11px] font-medium ${procTone}`}>{procState}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <section className="ops-card overflow-hidden">
-          <div className="ops-toolbar border-b border-[hsl(var(--border))] px-4 py-3">
-            <div className="flex items-center gap-2 text-[13px] font-semibold">
-              <AlertTriangle className="h-4 w-4 text-[hsl(var(--primary))]" />
-              Recomendações
-            </div>
-          </div>
-          <div className="divide-y divide-[hsl(var(--border))]">
-            {loading && <div className="px-4 py-6 text-sm text-[hsl(var(--muted-foreground))]">Carregando diagnóstico...</div>}
-            {!loading && report?.recommendations.length === 0 && (
-              <div className="px-4 py-6 text-sm text-[hsl(var(--muted-foreground))]">Nenhum risco relevante agora.</div>
-            )}
-            {report?.recommendations.map((item) => (
-              <div key={item.code} className="space-y-2 px-4 py-3">
-                <Badge variant="outline" className={severityTone(item.severity)}>{item.severity === 'critical' ? 'crítico' : item.severity === 'warning' ? 'atenção' : 'info'}</Badge>
-                <p className="text-sm font-medium leading-snug">{item.message}</p>
-                <p className="text-xs leading-relaxed text-[hsl(var(--muted-foreground))]">{item.action}</p>
-                <p className="truncate text-[11px] text-[hsl(var(--muted-foreground))]">{item.cameras.join(', ')}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="ops-card overflow-hidden">
-          <div className="ops-toolbar grid grid-cols-[minmax(180px,1.2fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(150px,0.8fr)_120px] gap-3 border-b border-[hsl(var(--border))] px-4 py-3 text-[10px] font-mono uppercase tracking-[0.12em] text-[hsl(var(--muted-foreground))] max-xl:hidden">
-            <span>Câmera</span>
-            <span>Live</span>
-            <span>Gravação</span>
-            <span>Operação</span>
-            <span>Risco</span>
-          </div>
-
-          <div className="divide-y divide-[hsl(var(--border))]">
-            {loading && <div className="px-4 py-8 text-sm text-[hsl(var(--muted-foreground))]">Carregando câmeras...</div>}
-            {!loading && orderedCameras.length === 0 && (
-              <div className="px-4 py-8 text-sm text-[hsl(var(--muted-foreground))]">Nenhuma câmera encontrada.</div>
-            )}
-            {orderedCameras.map((camera) => (
-              <div key={camera.cameraId} className="grid gap-3 px-4 py-4 transition-colors hover:bg-[hsl(var(--accent)_/_0.34)] xl:grid-cols-[minmax(180px,1.2fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(150px,0.8fr)_120px] xl:items-center">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    {camera.status === 'ONLINE'
-                      ? <CheckCircle2 className="h-4 w-4 text-[hsl(var(--chart-2))]" />
-                      : <AlertTriangle className="h-4 w-4 text-[hsl(var(--chart-4))]" />}
-                    <p className="truncate text-sm font-medium">{camera.cameraName}</p>
-                  </div>
-                  <p className="mt-1 truncate text-xs text-[hsl(var(--muted-foreground))]">{camera.mediaMtx.pathName}</p>
-                </div>
-
-                <div className="text-xs">
-                  <div className="flex items-center gap-2 text-sm">
-                    <Video className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
-                    <span>{codecLabel(camera.profiles.live.codec)} para {codecLabel(camera.profiles.live.deliveryCodec)}</span>
-                  </div>
-                  <p className="mt-1 text-[hsl(var(--muted-foreground))]">{resolution(camera.profiles.live.width, camera.profiles.live.height)} · subtype {camera.profiles.live.subtype}</p>
-                  {camera.profiles.live.transcodeForBrowser && <Badge variant="outline" className="mt-2 border-[hsl(var(--chart-4)_/_0.35)] text-[hsl(var(--chart-4))]">transcode</Badge>}
-                </div>
-
-                <div className="text-xs">
-                  <div className="flex items-center gap-2 text-sm">
-                    <HardDrive className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
-                    <span>{codecLabel(camera.profiles.recording.codec)}</span>
-                  </div>
-                  <p className="mt-1 text-[hsl(var(--muted-foreground))]">{resolution(camera.profiles.recording.width, camera.profiles.recording.height)} · {camera.profiles.recording.mode ?? 'modo padrão'}</p>
-                  <Badge variant="outline" className={cn('mt-2', camera.profiles.recording.copyFriendly ? 'border-[hsl(var(--chart-2)_/_0.35)] text-[hsl(var(--chart-2))]' : 'border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))]')}>
-                    {camera.profiles.recording.copyFriendly ? 'copy' : 'compatível'}
-                  </Badge>
-                </div>
-
-                <div className="text-xs">
-                  <p className="text-sm">{camera.operations.live.failuresLast24h} falha(s) live</p>
-                  <p className="mt-1 text-[hsl(var(--muted-foreground))]">{camera.operations.recording.segmentsLast24h} segmento(s) 24h · {camera.operations.recording.coveragePercentLast24h}% cobertura</p>
-                  <p className="mt-1 text-[hsl(var(--muted-foreground))]">gap {durationLabel(camera.operations.recording.gapSecondsLast24h)} · maior {durationLabel(camera.operations.recording.largestGapSecondsLast24h)}</p>
-                  <p className="mt-1 text-[hsl(var(--muted-foreground))]">analytics {camera.profiles.analytics.separatedFromLive ? 'separado' : 'acoplado'} · {camera.mediaMtx.readerCount} leitor(es)</p>
-                  {camera.operations.live.lastFailure?.reason && (
-                    <p className="mt-1 truncate text-[hsl(var(--chart-4))]">{camera.operations.live.lastFailure.reason}</p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <div className={cn('text-sm font-semibold', riskTone(camera.resource.level))}>{levelLabel(camera.resource.level)}</div>
-                  <Progress value={Math.min(100, camera.resource.score)} className="h-1.5" />
-                  <div className="flex flex-wrap gap-1">
-                    {camera.resource.findings.slice(0, 2).map((finding) => (
-                      <Badge key={finding.code} variant="outline" className={cn('max-w-full truncate', severityTone(finding.severity))}>{finding.message}</Badge>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
+      {!system && (
+        <p className="text-center text-xs text-muted-foreground py-4">
+          Aguardando métricas do servidor…
+        </p>
+      )}
 
       <AlertDialog open={confirmApplyOpen} onOpenChange={setConfirmApplyOpen}>
         <AlertDialogContent>
