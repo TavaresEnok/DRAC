@@ -229,6 +229,14 @@ check_endpoints() {
     else
       warn "DRAC Central nao respondeu agora: ${CLOUD_API_URL%/}/api/health"
     fi
+    if curl -fsS --max-time 8 \
+      -H "X-DRAC-Installation-Id: ${CLOUD_INSTALLATION_ID:-}" \
+      -H "X-DRAC-License-Key: ${CLOUD_LICENSE_KEY:-}" \
+      "${CLOUD_API_URL%/}/api/agent/status" >/dev/null 2>&1; then
+      ok "Instalacao reconhecida e autenticada pela DRAC Central"
+    else
+      warn "Central respondeu, mas nao confirmou esta instalacao/licenca em /api/agent/status"
+    fi
   fi
 }
 

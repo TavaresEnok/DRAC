@@ -134,6 +134,27 @@ check_http_url() {
   fi
 }
 
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; :a;N;$!ba;s/\n/\\n/g'
+}
+
+wait_for_http() {
+  local label="$1"
+  local url="$2"
+  local attempts="${3:-30}"
+  local delay="${4:-3}"
+  local attempt
+  for attempt in $(seq 1 "$attempts"); do
+    if curl -fsS --max-time 5 "$url" >/dev/null 2>&1; then
+      log "$label respondeu."
+      return 0
+    fi
+    sleep "$delay"
+  done
+  warn "$label nao respondeu apos $((attempts * delay)) segundos: $url"
+  return 1
+}
+
 preflight() {
   log "Executando pre-checagens"
 
@@ -345,15 +366,47 @@ run_migrations() {
   run_as_user "$DRAC_OPERATING_USER" bash -lc "cd '$DRAC_INSTALL_DIR' && docker compose --env-file infra/.env $files exec -T -w /app/apps/api api npx prisma migrate deploy"
 }
 
+register_central_now() {
+  local base="${DRAC_CENTRAL_URL%/}"
+  local payload response_file
+  response_file="$(mktemp)"
+  payload="$(printf '{"installation":{"id":"%s","name":"%s","customerName":"%s","version":"%s","launchProfile":"standard"},"summary":{"status":"installing","alerts":[]}}' \
+    "$(json_escape "$DRAC_INSTALLATION_ID")" \
+    "$(json_escape "$DRAC_INSTALLATION_ID")" \
+    "$(json_escape "$DRAC_CUSTOMER_NAME")" \
+    "$(json_escape "$DRAC_BRANCH")")"
+
+  log "Registrando instalacao imediatamente na DRAC Central"
+  if curl -fsS --max-time 12 \
+    -H 'Content-Type: application/json' \
+    -H "X-DRAC-Installation-Id: $DRAC_INSTALLATION_ID" \
+    -H "X-DRAC-License-Key: $DRAC_LICENSE_KEY" \
+    -d "$payload" \
+    "$base/api/agent/heartbeat" > "$response_file"; then
+    log "Primeiro heartbeat aceito pela Central."
+  else
+    warn "A Central nao aceitou o heartbeat imediato; o conector local continuara tentando automaticamente."
+    rm -f "$response_file"
+    return 0
+  fi
+
+  if curl -fsS --max-time 12 \
+    -H "X-DRAC-Installation-Id: $DRAC_INSTALLATION_ID" \
+    -H "X-DRAC-License-Key: $DRAC_LICENSE_KEY" \
+    "$base/api/agent/status" >/dev/null; then
+    log "Instalacao confirmada na Central."
+  else
+    warn "Heartbeat enviado, mas a confirmacao de status da Central ainda nao respondeu."
+  fi
+  rm -f "$response_file"
+}
+
 validate_installation() {
   log "Validando instalacao"
   docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | sed -n '1,20p'
 
-  if curl -fsS "http://127.0.0.1:3000/health" >/dev/null; then
-    log "API local respondeu em http://127.0.0.1:3000/health"
-  else
-    warn "API local ainda nao respondeu. Veja: docker logs --tail=120 vms-api"
-  fi
+  wait_for_http "API local" "http://127.0.0.1:3000/health" 30 3 || true
+  wait_for_http "Painel local" "http://127.0.0.1:5173/" 20 3 || true
 
   if curl -fsS "${DRAC_CENTRAL_URL%/}/api/health" >/dev/null; then
     log "Central respondeu em ${DRAC_CENTRAL_URL%/}/api/health"
@@ -404,6 +457,7 @@ main() {
   prepare_env
   start_stack
   run_migrations
+  register_central_now
   validate_installation
   print_summary
 }

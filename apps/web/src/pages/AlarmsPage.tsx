@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { format } from 'date-fns';
+import { useLocation } from 'wouter';
 import {
   Bell, BellOff, CheckCheck, ChevronUp, ChevronDown,
   AlertTriangle, Flame, DoorOpen, Shield, MapPin,
-  Volume2, VolumeX, ArrowRight, X, Clock, Settings2, Plus, Play, Pencil, Trash2
+  Volume2, VolumeX, ArrowRight, X, Clock, Settings2, Plus, Play, Pencil, Trash2,
+  ChevronRight, MessageSquare
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip as ReTooltip, ResponsiveContainer } from 'recharts';
 import { useAlarmStore } from '../store/alarmStore';
@@ -150,7 +152,7 @@ function AlarmCard({ alarm, onAck, onResolve, onAddNote }: { alarm: Alarm; onAck
       className={`bg-card border rounded-lg overflow-hidden transition-shadow ${
         isActiveP1
           ? 'border-[hsl(354_52%_52%_/_0.4)] alarm-glow'
-          : 'border-card-border'
+          : 'border-border'
       }`}
     >
       <div className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none" onClick={() => setExpanded((e) => !e)}>
@@ -302,7 +304,11 @@ function AlarmCard({ alarm, onAck, onResolve, onAddNote }: { alarm: Alarm; onAck
 export default function AlertasPage() {
   const { cameras, load } = useAlarmStore();
   const { accessToken } = useAuthStore();
+  const [, setLocation] = useLocation();
   const [muted, setMuted] = useState(false);
+  const [workspaceMode, setWorkspaceMode] = useState<'operation' | 'advanced'>('operation');
+  const [selectedAlarmId, setSelectedAlarmId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState('');
   const [alarmItems, setAlarmItems] = useState<Alarm[]>([]);
   const [alarmsLoading, setAlarmsLoading] = useState(false);
   const [alarmsError, setAlarmsError] = useState<string | null>(null);
@@ -559,40 +565,251 @@ export default function AlertasPage() {
     }
   }
 
-  return (
-    <div className="flex h-full min-h-0 gap-0">
-      <div className="flex-1 overflow-y-auto p-5 space-y-5 min-w-0">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <span className={`w-2 h-2 rounded-full ${activeAlertas.length > 0 ? 'status-alarm rec-pulse' : 'status-online'}`} />
-            <span className="text-[13px] font-semibold">
-              {activeAlertas.length > 0 ? `${activeAlertas.length} Alarme${activeAlertas.length !== 1 ? 's' : ''} Ativo${activeAlertas.length !== 1 ? 's' : ''}` : 'Tudo normal'}
-            </span>
+  const selectedAlarm = visibleAlarms.find((alarm) => alarm.id === selectedAlarmId)
+    ?? activeAlertas[0]
+    ?? ackAlertas[0]
+    ?? visibleAlarms[0]
+    ?? null;
+  const selectedCamera = selectedAlarm
+    ? cameras.find((camera) => camera.id === selectedAlarm.cameraId) ?? null
+    : null;
+
+  if (workspaceMode === 'operation') {
+    const statusTabs = [
+      { value: 'OPEN' as const, label: 'Ativos', count: activeAlertas.length },
+      { value: 'ACKED' as const, label: 'Reconhecidos', count: ackAlertas.length },
+      { value: 'RESOLVED' as const, label: 'Resolvidos', count: resolvedAlertas.length },
+    ];
+
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-border px-6 pb-4 pt-5">
+          <div>
+            <h1 className="text-[18px] font-semibold tracking-tight">Alarmes</h1>
+            <p className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className={`h-2 w-2 rounded-full ${activeAlertas.length ? 'status-alarm rec-pulse' : 'status-online'}`} />
+              {activeAlertas.length ? `${activeAlertas.length} alarme${activeAlertas.length === 1 ? '' : 's'} ativo${activeAlertas.length === 1 ? '' : 's'}` : 'Tudo normal'}
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={handleDeleteAllAlarms}
-              disabled={deletingAllAlarms || visibleAlarms.length === 0}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-[hsl(var(--destructive)_/_0.35)] text-[hsl(var(--destructive))] text-[11px] transition-colors hover:bg-[hsl(var(--destructive)_/_0.08)] disabled:opacity-45"
+              onClick={() => setWorkspaceMode('advanced')}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              {deletingAllAlarms ? 'Apagando...' : 'Apagar todos'}
+              <Settings2 className="h-3.5 w-3.5" /> Filtros e regras
             </button>
             <button
-              onClick={() => setMuted((m) => !m)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded border text-[11px] transition-colors ${
-                muted
-                  ? 'border-[hsl(38_58%_54%_/_0.4)] text-[hsl(38,58%,62%)] bg-[hsl(38_58%_54%_/_0.07)]'
-                  : 'border-border text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]'
-              }`}
+              onClick={() => setMuted((value) => !value)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title={muted ? 'Ativar som' : 'Silenciar alertas'}
             >
-              {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-              {muted ? 'Ativar som dos alertas' : 'Silenciar alertas'}
+              {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
             </button>
           </div>
         </div>
 
-        <details className="bg-card border border-card-border rounded-lg p-4 space-y-3">
+        <div className="flex min-h-0 flex-1">
+          <aside className="flex w-72 shrink-0 flex-col overflow-hidden border-r border-border bg-card">
+            <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
+              {statusTabs.map((tab) => (
+                <button
+                  key={tab.value}
+                  onClick={() => setStatusFilter(tab.value)}
+                  className={`h-7 flex-1 rounded-md text-[10px] font-medium transition-colors ${
+                    statusFilter === tab.value
+                      ? 'bg-accent text-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {tab.label}
+                  {tab.count > 0 && <span className="ml-1 font-mono opacity-60">{tab.count}</span>}
+                </button>
+              ))}
+            </div>
+            <div className="flex-1 divide-y divide-border/60 overflow-y-auto">
+              {alarmsLoading && !visibleAlarms.length && (
+                <div className="p-5 text-center text-xs text-muted-foreground">Carregando alarmes...</div>
+              )}
+              {!alarmsLoading && !visibleAlarms.length && (
+                <div className="flex h-36 flex-col items-center justify-center gap-2 text-muted-foreground">
+                  <BellOff className="h-6 w-6 opacity-30" />
+                  <p className="text-xs">Nenhum alarme neste status</p>
+                </div>
+              )}
+              {visibleAlarms.map((alarm) => {
+                const selected = selectedAlarm?.id === alarm.id;
+                return (
+                  <button
+                    key={alarm.id}
+                    onClick={() => setSelectedAlarmId(alarm.id)}
+                    className={`w-full border-l-2 px-4 py-3 text-left transition-colors ${
+                      selected
+                        ? 'border-l-primary bg-accent'
+                        : 'border-l-transparent hover:bg-accent/60'
+                    }`}
+                  >
+                    <div className="mb-1 flex items-start justify-between gap-2">
+                      <span className="min-w-0 flex-1 text-[12.5px] font-semibold leading-snug">{alarm.name}</span>
+                      <span className={`shrink-0 font-mono text-[9px] font-bold ${PRIORITY_STYLES[alarm.priority].badge.split(' ')[1]}`}>
+                        {alarm.priority}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">{alarm.zone}</div>
+                    <div className="mt-0.5 font-mono text-[9px] text-muted-foreground/60">
+                      {format(new Date(alarm.triggeredAt), 'dd/MM/yyyy HH:mm:ss')}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+
+          <section className="min-w-0 flex-1 overflow-y-auto">
+            {!selectedAlarm ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+                <Bell className="h-10 w-10 opacity-20" />
+                <p className="text-sm">Selecione um alarme para ver detalhes</p>
+              </div>
+            ) : (
+              <div className="flex max-w-3xl flex-col gap-5 p-6">
+                <div>
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold ${PRIORITY_STYLES[selectedAlarm.priority].badge}`}>
+                      {selectedAlarm.priority}
+                    </span>
+                    <span className="rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      {selectedAlarm.status === 'active' ? 'Ativo' : selectedAlarm.status === 'acknowledged' ? 'Reconhecido' : 'Resolvido'}
+                    </span>
+                  </div>
+                  <h2 className="text-[18px] font-semibold tracking-tight">{selectedAlarm.name}</h2>
+                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">{selectedAlarm.description}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    ['Câmera', selectedCamera?.name ?? selectedAlarm.cameraId],
+                    ['Zona', selectedAlarm.zone],
+                    ['Registrado', format(new Date(selectedAlarm.triggeredAt), 'dd/MM/yyyy HH:mm:ss')],
+                    ['Tipo', selectedAlarm.type],
+                  ].map(([label, value]) => (
+                    <div key={label} className="ops-card rounded-lg p-3">
+                      <div className="mb-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
+                      <div className="truncate text-[12.5px] font-medium">{value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {selectedCamera && (
+                  <button
+                    onClick={() => setLocation(`/playback?cameraId=${selectedCamera.id}`)}
+                    className="flex w-full items-center gap-3 rounded-lg border border-border px-4 py-3 text-left transition-colors hover:bg-accent"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[12.5px] font-medium">Ver reprodução: {selectedCamera.name}</div>
+                      <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{selectedCamera.ipAddress} · {selectedCamera.resolution}</div>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </button>
+                )}
+
+                {selectedAlarm.notes && (
+                  <div className="rounded-lg border border-border bg-muted/30 p-3">
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Notas</span>
+                    </div>
+                    <p className="whitespace-pre-line text-[12px] text-muted-foreground">{selectedAlarm.notes}</p>
+                  </div>
+                )}
+
+                {selectedAlarm.status !== 'resolved' && (
+                  <div className="space-y-3 pt-1">
+                    <textarea
+                      value={noteDraft}
+                      onChange={(event) => setNoteDraft(event.target.value)}
+                      placeholder="Adicionar nota opcional..."
+                      className="h-20 w-full resize-none rounded-lg border border-border bg-background p-3 text-xs outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      {selectedAlarm.status === 'active' && (
+                        <button
+                          onClick={() => void handleAcknowledgeAlarm(selectedAlarm.id)}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-primary-foreground"
+                        >
+                          <CheckCheck className="h-3.5 w-3.5" /> Reconhecer
+                        </button>
+                      )}
+                      {noteDraft.trim() && (
+                        <button
+                          onClick={() => {
+                            void handleAddAlarmNote(selectedAlarm.id, noteDraft.trim());
+                            setNoteDraft('');
+                          }}
+                          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] hover:bg-accent"
+                        >
+                          <MessageSquare className="h-3.5 w-3.5" /> Adicionar nota
+                        </button>
+                      )}
+                      <button
+                        onClick={() => void handleResolveAlarm(selectedAlarm.id)}
+                        className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg border border-destructive/30 px-3 text-[11px] text-destructive hover:bg-destructive/10"
+                      >
+                        <X className="h-3.5 w-3.5" /> Resolver
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      {/* Page header */}
+      <div className="px-6 pt-5 pb-4 border-b border-border shrink-0 flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-[18px] font-semibold tracking-tight">Alarmes</h1>
+          <p className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${activeAlertas.length > 0 ? 'status-alarm rec-pulse' : 'status-online'}`} />
+            {activeAlertas.length > 0 ? `${activeAlertas.length} alarme${activeAlertas.length !== 1 ? 's' : ''} ativo${activeAlertas.length !== 1 ? 's' : ''}` : 'Tudo normal'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setWorkspaceMode('operation')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <ArrowRight className="h-3.5 w-3.5 rotate-180" />
+            Voltar à operação
+          </button>
+          <button
+            onClick={handleDeleteAllAlarms}
+            disabled={deletingAllAlarms || visibleAlarms.length === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[hsl(var(--destructive)_/_0.35)] text-[hsl(var(--destructive))] text-[11px] transition-colors hover:bg-[hsl(var(--destructive)_/_0.08)] disabled:opacity-45"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            {deletingAllAlarms ? 'Apagando...' : 'Apagar todos'}
+          </button>
+          <button
+            onClick={() => setMuted((m) => !m)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] transition-colors ${
+              muted
+                ? 'border-[hsl(38_58%_54%_/_0.4)] text-[hsl(38,58%,62%)] bg-[hsl(38_58%_54%_/_0.07)]'
+                : 'border-border text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]'
+            }`}
+          >
+            {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+            {muted ? 'Ativar som dos alertas' : 'Silenciar alertas'}
+          </button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-5 space-y-5 min-w-0">
+
+        <details className="bg-card border border-border rounded-xl p-4 space-y-3">
           <summary className="cursor-pointer text-[12px] font-semibold">Filtros avançados</summary>
           <div className="mt-3 space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-2">
@@ -654,7 +871,7 @@ export default function AlertasPage() {
           </div>
         </details>
 
-        <details className="bg-card border border-card-border rounded-lg p-4 space-y-3">
+        <details className="bg-card border border-border rounded-xl p-4 space-y-3">
           <summary className="cursor-pointer text-[12px] font-semibold">Regras e simulação</summary>
           <div className="mt-3 space-y-3">
           <div className="flex items-center justify-between gap-3">
@@ -737,7 +954,7 @@ export default function AlertasPage() {
             </AnimatePresence>
           </div>
         ) : (
-          <div className="bg-card border border-card-border rounded-lg p-8 text-center">
+          <div className="bg-card border border-border rounded-xl p-8 text-center">
             <Bell className="w-7 h-7 text-[hsl(var(--chart-3))] mx-auto mb-3 opacity-60" />
             <div className="text-[13px] font-semibold text-[hsl(var(--chart-3))]">Tudo normal</div>
             <div className="text-[11px] text-[hsl(var(--muted-foreground))] mt-1">Não há alarmes ativos</div>
@@ -758,7 +975,7 @@ export default function AlertasPage() {
         {resolvedAlertas.length > 0 && (
           <div className="space-y-2">
             <div className="text-[11px] font-semibold text-[hsl(var(--muted-foreground))]">Resolvidos ({resolvedAlertas.length})</div>
-            <div className="bg-card border border-card-border rounded-lg overflow-hidden">
+            <div className="bg-card border border-border rounded-xl overflow-hidden">
               <table className="w-full text-[11px]">
                 <thead>
                   <tr className="border-b border-border">

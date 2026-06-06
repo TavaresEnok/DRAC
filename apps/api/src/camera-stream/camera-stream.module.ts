@@ -6,11 +6,12 @@ import { CamerasModule } from '../cameras/cameras.module';
 import { CameraStreamController } from './camera-stream.controller';
 import { FfmpegMjpegService } from './ffmpeg-mjpeg.service';
 import { MediamtxProxyService } from './mediamtx-proxy.service';
+import { StreamResourceAdvisorService } from './stream-resource-advisor.service';
 
 @Module({
   imports: [CamerasModule, AuthModule, AuditModule, AccessControlModule],
   controllers: [CameraStreamController],
-  providers: [FfmpegMjpegService, MediamtxProxyService],
-  exports: [FfmpegMjpegService, MediamtxProxyService],
+  providers: [FfmpegMjpegService, MediamtxProxyService, StreamResourceAdvisorService],
+  exports: [FfmpegMjpegService, MediamtxProxyService, StreamResourceAdvisorService],
 })
 export class CameraStreamModule {}

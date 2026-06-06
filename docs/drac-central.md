@@ -83,7 +83,7 @@ DRAC_AUTO_YES=true \
 bash
 ```
 
-O instalador configura o conector cloud, sobe o DRAC local e a instalacao aparece automaticamente na central apos o primeiro heartbeat.
+O instalador configura o conector cloud, sobe o DRAC local e envia o primeiro heartbeat imediatamente. Antes de concluir, ele consulta `/api/agent/status` com a identidade da instalação para confirmar que o cliente já aparece na Central.
 
 ### Configuracao manual
 

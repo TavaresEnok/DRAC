@@ -4,6 +4,7 @@ import { AlertTriangle, LoaderCircle, VideoOff, Volume2, VolumeX } from 'lucide-
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
 import { streamUrlsCache } from '../lib/stream-urls-cache';
+import { liveDetectionsPoller } from '../lib/live-detections-poller';
 
 type LiveStreamPlayerProps = {
   cameraId: string;
@@ -12,6 +13,7 @@ type LiveStreamPlayerProps = {
   autoPlay?: boolean;
   muted?: boolean;
   showOverlay?: boolean;
+  aiEnabled?: boolean;
   liveViewMode?: 'selected' | 'grid';
   startDelayMs?: number;
   onStatusChange?: (status: LivePlayerStatus) => void;
@@ -34,14 +36,13 @@ const LIVE_EDGE_OFFSET_SECONDS = 0.35;
 const LIVE_RENDER_STALL_RECONNECT_MS = 10000;
 const LIVE_VISUAL_FREEZE_RECONNECT_MS = 45000;
 const LIVE_BLACK_FRAME_FAILOVER_MS = 6000;
-const AI_OVERLAY_MAX_AGE_MS = 700;
-const AI_OVERLAY_POLL_MS = 500;
 const LIVE_VIEW_LEASE_TTL_SECONDS = 20;
 const LIVE_VIEW_HEARTBEAT_MS = 7000;
 const LIVE_PROTOCOL_STORAGE_PREFIX = 'drac-live-protocol';
 // Stream token expires in 5 min on the server; renew 60s before to avoid black screen.
 const STREAM_TOKEN_TTL_MS = 5 * 60 * 1000;
 const STREAM_TOKEN_RENEW_BEFORE_MS = 60 * 1000;
+const STREAM_URL_CACHE_TTL_MS = 60 * 1000;
 type ActiveLiveProtocol = 'WEBRTC' | 'LL-HLS' | 'HLS';
 type LiveProtocol = 'auto' | 'flv' | 'hls' | 'webrtc' | 'mjpeg' | 'llhls';
 export type LivePlayerStatus = {
@@ -75,6 +76,13 @@ type LiveDiagnostics = {
   mediaMtxPublicHlsUrl?: string | null;
   mediaMtxWebrtcAllowOrigin?: string | null;
   mediaMtxHlsAllowOrigin?: string | null;
+  readiness?: {
+    state?: 'ready' | 'degraded' | 'blocked';
+    readyForWebrtc?: boolean;
+    fallbackAvailable?: boolean;
+    userMessage?: string | null;
+    recommendedAction?: string | null;
+  } | null;
 };
 
 type PlaybackProgress = {
@@ -237,10 +245,12 @@ export function LiveStreamPlayer({
   autoPlay = true,
   muted = true,
   showOverlay = true,
+  aiEnabled = true,
   liveViewMode = 'selected',
   startDelayMs = 0,
   onStatusChange,
 }: LiveStreamPlayerProps) {
+  const aiOverlayEnabled = showOverlay && aiEnabled;
   const accessToken = useAuthStore((state) => state.accessToken);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -269,6 +279,10 @@ export function LiveStreamPlayer({
   const failedProtocolsRef = useRef<Set<LiveProtocol>>(new Set());
   const visualCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const liveViewSessionIdRef = useRef<string>(createLiveViewSessionId(cameraId));
+  // viewMode atual lido pelo heartbeat do lease sem recriar a sessão a cada
+  // alternância grid/selected (evita stop+start de lease a cada clique na grade).
+  const liveViewModeRef = useRef(liveViewMode);
+  liveViewModeRef.current = liveViewMode;
   // Timer to proactively renew the stream token before it expires (avoids black screen)
   const streamTokenRenewTimerRef = useRef<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -490,14 +504,15 @@ export function LiveStreamPlayer({
         setActiveProtocol(null);
         activeProtocolRef.current = null;
         setHasLiveFrame(false);
-        setPosterUrl(null);
         hasFrameRef.current = false;
       }
 
       try {
         // Use cache to deduplicate concurrent requests for the same camera
-        // This prevents overwhelming the backend when multiple cameras load simultaneously
-        const cacheKey = `stream-urls:${cameraId}:${accessToken}`;
+        // This prevents overwhelming the backend when multiple cameras load simultaneously.
+        // A chave é só o cameraId: incluir o JWT criava entradas órfãs no Map a cada
+        // renovação de token (a expiração é lazy, então elas nunca eram removidas).
+        const cacheKey = `stream-urls:${cameraId}`;
         const data = await streamUrlsCache.getOrFetch(
           cacheKey,
           () => axios.get<{
@@ -522,7 +537,7 @@ export function LiveStreamPlayer({
             `${API_URL}/camera-stream/${cameraId}/urls`,
             { headers: tokenHeaders },
           ).then(res => res.data),
-          8000, // 8 second cache TTL
+          STREAM_URL_CACHE_TTL_MS,
         );
 
         if (cancelled) return;
@@ -722,12 +737,21 @@ export function LiveStreamPlayer({
 
           await new Promise<void>((resolve, reject) => {
             let videoTrackReceived = false;
+            let visibleFrameReceived = false;
             let settled = false;
             let whepTimeout: number | null = null;
+            // Poll do primeiro frame visível, sem prazo próprio: o startupTimeout
+            // abaixo é o único deadline da inicialização (antes havia dois timers de
+            // 8s sobrepostos, com mensagens concorrentes e até ~16s de espera real).
+            let visibleFramePoll: number | null = null;
             const finish = (error?: Error) => {
               if (settled) return;
               settled = true;
               window.clearTimeout(startupTimeout);
+              if (visibleFramePoll != null) {
+                window.clearInterval(visibleFramePoll);
+                visibleFramePoll = null;
+              }
               if (whepTimeout != null) {
                 window.clearTimeout(whepTimeout);
                 whepTimeout = null;
@@ -739,10 +763,10 @@ export function LiveStreamPlayer({
               else resolve();
             };
             const startupTimeout = window.setTimeout(() => {
-              if (!videoTrackReceived) {
-                abortController.abort();
-                finish(new Error('WebRTC não entregou uma track de vídeo dentro do tempo limite.'));
-              }
+              abortController.abort();
+              finish(new Error(videoTrackReceived
+                ? 'WebRTC conectou, mas não entregou imagem (vídeo preto ou sem frames) dentro do tempo limite.'
+                : 'WebRTC não conectou ou não entregou track de vídeo dentro do tempo limite.'));
             }, WEBRTC_FIRST_FRAME_TIMEOUT_MS);
             const failOrRetryWebrtc = (reason: string, transient: boolean) => {
               if (cancelled || webrtcPcRef.current !== pc) return;
@@ -783,21 +807,30 @@ export function LiveStreamPlayer({
               if (event.track.kind !== 'video') return;
               videoTrackReceived = true;
               clearWebrtcDisconnectTimer();
-              markHealthy('WEBRTC');
-              finish();
-              void waitForVisibleFrame('WEBRTC', WEBRTC_FIRST_FRAME_TIMEOUT_MS + 2000)
-                .catch(() => {
-                  if (!cancelled && activeProtocolRef.current === 'WEBRTC') {
-                    failActiveProtocol('WebRTC conectado, mas sem frame visível');
-                  }
-                });
+              // Espera um frame visível (não preto). Sem timer próprio: se não chegar,
+              // o startupTimeout dispara com a mensagem de "conectou, mas sem imagem".
+              const checkVisibleFrame = () => {
+                if (cancelled || webrtcPcRef.current !== pc) {
+                  finish(new Error('Inicialização WebRTC cancelada.'));
+                  return;
+                }
+                if (element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || element.videoWidth <= 0 || element.videoHeight <= 0) {
+                  return;
+                }
+                if (isLikelyBlackFrame(element)) return;
+                visibleFrameReceived = true;
+                markHealthy('WEBRTC');
+                finish();
+              };
+              visibleFramePoll = window.setInterval(checkVisibleFrame, 200);
+              checkVisibleFrame();
             };
 
             pc.onconnectionstatechange = () => {
               if (cancelled || webrtcPcRef.current !== pc) return;
               if (pc.connectionState === 'connected' && videoTrackReceived) {
                 clearWebrtcDisconnectTimer();
-                markHealthy('WEBRTC');
+                if (visibleFrameReceived) markHealthy('WEBRTC');
                 return;
               }
               if (pc.connectionState === 'disconnected') {
@@ -818,7 +851,7 @@ export function LiveStreamPlayer({
               if (cancelled || webrtcPcRef.current !== pc) return;
               if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
                 clearWebrtcDisconnectTimer();
-                if (videoTrackReceived) markHealthy('WEBRTC');
+                if (visibleFrameReceived) markHealthy('WEBRTC');
                 return;
               }
               if (pc.iceConnectionState === 'disconnected') {
@@ -987,11 +1020,14 @@ export function LiveStreamPlayer({
 
         failedProtocolsRef.current.clear();
         streamUrlsCache.clear(cacheKey);
+        if (liveDiagnostics?.readiness?.state === 'blocked') {
+          const action = liveDiagnostics.readiness.recommendedAction
+            ? ` ${liveDiagnostics.readiness.recommendedAction}`
+            : '';
+          throw new Error(`${liveDiagnostics.readiness.userMessage ?? 'A transmissão não está pronta.'}${action}`);
+        }
         if (liveDiagnostics && !liveDiagnostics.pathReady) {
           throw new Error('O MediaMTX ainda não publicou o caminho desta câmera. Verifique se a câmera está online e se o RTSP responde.');
-        }
-        if (liveDiagnostics?.mediaMtxWebrtcAllowOrigin === '*' && window.location.protocol === 'https:') {
-          throw new Error('Nenhum protocolo iniciou. Em HTTPS, confira domínio público, origem permitida do MediaMTX e porta/rota WebRTC.');
         }
         throw new Error('Nenhum protocolo iniciou. Verifique WebRTC/WHEP, HLS, codec da câmera e conectividade com o MediaMTX.');
       } catch (streamError) {
@@ -1301,26 +1337,32 @@ export function LiveStreamPlayer({
         return;
       }
 
-      if (isLikelyBlackFrame(element)) {
-        if (blackFrameSinceRef.current == null) blackFrameSinceRef.current = now;
-        if (now - blackFrameSinceRef.current >= LIVE_BLACK_FRAME_FAILOVER_MS) {
+      // Detecção por canvas (frame preto / congelamento) faz readback de GPU, que é
+      // custoso quando multiplicado por todos os tiles da grade. Roda só no tile em
+      // destaque; tiles de grade ainda têm o watchdog de render (rVFC) e de progresso
+      // de mídia abaixo, que cobrem travamento sem readback.
+      if (liveViewMode === 'selected') {
+        if (isLikelyBlackFrame(element)) {
+          if (blackFrameSinceRef.current == null) blackFrameSinceRef.current = now;
+          if (now - blackFrameSinceRef.current >= LIVE_BLACK_FRAME_FAILOVER_MS) {
+            blackFrameSinceRef.current = null;
+            failActiveProtocol('imagem preta persistente');
+            return;
+          }
+        } else {
           blackFrameSinceRef.current = null;
-          failActiveProtocol('imagem preta persistente');
-          return;
         }
-      } else {
-        blackFrameSinceRef.current = null;
-      }
 
-      const visualHash = sampleVideoHash(element);
-      if (visualHash) {
-        if (visualHash !== lastVisualHashRef.current) {
-          lastVisualHashRef.current = visualHash;
-          lastVisualChangeAtRef.current = now;
-        } else if (now - lastVisualChangeAtRef.current >= LIVE_VISUAL_FREEZE_RECONNECT_MS) {
-          lastVisualChangeAtRef.current = now;
-          failActiveProtocol('imagem sem alteração por tempo demais');
-          return;
+        const visualHash = sampleVideoHash(element);
+        if (visualHash) {
+          if (visualHash !== lastVisualHashRef.current) {
+            lastVisualHashRef.current = visualHash;
+            lastVisualChangeAtRef.current = now;
+          } else if (now - lastVisualChangeAtRef.current >= LIVE_VISUAL_FREEZE_RECONNECT_MS) {
+            lastVisualChangeAtRef.current = now;
+            failActiveProtocol('imagem sem alteração por tempo demais');
+            return;
+          }
         }
       }
 
@@ -1357,18 +1399,17 @@ export function LiveStreamPlayer({
     }, LIVE_STALL_CHECK_INTERVAL_MS);
 
     return () => window.clearInterval(interval);
-  }, [autoPlay, error, failActiveProtocol, isLikelyBlackFrame, isLoading, sampleVideoHash]);
+  }, [autoPlay, error, failActiveProtocol, isLikelyBlackFrame, isLoading, liveViewMode, sampleVideoHash]);
 
   useEffect(() => {
-    if (!accessToken || !tokenHeaders) return;
+    if (!aiOverlayEnabled || !accessToken || !tokenHeaders) return;
     const sessionId = liveViewSessionIdRef.current;
-    const payload = { sessionId, ttlSeconds: LIVE_VIEW_LEASE_TTL_SECONDS, viewMode: liveViewMode };
 
     const postLease = async (action: 'start' | 'heartbeat' | 'stop') => {
       try {
         await axios.post(
           `${API_URL}/ai/live-view/${action}/${cameraId}`,
-          payload,
+          { sessionId, ttlSeconds: LIVE_VIEW_LEASE_TTL_SECONDS, viewMode: liveViewModeRef.current },
           { headers: tokenHeaders },
         );
       } catch {
@@ -1384,37 +1425,22 @@ export function LiveStreamPlayer({
       window.clearInterval(heartbeat);
       void postLease('stop');
     };
-  }, [accessToken, cameraId, liveViewMode, tokenHeaders]);
+  }, [accessToken, aiOverlayEnabled, cameraId, tokenHeaders]);
 
   useEffect(() => {
-    if (!showOverlay || !accessToken || error) {
+    if (!aiOverlayEnabled || !accessToken || error) {
       setDetections([]);
       return;
     }
 
-    let cancelled = false;
-    const loadDetections = async () => {
-      try {
-        const live = await axios.get<{ detections?: LiveDetection[] }>(
-          `${API_URL}/ai/detections/latest/${cameraId}?maxAgeMs=${AI_OVERLAY_MAX_AGE_MS}&limit=10`,
-          { headers: tokenHeaders },
-        );
-        if (!cancelled) {
-          const snapshot = Array.isArray(live.data?.detections) ? live.data.detections : [];
-          setDetections(snapshot);
-        }
-      } catch {
-        if (!cancelled) setDetections([]);
-      }
-    };
-
-    void loadDetections();
-    const interval = window.setInterval(() => void loadDetections(), AI_OVERLAY_POLL_MS);
+    // Assina o poller compartilhado: todos os tiles são agregados em uma única
+    // requisição em lote por ciclo, em vez de uma requisição por câmera.
+    const unsubscribe = liveDetectionsPoller.subscribe(cameraId, setDetections);
     return () => {
-      cancelled = true;
-      window.clearInterval(interval);
+      unsubscribe();
+      setDetections([]);
     };
-  }, [accessToken, cameraId, error, showOverlay, tokenHeaders]);
+  }, [accessToken, aiOverlayEnabled, cameraId, error]);
 
   return (
     <div ref={containerRef} className={`relative overflow-hidden bg-black ${className ?? ''}`} aria-label={`Live ${cameraName}`}>
@@ -1437,7 +1463,7 @@ export function LiveStreamPlayer({
         autoPlay={autoPlay}
       />
 
-      {showOverlay && detections.map((detection) => {
+      {aiOverlayEnabled && detections.map((detection) => {
         const [x1, y1, x2, y2] = detection.bbox;
         const fallbackVideoWidth = videoRef.current?.videoWidth || 320;
         const fallbackVideoHeight = videoRef.current?.videoHeight || 180;

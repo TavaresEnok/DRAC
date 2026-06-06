@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, useCallback, type ReactNode } from 'react';
 import axios from 'axios';
 import { useLocation } from 'wouter';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -29,6 +29,25 @@ import { useGridStore, GridSize } from '../store/gridStore';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
 import { useToast } from '../hooks/use-toast';
@@ -91,9 +110,18 @@ export default function LiveViewPage() {
   const [recordingOverrides, setRecordingOverrides] = useState<Record<string, boolean>>({});
   const [savedLayouts, setSavedLayouts] = useState<SavedLayout[]>(() => loadSavedLayouts());
   const [selectedSlotIndex, setSelectedSlotIndex] = useState<number | null>(null);
+  const [layoutSelectValue, setLayoutSelectValue] = useState('');
+  const [layoutDialog, setLayoutDialog] = useState<{ mode: 'save' | 'rename'; id?: string; name: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<SavedLayout | null>(null);
 
-  const zoneFilters = ['__all__', ...Array.from(new Set(cameras.map((camera) => camera.zone)))];
-  const selectedCameraObj = selectedCam ? cameras.find((camera) => camera.id === selectedCam) ?? null : null;
+  const zoneFilters = useMemo(
+    () => ['__all__', ...Array.from(new Set(cameras.map((camera) => camera.zone)))],
+    [cameras],
+  );
+  const selectedCameraObj = useMemo(
+    () => (selectedCam ? cameras.find((camera) => camera.id === selectedCam) ?? null : null),
+    [cameras, selectedCam],
+  );
   const availableLayouts = savedLayouts.length ? savedLayouts : generatedLayouts;
 
   const isCameraRecording = useCallback((camera: Camera | null | undefined) => {
@@ -111,23 +139,44 @@ export default function LiveViewPage() {
     }
   }, [cameraIds.length, cameras, setCameraIds]);
 
+  // Reconcilia o override otimista de gravação com o estado real do servidor: assim
+  // que camera.status reflete o valor esperado, o override é removido. Sem isso, um
+  // override antigo teria precedência permanente e mostraria "Gravando" para sempre.
+  useEffect(() => {
+    setRecordingOverrides((current) => {
+      if (!Object.keys(current).length) return current;
+      let changed = false;
+      const next = { ...current };
+      for (const camera of cameras) {
+        if (camera.id in next && next[camera.id] === (camera.status === 'recording')) {
+          delete next[camera.id];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [cameras]);
+
   const cfg = GRID_CONFIGS[gridSize];
   const count = cfg.cols * cfg.rows;
-  const displayedCams: (Camera | null)[] = cameraIds
-    .slice(0, count)
-    .map(id => cameras.find(c => c.id === id) ?? null);
+  const cameraById = useMemo(() => new Map(cameras.map((camera) => [camera.id, camera])), [cameras]);
+  const displayedCams = useMemo<(Camera | null)[]>(() => {
+    const slots: (Camera | null)[] = cameraIds.slice(0, count).map((id) => cameraById.get(id) ?? null);
+    while (slots.length < count) slots.push(null);
+    return slots;
+  }, [cameraIds, count, cameraById]);
 
-  while (displayedCams.length < count) displayedCams.push(null);
+  const onlineCount = useMemo(() => cameras.filter((c) => c.isOnline).length, [cameras]);
 
-  const onlineCount = cameras.filter(c => c.isOnline).length;
-
-  const filteredList = cameras.filter(c => {
+  const filteredList = useMemo(() => {
     const q = search.toLowerCase();
-    const matchSearch = !q || c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q) || c.ipAddress.includes(q);
-    const matchZona = zoneFilter === '__all__' || c.zone === zoneFilter;
-    const matchStatus = statusFilter === 'all' || c.status === statusFilter;
-    return matchSearch && matchZona && matchStatus;
-  });
+    return cameras.filter((c) => {
+      const matchSearch = !q || c.name.toLowerCase().includes(q) || c.code.toLowerCase().includes(q) || c.ipAddress.includes(q);
+      const matchZona = zoneFilter === '__all__' || c.zone === zoneFilter;
+      const matchStatus = statusFilter === 'all' || c.status === statusFilter;
+      return matchSearch && matchZona && matchStatus;
+    });
+  }, [cameras, search, zoneFilter, statusFilter]);
 
   const handleCamAction = useCallback((action: string, camera: Camera) => {
     if (action === 'playback') setLocation(`/playback?cameraId=${encodeURIComponent(camera.id)}`);
@@ -182,6 +231,9 @@ export default function LiveViewPage() {
 
   const loadLayout = (layoutId: string) => {
     const layout = availableLayouts.find(l => l.id === layoutId);
+    // Reseta o valor do Select para '' para que re-selecionar o mesmo layout
+    // dispare onValueChange novamente (Radix não reemite o valor atual).
+    setLayoutSelectValue('');
     if (!layout) return;
     setGridSize(layout.gridSize);
     setCameraIds(layout.cameraIds.slice(0, GRID_CONFIGS[layout.gridSize].cols * GRID_CONFIGS[layout.gridSize].rows));
@@ -216,43 +268,56 @@ export default function LiveViewPage() {
   };
 
   const saveCurrentLayout = () => {
-    const defaultName = `Layout ${savedLayouts.length + 1}`;
-    const name = window.prompt('Nome do layout', defaultName)?.trim();
-    if (!name) return;
-    const nextLayout: SavedLayout = {
-      id: `live-layout-${Date.now()}`,
-      name,
-      gridSize,
-      cameraIds: cameraIds.slice(0, count),
-      createdBy: useAuthStore.getState().user?.name ?? 'Operador',
-      lastUsed: new Date().toISOString(),
-    };
-    while (nextLayout.cameraIds.length < count) nextLayout.cameraIds.push('');
-    const nextLayouts = [nextLayout, ...savedLayouts];
-    setSavedLayouts(nextLayouts);
-    persistSavedLayouts(nextLayouts);
-    toast({ title: 'Layout salvo', description: name });
+    setLayoutDialog({ mode: 'save', name: `Layout ${savedLayouts.length + 1}` });
   };
 
   const renameLayout = (layoutId: string) => {
     const layout = savedLayouts.find((item) => item.id === layoutId);
     if (!layout) return;
-    const name = window.prompt('Novo nome do layout', layout.name)?.trim();
-    if (!name) return;
-    const nextLayouts = savedLayouts.map((item) => item.id === layoutId ? { ...item, name } : item);
-    setSavedLayouts(nextLayouts);
-    persistSavedLayouts(nextLayouts);
-    toast({ title: 'Layout renomeado', description: name });
+    setLayoutDialog({ mode: 'rename', id: layoutId, name: layout.name });
   };
 
   const deleteLayout = (layoutId: string) => {
     const layout = savedLayouts.find((item) => item.id === layoutId);
     if (!layout) return;
-    if (!window.confirm(`Apagar o layout "${layout.name}"?`)) return;
-    const nextLayouts = savedLayouts.filter((item) => item.id !== layoutId);
+    setDeleteTarget(layout);
+  };
+
+  const commitLayoutDialog = () => {
+    if (!layoutDialog) return;
+    const name = layoutDialog.name.trim();
+    if (!name) return;
+
+    if (layoutDialog.mode === 'rename' && layoutDialog.id) {
+      const nextLayouts = savedLayouts.map((item) => (item.id === layoutDialog.id ? { ...item, name } : item));
+      setSavedLayouts(nextLayouts);
+      persistSavedLayouts(nextLayouts);
+      toast({ title: 'Layout renomeado', description: name });
+    } else {
+      const nextLayout: SavedLayout = {
+        id: `live-layout-${Date.now()}`,
+        name,
+        gridSize,
+        cameraIds: cameraIds.slice(0, count),
+        createdBy: useAuthStore.getState().user?.name ?? 'Operador',
+        lastUsed: new Date().toISOString(),
+      };
+      while (nextLayout.cameraIds.length < count) nextLayout.cameraIds.push('');
+      const nextLayouts = [nextLayout, ...savedLayouts];
+      setSavedLayouts(nextLayouts);
+      persistSavedLayouts(nextLayouts);
+      toast({ title: 'Layout salvo', description: name });
+    }
+    setLayoutDialog(null);
+  };
+
+  const confirmDeleteLayout = () => {
+    if (!deleteTarget) return;
+    const nextLayouts = savedLayouts.filter((item) => item.id !== deleteTarget.id);
     setSavedLayouts(nextLayouts);
     persistSavedLayouts(nextLayouts);
-    toast({ title: 'Layout apagado', description: layout.name });
+    toast({ title: 'Layout apagado', description: deleteTarget.name });
+    setDeleteTarget(null);
   };
 
   const startManualRecording = async () => {
@@ -318,7 +383,7 @@ export default function LiveViewPage() {
                   onClick={() => handleCamClick(cam.id)}
                   onDoubleClick={() => handleCamDoubleClick(cam)}
                   onAction={handleCamAction}
-                  streamStartDelayMs={Math.min(i * 250, 2000)}
+                  streamStartDelayMs={0}
                 />
               ) : (
                 <div className="w-full h-full bg-[hsl(210,15%,5%)] flex items-center justify-center">
@@ -364,7 +429,7 @@ export default function LiveViewPage() {
           </div>
 
           <div className="hidden xl:flex items-center gap-2">
-            <Select onValueChange={loadLayout}>
+            <Select value={layoutSelectValue} onValueChange={loadLayout}>
               <SelectTrigger className="w-44 h-8 text-xs">
                 <FolderOpen className="w-3.5 h-3.5 mr-2 text-[hsl(var(--muted-foreground))]" />
                 <SelectValue placeholder="Carregar layout" />
@@ -504,7 +569,7 @@ export default function LiveViewPage() {
                     }}
                     onDoubleClick={() => handleCamDoubleClick(cam)}
                     onAction={handleCamAction}
-                    streamStartDelayMs={Math.min(i * 250, 2000)}
+                    streamStartDelayMs={0}
                   />
                   <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100">
                     <button
@@ -651,6 +716,42 @@ export default function LiveViewPage() {
           <ChevronLeft className="w-3.5 h-3.5" />
         </button>
       )}
+
+      <Dialog open={layoutDialog !== null} onOpenChange={(open) => { if (!open) setLayoutDialog(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{layoutDialog?.mode === 'rename' ? 'Renomear layout' : 'Salvar layout'}</DialogTitle>
+          </DialogHeader>
+          <Input
+            autoFocus
+            value={layoutDialog?.name ?? ''}
+            onChange={(e) => setLayoutDialog((current) => (current ? { ...current, name: e.target.value } : current))}
+            onKeyDown={(e) => { if (e.key === 'Enter') commitLayoutDialog(); }}
+            placeholder="Nome do layout"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLayoutDialog(null)}>Cancelar</Button>
+            <Button onClick={commitLayoutDialog} disabled={!layoutDialog?.name.trim()}>
+              {layoutDialog?.mode === 'rename' ? 'Renomear' : 'Salvar'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apagar layout</AlertDialogTitle>
+            <AlertDialogDescription>
+              Apagar o layout "{deleteTarget?.name}"? Esta ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteLayout}>Apagar</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

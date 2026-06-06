@@ -49,6 +49,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
   private readonly recordingsRoot: string;
   private readonly recordingFormat: string;
   private readonly copyCodec: boolean;
+  private readonly recordingCodecMode: 'copy' | 'h265' | 'h264';
   private readonly audioCodec: string;
   private readonly controlMode: 'local' | 'worker';
   private readonly workerCommandChannel: string;
@@ -70,6 +71,8 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     this.recordingsRoot = this.configService.get<string>('recordingsRoot') ?? './storage/recordings';
     this.recordingFormat = this.configService.get<string>('ffmpegRecordingFormat') ?? 'mp4';
     this.copyCodec = String(this.configService.get<string>('ffmpegRecordingCopyCodec') ?? 'true') !== 'false';
+    const rawCodecMode = String(this.configService.get<string>('recordingCodecMode') ?? 'copy').toLowerCase();
+    this.recordingCodecMode = rawCodecMode === 'h265' || rawCodecMode === 'h264' ? rawCodecMode : 'copy';
     this.audioCodec = this.configService.get<string>('ffmpegRecordingAudioCodec') ?? 'aac';
     this.controlMode = (this.configService.get<string>('recordingControlMode') ?? 'local') === 'worker' ? 'worker' : 'local';
     this.workerCommandChannel = this.configService.get<string>('workerCommandChannel') ?? 'camera:commands';
@@ -389,14 +392,40 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     return Boolean(probedCodec && (probedCodec.includes('h265') || probedCodec.includes('hevc')));
   }
 
+  private sourceIsH264WithProbe(probedCodec: string | null): boolean {
+    return Boolean(probedCodec && (probedCodec.includes('h264') || probedCodec.includes('avc')));
+  }
+
+  // Decide o codec de vídeo de saída da gravação a partir do modo configurado.
+  // 'copy' arquiva o bitstream original (sem reencode); 'h265'/'h264' só transcodam
+  // quando a fonte difere do alvo. Retorna também se a saída final é HEVC, para
+  // aplicar a tag hvc1 (obrigatória para HEVC em MP4, inclusive ao copiar).
+  private resolveOutputVideoCodec(probedCodec: string | null): { videoCodec: string; transcode: boolean; outputIsHevc: boolean } {
+    const sourceIsHevc = this.sourceIsHevcWithProbe(probedCodec);
+    const sourceIsH264 = this.sourceIsH264WithProbe(probedCodec);
+
+    if (this.recordingCodecMode === 'h265') {
+      return sourceIsHevc
+        ? { videoCodec: 'copy', transcode: false, outputIsHevc: true }
+        : { videoCodec: 'libx265', transcode: true, outputIsHevc: true };
+    }
+    if (this.recordingCodecMode === 'h264') {
+      return sourceIsH264
+        ? { videoCodec: 'copy', transcode: false, outputIsHevc: false }
+        : { videoCodec: 'libx264', transcode: true, outputIsHevc: false };
+    }
+    // 'copy' (padrão): preserva a fonte como está.
+    return { videoCodec: 'copy', transcode: false, outputIsHevc: sourceIsHevc };
+  }
+
   private buildArgs(camera: Camera, rtspUrl: string, outputPattern: string, segmentSeconds: number, probedCodec: string | null): string[] {
     const transport = camera.preferredRtspTransport ?? this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp';
     const stimeout = String(this.configService.get<number>('ffmpegStimeoutUs') ?? 8000000);
-    // A gravação sempre termina em HEVC. Entrada HEVC é preservada bit a bit;
-    // qualquer outra origem é codificada para H.265.
-    const shouldTranscode = !this.copyCodec || !this.sourceIsHevcWithProbe(probedCodec);
-    const videoCodec = shouldTranscode ? 'libx265' : 'copy';
-    const isH265Output = videoCodec === 'libx265';
+    // O codec de saída segue o modo configurado (padrão 'copy': arquiva a fonte
+    // original sem reencode). HEVC em MP4 sempre recebe a tag hvc1, inclusive no
+    // copy, senão o arquivo fica com tag hev1/ausente e quebra seek/compat.
+    const { videoCodec, transcode: shouldTranscode, outputIsHevc: isH265Output } =
+      this.resolveOutputVideoCodec(probedCodec);
 
     const args = [
       '-hide_banner',
@@ -416,7 +445,9 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       videoCodec,
       // H.265: use slower preset (medium) for better compression vs H.264 ultrafast
       ...(shouldTranscode && isH265Output ? ['-preset', 'medium', '-crf', '28'] : []),
-      // H.265 needs tag for MP4 container compatibility
+      // H.264 (modo 'h264' com fonte não-H.264): preset rápido e qualidade alta.
+      ...(shouldTranscode && !isH265Output ? ['-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p'] : []),
+      // H.265 needs tag for MP4 container compatibility (also when copying HEVC).
       ...(isH265Output ? ['-tag:v', 'hvc1'] : []),
       ...(shouldTranscode && camera.recordingWidth && camera.recordingHeight
         ? ['-vf', `scale=${camera.recordingWidth}:${camera.recordingHeight}`]
@@ -571,8 +602,11 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     mkdirSync(outputDir, { recursive: true });
 
     const args = this.buildArgs(camera, rtspUrl, outputPattern, segmentSeconds, sourceCodec);
-    const outputVideoCodec = this.copyCodec && this.sourceIsHevcWithProbe(sourceCodec) ? 'copy-hevc' : 'libx265';
-    this.logger.log(`Iniciando gravação camera=${cameraId} sourceCodec=${sourceCodec ?? 'unknown'} output=${outputVideoCodec} rtsp=${this.sanitizeRtspUrl(rtspUrl)}`);
+    const resolvedOutput = this.resolveOutputVideoCodec(sourceCodec);
+    const outputVideoCodec = resolvedOutput.transcode
+      ? resolvedOutput.videoCodec
+      : `copy-${resolvedOutput.outputIsHevc ? 'hevc' : sourceCodec ?? 'source'}`;
+    this.logger.log(`Iniciando gravação camera=${cameraId} mode=${this.recordingCodecMode} sourceCodec=${sourceCodec ?? 'unknown'} output=${outputVideoCodec} rtsp=${this.sanitizeRtspUrl(rtspUrl)}`);
 
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
     proc.stderr.on('data', (chunk) => {
@@ -791,6 +825,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       storageBackend: this.storageBackend,
       recordingFormat: this.recordingFormat,
       copyCodec: this.copyCodec,
+      recordingCodecMode: this.recordingCodecMode,
       diskGuardEnabled: String(process.env.RECORDING_DISK_GUARD_ENABLED ?? 'true') !== 'false',
     };
   }

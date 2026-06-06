@@ -6,6 +6,8 @@ import {
   Download,
   FastForward,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   Pause,
   Play,
   Scissors,
@@ -14,9 +16,20 @@ import {
   StepBack,
   StepForward,
   VideoOff,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { addMinutes, format, isSameDay, startOfDay } from 'date-fns';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { toast } from '../hooks/use-toast';
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
@@ -29,7 +42,7 @@ type TimelineSegment = {
   type: 'recorded' | 'recorded_broken' | 'gap' | 'motion' | 'alarm';
 };
 
-type GravaçãoItem = {
+type RecordingItem = {
   id: string;
   cameraId: string;
   startedAt: string;
@@ -98,14 +111,14 @@ type RecordingHealthSummary = {
   cameras: RecordingHealthCamera[];
 };
 
-type InvestigaçãoOption = {
+type InvestigationOption = {
   id: string;
   title: string;
 };
 
 type ExportedClip = {
   id: string;
-  sourceGravaçãoId: string;
+  sourceRecordingId: string;
   startedAt: string;
   endedAt: string;
   durationSeconds: number;
@@ -130,7 +143,7 @@ function minuteOfDay(input: string | Date) {
   return date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60;
 }
 
-function buildTimelineSegments(recordings: GravaçãoItem[], events: Array<{ timestamp: string; severity: string }>) {
+function buildTimelineSegments(recordings: RecordingItem[], events: Array<{ timestamp: string; severity: string }>) {
   const recorded: TimelineSegment[] = recordings
     .map((recording) => ({
       recordingId: recording.id,
@@ -165,7 +178,7 @@ function authHeaders(accessToken: string | null) {
   return accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
 }
 
-async function createReproduçãoToken(recordingId: string, accessToken: string) {
+async function createPlaybackToken(recordingId: string, accessToken: string) {
   const { data } = await axios.post<{ playToken: string; expiresAt?: string | null }>(
     `${API_URL}/recordings/${recordingId}/play-token`,
     {},
@@ -174,7 +187,7 @@ async function createReproduçãoToken(recordingId: string, accessToken: string)
   return data;
 }
 
-async function downloadGravação(recordingId: string, cameraCódigo: string, accessToken: string) {
+async function downloadRecording(recordingId: string, cameraCode: string, accessToken: string) {
   const response = await axios.get(`${API_URL}/recordings/${recordingId}/download`, {
     headers: authHeaders(accessToken),
     responseType: 'blob',
@@ -182,16 +195,14 @@ async function downloadGravação(recordingId: string, cameraCódigo: string, ac
   const url = window.URL.createObjectURL(response.data);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `${cameraCódigo}-${recordingId}.mp4`;
+  anchor.download = `${cameraCode}-${recordingId}.mp4`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   window.URL.revokeObjectURL(url);
 }
 
-async function downloadClip(downloadUrl: string, clipId: string, accessToken: string) {
-  const reason = window.prompt('Motivo do download do clipe (obrigatório):')?.trim() ?? '';
-  if (!reason) throw new Error('Download cancelado: motivo obrigatório.');
+async function downloadClip(downloadUrl: string, clipId: string, reason: string, accessToken: string) {
   const sep = downloadUrl.includes('?') ? '&' : '?';
   const response = await axios.get(`${API_URL}${downloadUrl}${sep}reason=${encodeURIComponent(reason)}`, {
     headers: authHeaders(accessToken),
@@ -207,7 +218,7 @@ async function downloadClip(downloadUrl: string, clipId: string, accessToken: st
   window.URL.revokeObjectURL(url);
 }
 
-export default function ReproduçãoPage() {
+export default function PlaybackPage() {
   const [location] = useLocation();
   const accessToken = useAuthStore((state) => state.accessToken);
   const cameras = useVmsDataStore((state) => state.cameras);
@@ -220,22 +231,22 @@ export default function ReproduçãoPage() {
   const [speed, setSpeed] = useState('1x');
   const [playhead, setPlayhead] = useState(480);
   const [zoom, setZoom] = useState(1);
-  const [selectedGravaçãoId, setSelectedGravaçãoId] = useState<string | null>(null);
-  const [playbackUrl, setReproduçãoUrl] = useState<string | null>(null);
-  const [loadingReprodução, setLoadingReprodução] = useState(false);
-  const [loadingGravaçãos, setLoadingGravaçãos] = useState(false);
+  const [selectedRecordingId, setSelectedRecordingId] = useState<string | null>(null);
+  const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
+  const [loadingPlayback, setLoadingPlayback] = useState(false);
+  const [loadingRecordings, setLoadingRecordings] = useState(false);
   const [downloadingRecordingId, setDownloadingRecordingId] = useState<string | null>(null);
   const [pendingSeekSeconds, setPendingSeekSeconds] = useState<number | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [compatMode, setCompatMode] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [recordings, setGravaçãos] = useState<GravaçãoItem[]>([]);
+  const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [diagnosticsByRecordingId, setDiagnosticsByRecordingId] = useState<Record<string, RecordingDiagnostics>>({});
   const [healthSummary, setHealthSummary] = useState<RecordingHealthSummary | null>(null);
   const [preparingCompatibleId, setPreparingCompatibleId] = useState<string | null>(null);
-  const [investigations, setInvestigaçãos] = useState<InvestigaçãoOption[]>([]);
-  const [selectedInvestigaçãoId, setSelectedInvestigaçãoId] = useState('__none__');
+  const [investigations, setInvestigations] = useState<InvestigationOption[]>([]);
+  const [selectedInvestigationId, setSelectedInvestigationId] = useState('__none__');
   const [clipStartSeconds, setClipStartSeconds] = useState<number | null>(null);
   const [clipEndSeconds, setClipEndSeconds] = useState<number | null>(null);
   const [exportingClip, setExportingClip] = useState(false);
@@ -248,9 +259,18 @@ export default function ReproduçãoPage() {
   const [jumpTime, setJumpTime] = useState('12:00:00');
   const [compareEnabled, setCompareEnabled] = useState(false);
   const [compareCameraIds, setCompareCameraIds] = useState<string[]>([]);
-  const [compareRecordingsByCamera, setCompareRecordingsByCamera] = useState<Record<string, GravaçãoItem[]>>({});
+  const [compareRecordingsByCamera, setCompareRecordingsByCamera] = useState<Record<string, RecordingItem[]>>({});
   const playbackReadyRef = useRef(false);
   const autoSkipTriedRef = useRef<Set<string>>(new Set());
+  const playerColumnRef = useRef<HTMLDivElement | null>(null);
+  // Estado do player (controles nativos do <video> ficam ocultos; usamos barra própria)
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoVolume, setVideoVolume] = useState(1);
+  const [videoMuted, setVideoMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [clipDownload, setClipDownload] = useState<{ url: string; clipId: string } | null>(null);
+  const [clipDownloadReason, setClipDownloadReason] = useState('');
 
   const requestedCameraId = useMemo(() => {
     if (typeof window === 'undefined') return null;
@@ -270,15 +290,15 @@ export default function ReproduçãoPage() {
 
   useEffect(() => {
     if (!accessToken) return;
-    void client.get<{ items: InvestigaçãoOption[] }>('/investigations')
-      .then(({ data }) => setInvestigaçãos(Array.isArray(data.items) ? data.items.map((item) => ({ id: item.id, title: item.title })) : []))
-      .catch(() => setInvestigaçãos([]));
+    void client.get<{ items: InvestigationOption[] }>('/investigations')
+      .then(({ data }) => setInvestigations(Array.isArray(data.items) ? data.items.map((item) => ({ id: item.id, title: item.title })) : []))
+      .catch(() => setInvestigations([]));
   }, [accessToken, client]);
 
   useEffect(() => {
     if (!accessToken || !selectedCamId) return;
     let cancelled = false;
-    void client.get<{ items: GravaçãoItem[] }>(`/recordings?cameraId=${encodeURIComponent(selectedCamId)}&limit=1&sort=desc`, { timeout: API_TIMEOUT_MS })
+    void client.get<{ items: RecordingItem[] }>(`/recordings?cameraId=${encodeURIComponent(selectedCamId)}&limit=1&sort=desc`, { timeout: API_TIMEOUT_MS })
       .then(({ data }) => {
         if (cancelled) return;
         const latest = Array.isArray(data.items) ? data.items[0] : null;
@@ -296,25 +316,25 @@ export default function ReproduçãoPage() {
   useEffect(() => {
     if (!accessToken || !selectedCamId || !selectedDate) return;
     let cancelled = false;
-    setLoadingGravaçãos(true);
+    setLoadingRecordings(true);
     setLastExportedClip(null);
     setDiagnosticsByRecordingId({});
 
     void client
-      .get<{ items: GravaçãoItem[] }>(`/recordings?cameraId=${encodeURIComponent(selectedCamId)}&date=${encodeURIComponent(selectedDate)}&limit=200&sort=asc`, { timeout: API_TIMEOUT_MS })
+      .get<{ items: RecordingItem[] }>(`/recordings?cameraId=${encodeURIComponent(selectedCamId)}&date=${encodeURIComponent(selectedDate)}&limit=200&sort=asc`, { timeout: API_TIMEOUT_MS })
       .then(({ data }) => {
         if (cancelled) return;
         const items = Array.isArray(data.items) ? data.items : [];
-        setGravaçãos(items);
+        setRecordings(items);
         if (!items.length) {
-          setSelectedGravaçãoId(null);
-          setReproduçãoUrl(null);
+          setSelectedRecordingId(null);
+          setPlaybackUrl(null);
           setVideoError(null);
           return;
         }
         if (!items.some((item) => item.fileUsable ?? item.fileExists)) {
-          setSelectedGravaçãoId(null);
-          setReproduçãoUrl(null);
+          setSelectedRecordingId(null);
+          setPlaybackUrl(null);
           setVideoError('As gravações deste dia foram listadas, mas os arquivos estão ausentes, vazios ou incompletos no disco.');
           return;
         }
@@ -322,7 +342,7 @@ export default function ReproduçãoPage() {
       })
       .catch((error) => {
         if (cancelled) return;
-        setGravaçãos([]);
+        setRecordings([]);
         toast({
           title: 'Falha ao carregar gravações',
           description: error instanceof Error ? error.message : 'Não foi possível carregar as gravações desta câmera.',
@@ -330,7 +350,7 @@ export default function ReproduçãoPage() {
         });
       })
       .finally(() => {
-        if (!cancelled) setLoadingGravaçãos(false);
+        if (!cancelled) setLoadingRecordings(false);
       });
 
     return () => {
@@ -394,7 +414,7 @@ export default function ReproduçãoPage() {
     if (!ids.length) return;
     let cancelled = false;
     void Promise.all(ids.map(async (cameraId) => {
-      const { data } = await client.get<{ items: GravaçãoItem[] }>(
+      const { data } = await client.get<{ items: RecordingItem[] }>(
         `/recordings?cameraId=${encodeURIComponent(cameraId)}&date=${encodeURIComponent(selectedDate)}&limit=200&sort=asc`,
         { timeout: API_TIMEOUT_MS },
       );
@@ -412,16 +432,16 @@ export default function ReproduçãoPage() {
     };
   }, [accessToken, cameras.length, client, compareCameraIds, compareEnabled, selectedCamId, selectedDate]);
 
-  const selectedCam = cameras.find((camera) => camera.id === selectedCamId) ?? cameras[0] ?? null;
+  const selectedCam = useMemo(() => cameras.find((camera) => camera.id === selectedCamId) ?? cameras[0] ?? null, [cameras, selectedCamId]);
   const selectedDay = useMemo(() => new Date(`${selectedDate}T00:00:00`), [selectedDate]);
   const dayStart = useMemo(() => startOfDay(selectedDay), [selectedDay]);
 
-  const relevantEventos = useMemo(
+  const relevantEvents = useMemo(
     () => events.filter((event) => event.cameraId === selectedCamId && isSameDay(new Date(event.timestamp), selectedDay)).slice(0, 40),
     [events, selectedCamId, selectedDay],
   );
 
-  const timelineSegments = useMemo(() => buildTimelineSegments(recordings, relevantEventos), [recordings, relevantEventos]);
+  const timelineSegments = useMemo(() => buildTimelineSegments(recordings, relevantEvents), [recordings, relevantEvents]);
   const compareCameraItems = useMemo(() => (
     Array.from(new Set([selectedCamId, ...compareCameraIds].filter(Boolean)))
       .slice(0, 4)
@@ -442,15 +462,15 @@ export default function ReproduçãoPage() {
   }), [compareCameraItems, compareRecordingsByCamera, events, playhead, recordings, selectedCamId, selectedDay]);
   useEffect(() => {
     if (!recordings.length) {
-      setSelectedGravaçãoId(null);
-      setReproduçãoUrl(null);
+      setSelectedRecordingId(null);
+      setPlaybackUrl(null);
       setVideoError(null);
       return;
     }
     const playableRecordings = recordings.filter((recording) => recording.fileUsable ?? recording.fileExists);
     if (!playableRecordings.length) {
-      setSelectedGravaçãoId(null);
-      setReproduçãoUrl(null);
+      setSelectedRecordingId(null);
+      setPlaybackUrl(null);
       setVideoError('Nenhuma gravação utilizável foi encontrada no disco para esta data.');
       return;
     }
@@ -461,66 +481,66 @@ export default function ReproduçãoPage() {
       return minuteTarget >= start && minuteTarget <= end;
     });
     const next = containing ?? playableRecordings.find((recording) => minuteOfDay(recording.startedAt) >= minuteTarget) ?? playableRecordings[0];
-    setSelectedGravaçãoId((current) => (current === next.id ? current : next.id));
+    setSelectedRecordingId((current) => (current === next.id ? current : next.id));
     const offsetMinutes = Math.max(0, minuteTarget - minuteOfDay(next.startedAt));
     setPendingSeekSeconds(offsetMinutes * 60);
   }, [recordings, playhead]);
 
-  const selectedGravação = recordings.find((recording) => recording.id === selectedGravaçãoId) ?? null;
-  const selectedDiagnostics = selectedGravaçãoId ? diagnosticsByRecordingId[selectedGravaçãoId] ?? null : null;
+  const selectedRecording = useMemo(() => recordings.find((recording) => recording.id === selectedRecordingId) ?? null, [recordings, selectedRecordingId]);
+  const selectedDiagnostics = useMemo(() => (selectedRecordingId ? diagnosticsByRecordingId[selectedRecordingId] ?? null : null), [diagnosticsByRecordingId, selectedRecordingId]);
   const playbackMayUseCompatible = compatMode || Boolean(selectedDiagnostics?.compatibleRecommended);
   const recordingById = useMemo(() => new Map(recordings.map((recording) => [recording.id, recording] as const)), [recordings]);
-  const selectedHealth = healthSummary?.cameras.find((item) => item.cameraId === selectedCamId) ?? null;
+  const selectedHealth = useMemo(() => healthSummary?.cameras.find((item) => item.cameraId === selectedCamId) ?? null, [healthSummary, selectedCamId]);
 
   useEffect(() => {
-    if (!selectedGravaçãoId || !accessToken) {
-      setReproduçãoUrl(null);
+    if (!selectedRecordingId || !accessToken) {
+      setPlaybackUrl(null);
       return;
     }
-    if (!selectedGravação?.fileExists) {
-      setReproduçãoUrl(null);
+    if (!selectedRecording?.fileExists) {
+      setPlaybackUrl(null);
       setVideoError('O arquivo desta gravação não existe mais no disco.');
       return;
     }
-    if (selectedGravação.fileUsable === false) {
-      setReproduçãoUrl(null);
+    if (selectedRecording.fileUsable === false) {
+      setPlaybackUrl(null);
       setVideoError('O arquivo desta gravação existe, mas está vazio ou incompleto e não pode ser reproduzido.');
       return;
     }
 
     let cancelled = false;
-    setLoadingReprodução(true);
+    setLoadingPlayback(true);
     setVideoError(null);
     playbackReadyRef.current = false;
 
-    void createReproduçãoToken(selectedGravaçãoId, accessToken)
+    void createPlaybackToken(selectedRecordingId, accessToken)
       .then((token) => {
         if (cancelled) return;
         const params = new URLSearchParams();
         if (compatMode) params.set('compatible', '1');
         if (token.playToken) params.set('token', token.playToken);
         params.set('v', String(reloadNonce));
-        setReproduçãoUrl(`${API_URL}/recordings/${selectedGravaçãoId}/play?${params.toString()}`);
+        setPlaybackUrl(`${API_URL}/recordings/${selectedRecordingId}/play?${params.toString()}`);
       })
       .catch((error) => {
         if (cancelled) return;
-        setReproduçãoUrl(null);
+        setPlaybackUrl(null);
       setVideoError(error instanceof Error ? error.message : 'Falha ao preparar reprodução.');
       })
       .finally(() => {
-        if (!cancelled) setLoadingReprodução(false);
+        if (!cancelled) setLoadingPlayback(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [selectedGravaçãoId, accessToken, compatMode, selectedGravação?.fileExists, selectedGravação?.fileUsable, reloadNonce]);
+  }, [selectedRecordingId, accessToken, compatMode, selectedRecording?.fileExists, selectedRecording?.fileUsable, reloadNonce]);
 
   useEffect(() => {
     setCompatMode(false);
     setReloadNonce(0);
     autoSkipTriedRef.current.clear();
-  }, [selectedGravaçãoId]);
+  }, [selectedRecordingId]);
 
   useEffect(() => {
     if (!playbackUrl) return;
@@ -600,16 +620,20 @@ export default function ReproduçãoPage() {
     return 'hsl(var(--muted))';
   };
 
-  const currentVideoSeconds = videoRef.current?.currentTime ?? pendingSeekSeconds ?? 0;
-  const selectedGravaçãoDuration = selectedGravação?.durationSeconds ?? 0;
-  const selectedGravaçãoStartLabel = selectedGravação ? format(new Date(selectedGravação.startedAt), 'HH:mm:ss') : '--';
-  const selectedGravaçãoEndLabel = selectedGravação?.endedAt ? format(new Date(selectedGravação.endedAt), 'HH:mm:ss') : '--';
+  // Lê a posição atual do vídeo no momento da ação (evita ler o ref durante o render).
+  const getCurrentVideoSeconds = useCallback(
+    () => videoRef.current?.currentTime ?? pendingSeekSeconds ?? 0,
+    [pendingSeekSeconds],
+  );
+  const selectedRecordingDuration = selectedRecording?.durationSeconds ?? 0;
+  const selectedRecordingStartLabel = selectedRecording ? format(new Date(selectedRecording.startedAt), 'HH:mm:ss') : '--';
+  const selectedRecordingEndLabel = selectedRecording?.endedAt ? format(new Date(selectedRecording.endedAt), 'HH:mm:ss') : '--';
 
-  const handleDownload = async (recording = selectedGravação) => {
+  const handleDownload = async (recording = selectedRecording) => {
     if (!recording || !selectedCam || !accessToken) return;
     setDownloadingRecordingId(recording.id);
     try {
-      await downloadGravação(recording.id, selectedCam.code, accessToken);
+      await downloadRecording(recording.id, selectedCam.code, accessToken);
     } catch (error) {
       toast({
         title: 'Falha no download',
@@ -622,22 +646,22 @@ export default function ReproduçãoPage() {
   };
 
   const prepareCompatiblePlayback = useCallback(async () => {
-    if (!selectedGravação || !accessToken) return;
-    setPreparingCompatibleId(selectedGravação.id);
+    if (!selectedRecording || !accessToken) return;
+    setPreparingCompatibleId(selectedRecording.id);
     try {
       const { data } = await client.post<{ diagnostics?: RecordingDiagnostics }>(
-        `/recordings/${selectedGravação.id}/compatible/prepare`,
+        `/recordings/${selectedRecording.id}/compatible/prepare`,
         {},
         { timeout: 180000 },
       );
       if (data.diagnostics) {
         setDiagnosticsByRecordingId((current) => ({
           ...current,
-          [selectedGravação.id]: data.diagnostics!,
+          [selectedRecording.id]: data.diagnostics!,
         }));
       }
-      setGravaçãos((current) => current.map((item) => (
-        item.id === selectedGravação.id ? { ...item, compatibleCached: true } : item
+      setRecordings((current) => current.map((item) => (
+        item.id === selectedRecording.id ? { ...item, compatibleCached: true } : item
       )));
       setCompatMode(true);
       setReloadNonce((current) => current + 1);
@@ -651,10 +675,10 @@ export default function ReproduçãoPage() {
     } finally {
       setPreparingCompatibleId(null);
     }
-  }, [accessToken, client, selectedGravação]);
+  }, [accessToken, client, selectedRecording]);
 
   const exportClip = useCallback(async () => {
-    if (!selectedGravação || !accessToken) return;
+    if (!selectedRecording || !accessToken) return;
     if (clipStartSeconds == null || clipEndSeconds == null) {
       toast({ title: 'Marque o intervalo', description: 'Defina o início e o fim do clipe antes de exportar.', variant: 'destructive' });
       return;
@@ -666,10 +690,10 @@ export default function ReproduçãoPage() {
 
     setExportingClip(true);
     try {
-      const { data } = await client.post<ExportedClip>(`/recordings/${selectedGravação.id}/clips/export`, {
+      const { data } = await client.post<ExportedClip>(`/recordings/${selectedRecording.id}/clips/export`, {
         startSeconds: Math.floor(clipStartSeconds),
         endSeconds: Math.ceil(clipEndSeconds),
-        investigationId: selectedInvestigaçãoId === '__none__' ? undefined : selectedInvestigaçãoId,
+        investigationId: selectedInvestigationId === '__none__' ? undefined : selectedInvestigationId,
         label: `Clipe - ${selectedCam?.name ?? 'Câmera'}`,
         notes: `Exportado da reprodução em ${new Date().toISOString()}`,
       });
@@ -687,18 +711,18 @@ export default function ReproduçãoPage() {
     } finally {
       setExportingClip(false);
     }
-  }, [accessToken, clipEndSeconds, clipStartSeconds, client, selectedCam?.name, selectedInvestigaçãoId, selectedGravação]);
+  }, [accessToken, clipEndSeconds, clipStartSeconds, client, selectedCam?.name, selectedInvestigationId, selectedRecording]);
 
   const saveBookmark = useCallback(async () => {
-    if (selectedInvestigaçãoId === '__none__') {
+    if (selectedInvestigationId === '__none__') {
       toast({ title: 'Selecione um caso', description: 'Escolha um caso para salvar o marcador.', variant: 'destructive' });
       return;
     }
-    if (!selectedGravação || !selectedCam) return;
-    const ts = new Date(new Date(selectedGravação.startedAt).getTime() + Math.floor(currentVideoSeconds) * 1000);
+    if (!selectedRecording || !selectedCam) return;
+    const ts = new Date(new Date(selectedRecording.startedAt).getTime() + Math.floor(getCurrentVideoSeconds()) * 1000);
     setSavingBookmark(true);
     try {
-      await client.post(`/investigations/${selectedInvestigaçãoId}/bookmarks`, {
+      await client.post(`/investigations/${selectedInvestigationId}/bookmarks`, {
         label: `Marcador ${selectedCam.name} @ ${format(ts, 'HH:mm:ss')}`,
         timestamp: ts.toISOString(),
         cameraId: selectedCam.id,
@@ -715,7 +739,7 @@ export default function ReproduçãoPage() {
     } finally {
       setSavingBookmark(false);
     }
-  }, [client, currentVideoSeconds, selectedCam, selectedInvestigaçãoId, selectedGravação]);
+  }, [client, getCurrentVideoSeconds, selectedCam, selectedInvestigationId, selectedRecording]);
 
   const resetVideoView = useCallback(() => {
     setVideoZoom(1);
@@ -726,7 +750,7 @@ export default function ReproduçãoPage() {
 
   useEffect(() => {
     resetVideoView();
-  }, [selectedGravaçãoId, resetVideoView]);
+  }, [selectedRecordingId, resetVideoView]);
 
   const handleVideoWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -748,12 +772,75 @@ export default function ReproduçãoPage() {
     document.body.style.overflow = '';
   }, []);
 
+  // Só trava o scroll da página quando há zoom (>1), para permitir o pan/arraste do
+  // vídeo. Sem zoom, passar o mouse sobre o vídeo não deve impedir rolar a página.
+  useEffect(() => {
+    if (videoZoom > 1) lockPageScroll();
+    else unlockPageScroll();
+  }, [videoZoom, lockPageScroll, unlockPageScroll]);
+
   useEffect(() => {
     return () => {
       if (typeof document !== 'undefined') {
         document.body.style.overflow = '';
       }
     };
+  }, []);
+
+  const formatClock = useCallback((totalSeconds: number) => {
+    if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '0:00';
+    const s = Math.floor(totalSeconds % 60);
+    const m = Math.floor((totalSeconds / 60) % 60);
+    const h = Math.floor(totalSeconds / 3600);
+    const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+    return `${h > 0 ? `${h}:` : ''}${mm}:${String(s).padStart(2, '0')}`;
+  }, []);
+
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) void video.play().catch(() => {});
+    else video.pause();
+  }, []);
+
+  const seekVideoTo = useCallback((seconds: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const clamped = clamp(seconds, 0, Number.isFinite(video.duration) ? video.duration : seconds);
+    video.currentTime = clamped;
+    setVideoCurrentTime(clamped);
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const video = videoRef.current;
+    const next = !videoMuted;
+    setVideoMuted(next);
+    if (video) video.muted = next;
+  }, [videoMuted]);
+
+  const changeVolume = useCallback((value: number) => {
+    const next = clamp(value, 0, 1);
+    setVideoVolume(next);
+    const video = videoRef.current;
+    if (video) {
+      video.volume = next;
+      const muted = next === 0;
+      video.muted = muted;
+      setVideoMuted(muted);
+    }
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    const el = playerColumnRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    else void el.requestFullscreen().catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
   const onVideoDragStart = useCallback((event: MouseEvent<HTMLDivElement>) => {
@@ -782,7 +869,7 @@ export default function ReproduçãoPage() {
     for (let next = idx + 1; next < recordings.length; next += 1) {
       const item = recordings[next];
       if (!(item.fileUsable ?? item.fileExists)) continue;
-      setSelectedGravaçãoId(item.id);
+      setSelectedRecordingId(item.id);
       setPlayheadFromMinute(minuteOfDay(item.startedAt));
       setPendingSeekSeconds(0);
       return true;
@@ -790,7 +877,7 @@ export default function ReproduçãoPage() {
     for (let prev = idx - 1; prev >= 0; prev -= 1) {
       const item = recordings[prev];
       if (!(item.fileUsable ?? item.fileExists)) continue;
-      setSelectedGravaçãoId(item.id);
+      setSelectedRecordingId(item.id);
       setPlayheadFromMinute(minuteOfDay(item.startedAt));
       setPendingSeekSeconds(0);
       return true;
@@ -799,14 +886,14 @@ export default function ReproduçãoPage() {
   }, [recordings, setPlayheadFromMinute]);
 
   const jumpToAdjacentUsableRecording = useCallback((direction: 'prev' | 'next') => {
-    if (!recordings.length || !selectedGravaçãoId) return;
-    const idx = recordings.findIndex((item) => item.id === selectedGravaçãoId);
+    if (!recordings.length || !selectedRecordingId) return;
+    const idx = recordings.findIndex((item) => item.id === selectedRecordingId);
     if (idx < 0) return;
     const step = direction === 'next' ? 1 : -1;
     for (let i = idx + step; i >= 0 && i < recordings.length; i += step) {
       const item = recordings[i];
       if (!(item.fileUsable ?? item.fileExists)) continue;
-      setSelectedGravaçãoId(item.id);
+      setSelectedRecordingId(item.id);
       setPlayheadFromMinute(minuteOfDay(item.startedAt));
       setPendingSeekSeconds(0);
       return;
@@ -816,7 +903,24 @@ export default function ReproduçãoPage() {
       description: direction === 'next' ? 'Não há próximo segmento reproduzível.' : 'Não há segmento anterior reproduzível.',
       variant: 'destructive',
     });
-  }, [recordings, selectedGravaçãoId, setPlayheadFromMinute]);
+  }, [recordings, selectedRecordingId, setPlayheadFromMinute]);
+
+  const confirmClipDownload = useCallback(async () => {
+    if (!clipDownload || !accessToken) return;
+    const reason = clipDownloadReason.trim();
+    if (!reason) return;
+    const target = clipDownload;
+    setClipDownload(null);
+    try {
+      await downloadClip(target.url, target.clipId, reason, accessToken);
+    } catch (error) {
+      toast({
+        title: 'Falha no download do clipe',
+        description: error instanceof Error ? error.message : 'Não foi possível baixar o clipe.',
+        variant: 'destructive',
+      });
+    }
+  }, [accessToken, clipDownload, clipDownloadReason]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 p-4">
@@ -964,7 +1068,7 @@ export default function ReproduçãoPage() {
 
 
       <div className="flex flex-1 gap-4 min-h-0">
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div ref={playerColumnRef} className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="relative min-h-[62vh] flex-1 overflow-hidden rounded-[20px] border border-border bg-[hsl(210,18%,7%)]">
             <div className="camera-scanline absolute inset-0 overflow-hidden pointer-events-none" />
 
@@ -983,8 +1087,6 @@ export default function ReproduçãoPage() {
                 onMouseMove={onVideoDragMove}
                 onMouseUp={onVideoDragEnd}
                 onMouseLeave={onVideoDragEnd}
-                onMouseEnter={lockPageScroll}
-                onMouseOut={unlockPageScroll}
                 style={{ touchAction: 'none', overscrollBehavior: 'contain' }}
               >
                 <video
@@ -995,10 +1097,26 @@ export default function ReproduçãoPage() {
                   preload="metadata"
                   className="h-full w-full bg-black object-contain"
                   style={{ transform: `translate(${videoPan.x}px, ${videoPan.y}px) scale(${videoZoom})`, transformOrigin: 'center center' }}
-                  controls
+                  onClick={togglePlay}
                   onLoadedMetadata={() => {
                     playbackReadyRef.current = true;
+                    const video = videoRef.current;
+                    if (video) {
+                      setVideoDuration(Number.isFinite(video.duration) ? video.duration : 0);
+                      video.volume = videoVolume;
+                      video.muted = videoMuted;
+                    }
                     syncVideoToPlayhead();
+                  }}
+                  onDurationChange={() => {
+                    const video = videoRef.current;
+                    if (video) setVideoDuration(Number.isFinite(video.duration) ? video.duration : 0);
+                  }}
+                  onVolumeChange={() => {
+                    const video = videoRef.current;
+                    if (!video) return;
+                    setVideoVolume(video.volume);
+                    setVideoMuted(video.muted);
                   }}
                   onCanPlay={() => {
                     playbackReadyRef.current = true;
@@ -1008,8 +1126,9 @@ export default function ReproduçãoPage() {
                   onPause={() => setPlaying(false)}
                   onEnded={() => setPlaying(false)}
                   onTimeUpdate={() => {
-                    if (!selectedGravação || !videoRef.current) return;
-                    const base = minuteOfDay(selectedGravação.startedAt);
+                    if (!selectedRecording || !videoRef.current) return;
+                    setVideoCurrentTime(videoRef.current.currentTime);
+                    const base = minuteOfDay(selectedRecording.startedAt);
                     const minute = base + videoRef.current.currentTime / 60;
                     setPlayhead(clamp(Math.round(minute), 0, TOTAL_MINS));
                   }}
@@ -1019,9 +1138,9 @@ export default function ReproduçãoPage() {
                       setCompatMode(true);
                       return;
                     }
-                    if (selectedGravaçãoId && !autoSkipTriedRef.current.has(selectedGravaçãoId)) {
-                      autoSkipTriedRef.current.add(selectedGravaçãoId);
-                      const switched = selectNextUsableRecording(selectedGravaçãoId);
+                    if (selectedRecordingId && !autoSkipTriedRef.current.has(selectedRecordingId)) {
+                      autoSkipTriedRef.current.add(selectedRecordingId);
+                      const switched = selectNextUsableRecording(selectedRecordingId);
                       if (switched) {
                         setVideoError('Segmento atual falhou. Avançando automaticamente para o próximo trecho válido.');
                         return;
@@ -1033,7 +1152,7 @@ export default function ReproduçãoPage() {
               </div>
             ) : null}
 
-            {!playbackUrl && !loadingReprodução && !loadingGravaçãos && (
+            {!playbackUrl && !loadingPlayback && !loadingRecordings && (
               <div className="absolute inset-0 flex items-center justify-center">
                 <div className="text-center">
                   {recordings.length ? <CameraIcon className="mx-auto mb-2 h-10 w-10 text-white/10" /> : <VideoOff className="mx-auto mb-2 h-10 w-10 text-white/10" />}
@@ -1044,16 +1163,16 @@ export default function ReproduçãoPage() {
               </div>
             )}
 
-            {(loadingReprodução || loadingGravaçãos) && (
+            {(loadingPlayback || loadingRecordings) && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/35">
                 <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/55 px-3 py-2 text-xs text-white/80">
                   <LoaderCircle className="h-4 w-4 animate-spin" />
-                  {loadingGravaçãos ? 'Carregando gravações do dia' : compatMode && selectedGravação && !selectedGravação.compatibleCached ? 'Preparando gravação compatível' : 'Carregando gravação'}
+                  {loadingRecordings ? 'Carregando gravações do dia' : compatMode && selectedRecording && !selectedRecording.compatibleCached ? 'Preparando gravação compatível' : 'Carregando gravação'}
                 </div>
               </div>
             )}
 
-            {videoError && !loadingReprodução && !loadingGravaçãos && (
+            {videoError && !loadingPlayback && !loadingRecordings && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/55">
                 <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-center text-xs text-red-200">
                   <div>{videoError}</div>
@@ -1072,27 +1191,8 @@ export default function ReproduçãoPage() {
               </div>
             )}
 
-            <div className="absolute bottom-3 left-3 right-3 z-10 flex items-center justify-between gap-3">
+            <div className="pointer-events-none absolute bottom-3 left-3 z-10">
               <span className="rounded bg-black/50 px-2 py-1 text-sm text-white/75">{format(currentTime, 'dd/MM/yyyy HH:mm:ss')}</span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => jumpToAdjacentUsableRecording('prev')}
-                  disabled={!selectedGravaçãoId}
-                  className="rounded border border-white/20 bg-black/45 px-2 py-1 text-[10px] text-white/80 hover:bg-black/65 disabled:opacity-45"
-                >
-                  Anterior
-                </button>
-                <button
-                  type="button"
-                  onClick={() => jumpToAdjacentUsableRecording('next')}
-                  disabled={!selectedGravaçãoId}
-                  className="rounded border border-white/20 bg-black/45 px-2 py-1 text-[10px] text-white/80 hover:bg-black/65 disabled:opacity-45"
-                >
-                  Próximo
-                </button>
-                <span className="rounded bg-black/50 px-2 py-1 text-xs text-white/55">{speed}</span>
-              </div>
             </div>
           </div>
 
@@ -1118,7 +1218,7 @@ export default function ReproduçãoPage() {
                       setCompatMode(true);
                     }
                     event.stopPropagation();
-                    setSelectedGravaçãoId(segment.recordingId);
+                    setSelectedRecordingId(segment.recordingId);
                     setPendingSeekSeconds(0);
                     setPlayheadFromMinute(segment.start);
                   }}
@@ -1159,7 +1259,7 @@ export default function ReproduçãoPage() {
                         setCompatMode(true);
                       }
                       event.stopPropagation();
-                      setSelectedGravaçãoId(segment.recordingId);
+                      setSelectedRecordingId(segment.recordingId);
                       setPendingSeekSeconds(0);
                       setPlayheadFromMinute(segment.start);
                     }}
@@ -1196,18 +1296,18 @@ export default function ReproduçãoPage() {
                   <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{label}</span>
                 </div>
               ))}
-              <button type="button" onClick={() => void handleDownload()} disabled={!selectedGravação || downloadingRecordingId === selectedGravação?.id} className="ml-auto flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45">
-                {downloadingRecordingId === selectedGravação?.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+              <button type="button" onClick={() => void handleDownload()} disabled={!selectedRecording || downloadingRecordingId === selectedRecording?.id} className="ml-auto flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45">
+                {downloadingRecordingId === selectedRecording?.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                 Baixar
               </button>
-              {selectedDiagnostics?.compatibleRecommended && !selectedGravação?.compatibleCached && (
+              {selectedDiagnostics?.compatibleRecommended && !selectedRecording?.compatibleCached && (
                 <button
                   type="button"
                   onClick={() => void prepareCompatiblePlayback()}
-                  disabled={!selectedGravação || preparingCompatibleId === selectedGravação.id}
+                  disabled={!selectedRecording || preparingCompatibleId === selectedRecording.id}
                   className="flex items-center gap-1.5 rounded border border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.08)] px-3 py-1.5 text-xs text-[hsl(var(--primary))] transition-colors hover:bg-[hsl(var(--primary)_/_0.14)] disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  {preparingCompatibleId === selectedGravação?.id && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
+                  {preparingCompatibleId === selectedRecording?.id && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
                   Preparar compatível
                 </button>
               )}
@@ -1226,23 +1326,23 @@ export default function ReproduçãoPage() {
                 Intervalo do clipe
               </div>
               <div className="grid gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))_240px_auto]">
-                <button type="button" onClick={() => setClipStartSeconds(Math.floor(currentVideoSeconds))} disabled={!selectedGravação} className="rounded border border-border px-3 py-2 text-left text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45">
+                <button type="button" onClick={() => setClipStartSeconds(Math.floor(getCurrentVideoSeconds()))} disabled={!selectedRecording} className="rounded border border-border px-3 py-2 text-left text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45">
                   <div className="font-medium">Marcar início</div>
                   <div className="mt-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{clipStartSeconds == null ? '--' : `${clipStartSeconds}s`}</div>
                 </button>
-                <button type="button" onClick={() => setClipEndSeconds(Math.ceil(currentVideoSeconds))} disabled={!selectedGravação} className="rounded border border-border px-3 py-2 text-left text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45">
+                <button type="button" onClick={() => setClipEndSeconds(Math.ceil(getCurrentVideoSeconds()))} disabled={!selectedRecording} className="rounded border border-border px-3 py-2 text-left text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45">
                   <div className="font-medium">Marcar fim</div>
                   <div className="mt-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{clipEndSeconds == null ? '--' : `${clipEndSeconds}s`}</div>
                 </button>
                 <div className="rounded border border-border px-3 py-2 text-xs">
                   <div className="font-medium">Janela de origem</div>
-                  <div className="mt-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{selectedGravaçãoStartLabel} — {selectedGravaçãoEndLabel}</div>
+                  <div className="mt-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{selectedRecordingStartLabel} — {selectedRecordingEndLabel}</div>
                 </div>
                 <div className="rounded border border-border px-3 py-2 text-xs">
                   <div className="font-medium">Duração do clipe</div>
                   <div className="mt-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{clipStartSeconds != null && clipEndSeconds != null && clipEndSeconds > clipStartSeconds ? `${clipEndSeconds - clipStartSeconds}s` : '--'}</div>
                 </div>
-                <Select value={selectedInvestigaçãoId} onValueChange={setSelectedInvestigaçãoId}>
+                <Select value={selectedInvestigationId} onValueChange={setSelectedInvestigationId}>
                   <SelectTrigger className="h-full min-h-[44px] text-xs">
                     <SelectValue placeholder="Anexar ao caso" />
                   </SelectTrigger>
@@ -1251,10 +1351,10 @@ export default function ReproduçãoPage() {
                     {investigations.map((item) => <SelectItem key={item.id} value={item.id} className="text-xs">{item.title}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <button type="button" onClick={() => void exportClip()} disabled={!selectedGravação || exportingClip || selectedGravaçãoDuration <= 0} className="rounded border border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.08)] px-3 py-2 text-xs text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)_/_0.12)] disabled:opacity-45">
+                <button type="button" onClick={() => void exportClip()} disabled={!selectedRecording || exportingClip || selectedRecordingDuration <= 0} className="rounded border border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.08)] px-3 py-2 text-xs text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)_/_0.12)] disabled:opacity-45">
                   {exportingClip ? <span className="inline-flex items-center gap-1.5"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Exportando</span> : 'Exportar'}
                 </button>
-                <button type="button" onClick={() => void saveBookmark()} disabled={!selectedGravação || selectedInvestigaçãoId === '__none__' || savingBookmark} className="rounded border border-border px-3 py-2 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45">
+                <button type="button" onClick={() => void saveBookmark()} disabled={!selectedRecording || selectedInvestigationId === '__none__' || savingBookmark} className="rounded border border-border px-3 py-2 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45">
                   {savingBookmark ? <span className="inline-flex items-center gap-1.5"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Salvando</span> : 'Salvar marcador'}
                 </button>
               </div>
@@ -1262,41 +1362,84 @@ export default function ReproduçãoPage() {
                 <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card/60 px-3 py-2 text-xs">
                   <span className="font-medium">Clipe pronto:</span>
                   <span className="font-mono text-[hsl(var(--muted-foreground))]">{lastExportedClip.id.slice(0, 8)}</span>
-                  <button type="button" onClick={() => void downloadClip(lastExportedClip.downloadUrl, lastExportedClip.id, accessToken!)} className="rounded border border-border px-2.5 py-1 hover:bg-[hsl(var(--accent))]">Baixar clipe</button>
+                  <button type="button" onClick={() => { setClipDownloadReason(''); setClipDownload({ url: lastExportedClip.downloadUrl, clipId: lastExportedClip.id }); }} className="rounded border border-border px-2.5 py-1 hover:bg-[hsl(var(--accent))]">Baixar clipe</button>
                   {lastExportedClip.investigationItemId && <span className="rounded bg-[hsl(var(--primary)_/_0.08)] px-2 py-1 text-[hsl(var(--primary))]">Anexado à investigação</span>}
                 </div>
               )}
               </div>
             </details>
 
-            <div className="flex items-center justify-center gap-2">
-              <button type="button" onClick={() => setPlayheadFromMinute(playhead - 15)} className="flex h-8 w-8 items-center justify-center rounded text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground"><SkipBack className="h-4 w-4" /></button>
-              <button type="button" onClick={() => setPlayheadFromMinute(playhead - 1)} className="flex h-8 w-8 items-center justify-center rounded text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground"><StepBack className="h-4 w-4" /></button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!videoRef.current) return;
-                  if (videoRef.current.paused) {
-                    void videoRef.current.play();
-                  } else {
-                    videoRef.current.pause();
-                  }
-                }}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] transition-opacity hover:opacity-90"
-              >
-                {playing ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5" />}
-              </button>
-              <button type="button" onClick={() => setPlayheadFromMinute(playhead + 1)} className="flex h-8 w-8 items-center justify-center rounded text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground"><StepForward className="h-4 w-4" /></button>
-              <button type="button" onClick={() => setPlayheadFromMinute(playhead + 15)} className="flex h-8 w-8 items-center justify-center rounded text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground"><SkipForward className="h-4 w-4" /></button>
+            {/* Barra de reprodução do segmento atual: scrubber + tempo */}
+            <div className="mb-2 flex items-center gap-3">
+              <span className="w-14 shrink-0 text-right font-mono text-[11px] tabular-nums text-[hsl(var(--muted-foreground))]">{formatClock(videoCurrentTime)}</span>
+              <input
+                type="range"
+                min={0}
+                max={videoDuration || selectedRecordingDuration || 0}
+                step={0.1}
+                value={Math.min(videoCurrentTime, videoDuration || selectedRecordingDuration || 0)}
+                onChange={(event) => seekVideoTo(Number(event.target.value))}
+                disabled={!playbackUrl}
+                aria-label="Posição no segmento"
+                className="playback-scrubber h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-[hsl(var(--muted))] accent-[hsl(var(--primary))] disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <span className="w-14 shrink-0 font-mono text-[11px] tabular-nums text-[hsl(var(--muted-foreground))]">{formatClock(videoDuration || selectedRecordingDuration)}</span>
+            </div>
 
-              <div className="ml-4 flex items-center gap-0.5">
+            <div className="flex items-center gap-2">
+              {/* Navegação entre segmentos */}
+              <button type="button" onClick={() => jumpToAdjacentUsableRecording('prev')} disabled={!selectedRecordingId} title="Segmento anterior" className="flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-[10px] text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground disabled:opacity-45">
+                <SkipBack className="h-3.5 w-3.5" /> Seg.
+              </button>
+
+              {/* Transporte central */}
+              <div className="mx-auto flex items-center gap-1.5">
+                <button type="button" onClick={() => setPlayheadFromMinute(playhead - 15)} title="Voltar 15 min" className="flex h-8 w-8 items-center justify-center rounded-lg text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground"><SkipBack className="h-4 w-4" /></button>
+                <button type="button" onClick={() => seekVideoTo(getCurrentVideoSeconds() - 10)} disabled={!playbackUrl} title="Voltar 10s" className="flex h-8 w-8 items-center justify-center rounded-lg text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground disabled:opacity-45"><StepBack className="h-4 w-4" /></button>
+                <button
+                  type="button"
+                  onClick={togglePlay}
+                  disabled={!playbackUrl}
+                  title={playing ? 'Pausar' : 'Reproduzir'}
+                  className="flex h-11 w-11 items-center justify-center rounded-full bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] transition-opacity hover:opacity-90 disabled:opacity-45"
+                >
+                  {playing ? <Pause className="h-5 w-5" /> : <Play className="ml-0.5 h-5 w-5" />}
+                </button>
+                <button type="button" onClick={() => seekVideoTo(getCurrentVideoSeconds() + 10)} disabled={!playbackUrl} title="Avançar 10s" className="flex h-8 w-8 items-center justify-center rounded-lg text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground disabled:opacity-45"><StepForward className="h-4 w-4" /></button>
+                <button type="button" onClick={() => setPlayheadFromMinute(playhead + 15)} title="Avançar 15 min" className="flex h-8 w-8 items-center justify-center rounded-lg text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground"><SkipForward className="h-4 w-4" /></button>
+              </div>
+
+              {/* Volume */}
+              <div className="flex items-center gap-1.5">
+                <button type="button" onClick={toggleMute} title={videoMuted ? 'Ativar som' : 'Silenciar'} className="flex h-8 w-8 items-center justify-center rounded-lg text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground">
+                  {videoMuted || videoVolume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={videoMuted ? 0 : videoVolume}
+                  onChange={(event) => changeVolume(Number(event.target.value))}
+                  aria-label="Volume"
+                  className="hidden h-1 w-20 cursor-pointer appearance-none rounded-full bg-[hsl(var(--muted))] accent-[hsl(var(--primary))] sm:block"
+                />
+              </div>
+
+              {/* Velocidade */}
+              <div className="flex items-center gap-0.5 rounded-lg border border-border px-1 py-0.5">
                 <FastForward className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
                 {SPEEDS.map((item) => (
-                  <button key={item} type="button" onClick={() => setSpeed(item)} className={`rounded px-2 py-1 font-mono text-[10px] transition-colors ${speed === item ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-foreground'}`}>
+                  <button key={item} type="button" onClick={() => setSpeed(item)} className={`rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors ${speed === item ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-foreground'}`}>
                     {item}
                   </button>
                 ))}
               </div>
+
+              {/* Tela cheia */}
+              <button type="button" onClick={toggleFullscreen} title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'} className="flex h-8 w-8 items-center justify-center rounded-lg text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground">
+                {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              </button>
             </div>
           </div>
         </div>
@@ -1307,7 +1450,7 @@ export default function ReproduçãoPage() {
           </div>
           <div className="flex-1 overflow-y-auto divide-y divide-border">
             {recordings.length ? [...recordings].reverse().map((item) => {
-              const isSelected = item.id === selectedGravaçãoId;
+              const isSelected = item.id === selectedRecordingId;
               const usable = item.fileUsable ?? item.fileExists;
               const startLabel = format(new Date(item.startedAt), 'HH:mm:ss');
               const endLabel = item.endedAt ? format(new Date(item.endedAt), 'HH:mm:ss') : '--';
@@ -1318,7 +1461,7 @@ export default function ReproduçãoPage() {
                   onClick={() => {
                     if (!usable) return;
                     if (recDiag?.compatibleRecommended) setCompatMode(true);
-                    setSelectedGravaçãoId(item.id);
+                    setSelectedRecordingId(item.id);
                     setPendingSeekSeconds(0);
                     setPlayheadFromMinute(minuteOfDay(item.startedAt));
                   }}
@@ -1364,6 +1507,28 @@ export default function ReproduçãoPage() {
         </div>
 
       </div>
+
+      <Dialog open={clipDownload !== null} onOpenChange={(open) => { if (!open) setClipDownload(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Baixar clipe</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">
+            Informe o motivo do download. Esta ação é registrada na auditoria.
+          </p>
+          <Input
+            autoFocus
+            value={clipDownloadReason}
+            onChange={(event) => setClipDownloadReason(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') void confirmClipDownload(); }}
+            placeholder="Motivo do download (obrigatório)"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClipDownload(null)}>Cancelar</Button>
+            <Button onClick={() => void confirmClipDownload()} disabled={!clipDownloadReason.trim()}>Baixar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

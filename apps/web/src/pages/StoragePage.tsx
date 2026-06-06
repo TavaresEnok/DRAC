@@ -4,11 +4,22 @@ import { HardDrive, Thermometer, RefreshCw, Cpu, MemoryStick, Activity, Trash2, 
 import { useVmsDataStore } from '../store/vmsDataStore';
 import { useAuthStore } from '../store/authStore';
 import { getApiBaseUrl } from '../lib/api-base';
+import { toast } from '../hooks/use-toast';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 function Ring({ value }: { value: number }) {
   return (
     <div className="relative h-40 w-40 rounded-full" style={{ background: `conic-gradient(hsl(var(--primary)) ${value}%, hsl(var(--border)) 0)` }}>
-      <div className="absolute inset-4 rounded-full bg-card border border-card-border flex flex-col items-center justify-center">
+      <div className="absolute inset-4 rounded-full bg-card border border-border flex flex-col items-center justify-center">
         <div className="text-3xl font-semibold">{value}%</div>
         <div className="text-[11px] text-[hsl(var(--muted-foreground))]">Uso</div>
       </div>
@@ -24,10 +35,12 @@ function Bar({ value }: { value: number }) {
 export default function MonitoramentoPage() {
   const API_URL = getApiBaseUrl();
   const accessToken = useAuthStore((state) => state.accessToken);
+  const currentUser = useAuthStore((state) => state.user);
+  const isAdmin = currentUser?.role === 'admin';
   const cameras = useVmsDataStore((state) => state.cameras);
   const system = useVmsDataStore((state) => state.system);
   const load = useVmsDataStore((state) => state.load);
-  const [policyDays, setPolicyDays] = useState(90);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [fromDate, setFromDate] = useState(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
   const [toDate, setToDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -74,8 +87,7 @@ export default function MonitoramentoPage() {
 
   async function handleDeleteAllVideos() {
     if (!accessToken) return;
-    const confirmed = window.confirm('Apagar todas as gravações e clipes exportados do armazenamento? Esta ação não pode ser desfeita.');
-    if (!confirmed) return;
+    setConfirmDeleteOpen(false);
     setDeletingVideos(true);
     try {
       await axios.delete(`${API_URL}/recordings`, {
@@ -83,9 +95,14 @@ export default function MonitoramentoPage() {
       });
       setReloadNonce((value) => value + 1);
       await load();
+      toast({ title: 'Gravações apagadas', description: 'Todas as gravações e clipes exportados foram removidos.' });
     } catch (error) {
       const msg = axios.isAxiosError(error) ? (error.response?.data?.message || error.message) : 'Falha ao apagar vídeos.';
-      window.alert(Array.isArray(msg) ? msg.join(' | ') : String(msg));
+      toast({
+        title: 'Falha ao apagar vídeos',
+        description: Array.isArray(msg) ? msg.join(' | ') : String(msg),
+        variant: 'destructive',
+      });
     } finally {
       setDeletingVideos(false);
     }
@@ -109,32 +126,43 @@ export default function MonitoramentoPage() {
   const cpuUsage = system ? Math.min(100, Math.round(((system.server.loadAverage[0] ?? 0) / Math.max(system.server.cpuCount, 1)) * 100)) : 0;
   const ramUsage = system ? Math.min(100, Math.round(((system.server.totalMemoryBytes - system.server.freeMemoryBytes) / Math.max(system.server.totalMemoryBytes, 1)) * 100)) : 0;
   const streamCount = cameras.filter((camera) => camera.isOnline).length;
+  // Retenção real das câmeras acessíveis (antes era um "90 dias" fixo e falso).
+  const retentionLabel = useMemo(() => {
+    const days = Array.from(new Set(
+      cameras.map((camera) => camera.retentionDays).filter((value): value is number => typeof value === 'number' && value > 0),
+    ));
+    if (!days.length) return '—';
+    if (days.length === 1) return `${days[0]} dias`;
+    return `${Math.min(...days)}–${Math.max(...days)} dias`;
+  }, [cameras]);
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div className="space-y-1">
-          <h2 className="text-lg font-semibold">Armazenamento</h2>
+          <h2 className="text-[18px] font-semibold tracking-tight">Armazenamento</h2>
           <p className="text-xs text-[hsl(var(--muted-foreground))]">Espaço disponível, retenção e saúde das gravações.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleDeleteAllVideos}
-            disabled={deletingVideos}
-            className="flex items-center gap-2 px-3 py-2 rounded border border-[hsl(var(--destructive)_/_0.35)] bg-card text-[hsl(var(--destructive))] text-xs hover:bg-[hsl(var(--destructive)_/_0.08)] transition-colors disabled:opacity-50"
-          >
-            <Trash2 className="w-3.5 h-3.5" /> {deletingVideos ? 'Apagando...' : 'Apagar vídeos'}
-          </button>
-        </div>
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setConfirmDeleteOpen(true)}
+              disabled={deletingVideos}
+              className="flex items-center gap-2 px-3 py-2 rounded border border-[hsl(var(--destructive)_/_0.35)] bg-card text-[hsl(var(--destructive))] text-xs hover:bg-[hsl(var(--destructive)_/_0.08)] transition-colors disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> {deletingVideos ? 'Apagando...' : 'Apagar vídeos'}
+            </button>
+          </div>
+        )}
       </div>
       <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
-        <div className="bg-card border border-card-border rounded-xl p-5 flex items-center justify-center">
+        <div className="bg-card border border-border rounded-xl p-5 flex items-center justify-center">
           <Ring value={percent} />
         </div>
         <div className="grid gap-4 sm:grid-cols-3">
-          <div className="bg-card border border-card-border rounded-xl p-4"><div className="text-[10px] uppercase text-[hsl(var(--muted-foreground))]">Total</div><div className="mt-2 text-2xl font-semibold">{total.toFixed(1)} TB</div></div>
-          <div className="bg-card border border-card-border rounded-xl p-4"><div className="text-[10px] uppercase text-[hsl(var(--muted-foreground))]">Utilizado</div><div className="mt-2 text-2xl font-semibold">{used.toFixed(1)} TB</div></div>
-          <div className="bg-card border border-card-border rounded-xl p-4"><div className="text-[10px] uppercase text-[hsl(var(--muted-foreground))]">Livre</div><div className="mt-2 text-2xl font-semibold">{free.toFixed(1)} TB</div></div>
+          <div className="bg-card border border-border rounded-xl p-4"><div className="text-[10px] uppercase text-[hsl(var(--muted-foreground))]">Total</div><div className="mt-2 text-2xl font-semibold">{total.toFixed(1)} TB</div></div>
+          <div className="bg-card border border-border rounded-xl p-4"><div className="text-[10px] uppercase text-[hsl(var(--muted-foreground))]">Utilizado</div><div className="mt-2 text-2xl font-semibold">{used.toFixed(1)} TB</div></div>
+          <div className="bg-card border border-border rounded-xl p-4"><div className="text-[10px] uppercase text-[hsl(var(--muted-foreground))]">Livre</div><div className="mt-2 text-2xl font-semibold">{free.toFixed(1)} TB</div></div>
         </div>
       </div>
       <details className="rounded-lg border border-border bg-card shadow-sm">
@@ -182,13 +210,13 @@ export default function MonitoramentoPage() {
           </div>
         </div>
       </details>
-      <details className="bg-card border border-card-border rounded-lg">
+      <details className="bg-card border border-border rounded-lg">
         <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">Volumes</summary>
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <div>
             <div className="text-xs font-semibold text-[hsl(var(--muted-foreground))]">Detalhes de armazenamento</div>
           </div>
-          <button className="text-xs flex items-center gap-2 text-[hsl(var(--muted-foreground))] hover:text-foreground transition-colors"><RefreshCw className="w-3.5 h-3.5" /> Atualizar</button>
+          <button onClick={() => { setReloadNonce((value) => value + 1); void load(); }} className="text-xs flex items-center gap-2 text-[hsl(var(--muted-foreground))] hover:text-foreground transition-colors"><RefreshCw className="w-3.5 h-3.5" /> Atualizar</button>
         </div>
         <table className="w-full text-sm">
           <thead className="text-[10px] text-[hsl(var(--muted-foreground))]">
@@ -215,7 +243,7 @@ export default function MonitoramentoPage() {
           </tbody>
         </table>
       </details>
-      <details className="bg-card border border-card-border rounded-xl">
+      <details className="bg-card border border-border rounded-xl">
         <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">Uso por câmera</summary>
         <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
           <div>
@@ -265,22 +293,42 @@ export default function MonitoramentoPage() {
         </div>
       </details>
       <div className="grid gap-4 lg:grid-cols-3">
-        <div className="bg-card border border-card-border rounded-xl p-4">
+        <div className="bg-card border border-border rounded-xl p-4">
           <div className="text-xs text-[hsl(var(--muted-foreground))]">Retenção</div>
-          <div className="mt-3 text-2xl font-semibold">{policyDays} dias</div>
-          <div className="mt-3 text-xs text-[hsl(var(--muted-foreground))]">Período padrão para gravações e eventos.</div>
+          <div className="mt-3 text-2xl font-semibold">{retentionLabel}</div>
+          <div className="mt-3 text-xs text-[hsl(var(--muted-foreground))]">Configurada por câmera (gravações e eventos).</div>
         </div>
-        <div className="bg-card border border-card-border rounded-xl p-4">
+        <div className="bg-card border border-border rounded-xl p-4">
           <div className="text-xs text-[hsl(var(--muted-foreground))]">Câmeras</div>
           <div className="mt-3 text-2xl font-semibold">{cameras.length}</div>
           <div className="mt-3 text-xs text-[hsl(var(--muted-foreground))]">Base para cálculo de retenção por carga.</div>
         </div>
-        <div className="bg-card border border-card-border rounded-xl p-4">
+        <div className="bg-card border border-border rounded-xl p-4">
           <div className="text-xs text-[hsl(var(--muted-foreground))]">Saúde operacional</div>
           <div className="mt-3 flex items-center gap-2 text-xs"><ShieldAlert className="w-4 h-4 text-[hsl(var(--chart-4))]" /> {volumes.filter((volume) => volume.health !== 'OK').length} volumes em atenção</div>
           <div className="mt-3 flex items-center gap-2 text-xs"><Server className="w-4 h-4 text-[hsl(var(--primary))]" /> {system ? 1 : 0} servidor monitorado</div>
         </div>
       </div>
+
+      <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apagar todas as gravações?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Isto remove <strong>todas</strong> as gravações e clipes exportados do armazenamento, de todas as câmeras. Esta ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void handleDeleteAllVideos()}
+              className="bg-[hsl(var(--destructive))] text-white hover:bg-[hsl(var(--destructive)_/_0.9)]"
+            >
+              Apagar tudo
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -67,6 +67,15 @@ export class CameraGroupsService {
     return this.prisma.cameraGroup.update({ where: { id }, data: { isActive: false }, include: { cameras: true } });
   }
 
+  async setAlarmsForGroup(groupId: string, enabled: boolean) {
+    await this.ensureExists(groupId);
+    const result = await this.prisma.camera.updateMany({
+      where: { groupId },
+      data: { alarmsEnabled: enabled },
+    });
+    return { groupId, enabled, affected: result.count };
+  }
+
   async addCamera(groupId: string, cameraId: string) {
     const group = await this.prisma.cameraGroup.findUnique({ where: { id: groupId } });
     if (!group) throw new NotFoundException('Grupo não encontrado.');

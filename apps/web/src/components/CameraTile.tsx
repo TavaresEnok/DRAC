@@ -67,6 +67,7 @@ export function CameraTile({
             cameraId={camera.id}
             cameraName={camera.name}
             showOverlay={showDetectionOverlay && !wallMode}
+            aiEnabled={camera.aiEnabled}
             liveViewMode={liveViewMode}
             className="h-full w-full"
             muted
@@ -119,7 +120,7 @@ export function CameraTile({
                   <div className="flex items-center gap-1 mt-px">
                     <span
                       className="w-1 h-1 rounded-full shrink-0"
-                      style={{ backgroundColor: STATUS_DOT[camera.status] }}
+                      style={{ backgroundColor: STATUS_DOT[camera.status] ?? STATUS_DOT.offline }}
                     />
                     <span className="text-[9px] text-white/45 capitalize">{camera.status.replace('_', ' ')}</span>
                   </div>

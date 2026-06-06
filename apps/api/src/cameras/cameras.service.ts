@@ -23,6 +23,7 @@ import {
   resolveRecordingRtspProfile,
   sanitizeRtspUrl,
 } from './helpers/rtsp-url.helper';
+import { assessCameraCompatibility } from './helpers/camera-compatibility.helper';
 
 export function sanitizeCamera<T extends { passwordEncrypted: string }>(camera: T): Omit<T, 'passwordEncrypted'> {
   const { passwordEncrypted, ...safeCamera } = camera;
@@ -149,6 +150,7 @@ export class CamerasService {
         recordingBitrateKbps: normalizedProfile.recordingBitrateKbps,
         audioEnabled: dto.audioEnabled ?? false,
         aiEnabled: dto.aiEnabled ?? true,
+        alarmsEnabled: dto.alarmsEnabled ?? true,
         hasEdgeAi: dto.hasEdgeAi ?? false,
         motionTrigger: dto.motionTrigger ?? (dto.hasEdgeAi ? 'CAMERA' : 'SYSTEM'),
         status: CameraStatus.ONLINE,
@@ -224,6 +226,7 @@ export class CamerasService {
         recordingBitrateKbps: normalizedProfile.recordingBitrateKbps,
         audioEnabled: dto.audioEnabled,
         aiEnabled: dto.aiEnabled,
+        alarmsEnabled: dto.alarmsEnabled !== undefined ? dto.alarmsEnabled : existing.alarmsEnabled,
         hasEdgeAi: dto.hasEdgeAi !== undefined ? dto.hasEdgeAi : existing.hasEdgeAi,
         motionTrigger: dto.motionTrigger ?? existing.motionTrigger,
       },
@@ -661,6 +664,15 @@ export class CamerasService {
       }
     }
 
+    const compatibility = assessCameraCompatibility({
+      selectedPath: mainProfile?.rtspPath ?? detectedRtspPath,
+      onvifProfileNames: onvifMedia.profiles.flatMap((profile) => [profile.name, profile.rtspPath]),
+      mainMetadata: mainProfile?.metadata ?? detectedStream,
+      subMetadata: subProfile?.metadata,
+      rtspAuthenticated: rtspAuthOk,
+      onvifProfilesFound: onvifMedia.profiles.length,
+    });
+
     return {
       ip: input.ip,
       rtspPort: input.rtspPort,
@@ -716,6 +728,7 @@ export class CamerasService {
           onvifProfileToken: this.pickOnvifSubProfile(onvifMedia.profiles, this.pickOnvifMainProfile(onvifMedia.profiles)?.token)?.token ?? null,
         },
       },
+      compatibility,
       probeSteps: steps,
       hasEdgeAi: ptzDigestOk || onvifReachable,
       status,
@@ -737,6 +750,11 @@ export class CamerasService {
       `/Streaming/Channels/${hikvisionProfile}?transportmode=unicast`,
       `/h264/ch${channel}/${isMain ? 'main' : 'sub'}/av_stream`,
       `/h265/ch${channel}/${isMain ? 'main' : 'sub'}/av_stream`,
+      isMain ? `/h264Preview_${channel}01_main` : `/h264Preview_${channel}01_sub`,
+      isMain ? `/h265Preview_${channel}01_main` : `/h265Preview_${channel}01_sub`,
+      isMain ? `/Preview_${channel}01_main` : `/Preview_${channel}01_sub`,
+      '/axis-media/media.amp',
+      isMain ? `/media/video${channel}` : `/media/video${channel + 1}`,
       isMain ? '/live/ch00_0' : '/live/ch00_1',
       isMain ? '/stream1' : '/stream2',
       isMain ? '/profile1/media.smp' : '/profile2/media.smp',
@@ -1092,77 +1110,91 @@ export class CamerasService {
     paths: string[];
   }) {
     let lastError: string | null = null;
-    let best: {
+    const successful: Array<{
       port: number;
       path: string;
       url: string;
       metadata: ProbedStreamMetadata;
       score: number;
-    } | null = null;
-    for (const port of input.rtspPorts) {
-      for (const path of input.paths) {
-        const url = `rtsp://${encodeURIComponent(input.username)}:${encodeURIComponent(input.password)}@${input.ip}:${port}${path}`;
-        const result = await new Promise<{ ok: boolean; error: string | null; metadata: ProbedStreamMetadata | null }>((resolve) => {
-          const proc = spawn(
-            'ffprobe',
-            [
-              '-v',
-              'error',
-              '-rtsp_transport',
-              'tcp',
-              '-timeout',
-              String(this.rtspProbeTimeoutMs * 1000),
-              '-select_streams',
-              'v:0',
-              '-show_entries',
-              'stream=codec_name,width,height,avg_frame_rate,bit_rate:format=bit_rate',
-              '-of',
-              'json',
-              url,
-            ],
-            { stdio: ['ignore', 'pipe', 'pipe'] },
-          );
-          let settled = false;
-          const finish = (value: { ok: boolean; error: string | null; metadata: ProbedStreamMetadata | null }) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(killTimer);
-            resolve(value);
-          };
-          const killTimer = setTimeout(() => {
-            proc.kill('SIGKILL');
-            finish({ ok: false, error: 'ffprobe timeout', metadata: null });
-          }, this.rtspProbeKillTimeoutMs);
-          let stdout = '';
-          let stderr = '';
-          proc.stdout.on('data', (chunk) => {
-            stdout += chunk.toString();
-          });
-          proc.stderr.on('data', (chunk) => {
-            stderr += chunk.toString();
-          });
-          proc.on('error', (error) => finish({ ok: false, error: error.message, metadata: null }));
-          proc.on('close', (code) => {
-            if (code === 0) {
-              finish({ ok: true, error: null, metadata: this.parseProbedStreamMetadata(stdout) });
-              return;
-            }
-            const clean = stderr.trim();
-            finish({ ok: false, error: clean.length ? clean.slice(0, 300) : `ffprobe exit ${code ?? -1}`, metadata: null });
-          });
+    }> = [];
+    const concurrency = Math.max(1, Math.min(6, Number(process.env.CAMERA_RTSP_PROBE_CONCURRENCY ?? 4)));
+    const probePath = async (port: number, path: string) => {
+      const url = `rtsp://${encodeURIComponent(input.username)}:${encodeURIComponent(input.password)}@${input.ip}:${port}${path}`;
+      const result = await new Promise<{ ok: boolean; error: string | null; metadata: ProbedStreamMetadata | null }>((resolve) => {
+        const proc = spawn(
+          'ffprobe',
+          [
+            '-v',
+            'error',
+            '-rtsp_transport',
+            'tcp',
+            '-timeout',
+            String(this.rtspProbeTimeoutMs * 1000),
+            '-select_streams',
+            'v:0',
+            '-show_entries',
+            'stream=codec_name,width,height,avg_frame_rate,bit_rate:format=bit_rate',
+            '-of',
+            'json',
+            url,
+          ],
+          { stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+        let settled = false;
+        const finish = (value: { ok: boolean; error: string | null; metadata: ProbedStreamMetadata | null }) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(killTimer);
+          resolve(value);
+        };
+        const killTimer = setTimeout(() => {
+          proc.kill('SIGKILL');
+          finish({ ok: false, error: 'ffprobe timeout', metadata: null });
+        }, this.rtspProbeKillTimeoutMs);
+        let stdout = '';
+        let stderr = '';
+        proc.stdout.on('data', (chunk) => {
+          stdout += chunk.toString();
         });
-
-        if (result.ok) {
-          const metadata = result.metadata ?? {};
-          const score = this.scoreProbedStream(metadata);
-          if (!best || score > best.score) {
-            best = { port, path, url, metadata, score };
+        proc.stderr.on('data', (chunk) => {
+          stderr += chunk.toString();
+        });
+        proc.on('error', (error) => finish({ ok: false, error: error.message, metadata: null }));
+        proc.on('close', (code) => {
+          if (code === 0) {
+            finish({ ok: true, error: null, metadata: this.parseProbedStreamMetadata(stdout) });
+            return;
           }
-          continue;
+          const clean = stderr.trim();
+          finish({ ok: false, error: clean.length ? clean.slice(0, 300) : `ffprobe exit ${code ?? -1}`, metadata: null });
+        });
+      });
+      return { port, path, url, result };
+    };
+
+    for (const port of input.rtspPorts) {
+      for (let index = 0; index < input.paths.length; index += concurrency) {
+        const batch = input.paths.slice(index, index + concurrency);
+        const results = await Promise.all(batch.map((path) => probePath(port, path)));
+        for (const item of results) {
+          if (item.result.ok) {
+            const metadata = item.result.metadata ?? {};
+            successful.push({
+              port: item.port,
+              path: item.path,
+              url: item.url,
+              metadata,
+              score: this.scoreProbedStream(metadata),
+            });
+          } else {
+            lastError = item.result.error;
+          }
         }
-        lastError = result.error;
+        if (successful.length) break;
       }
+      if (successful.length) break;
     }
+    const best = successful.sort((a, b) => b.score - a.score)[0] ?? null;
     if (best) {
       const metadata = best.metadata;
       if (!metadata.bitrateKbps || metadata.bitrateKbps <= 0) {

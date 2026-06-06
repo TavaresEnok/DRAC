@@ -64,6 +64,44 @@ function isCameraAllowedByAiEnv(cam: any): boolean {
   return Array.from(allowed).some((token) => cameraMatchesAiToken(cam, token));
 }
 
+function asNumber(value: unknown, fallback = 0): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function asNullableNumber(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function asString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function asBool(value: unknown): boolean {
+  return value === true || value === 'true' || value === 1 || value === '1';
+}
+
+function avg(values: Array<number | null | undefined>): number | null {
+  const filtered = values.filter((value): value is number => Number.isFinite(value as number));
+  if (!filtered.length) return null;
+  return Math.round((filtered.reduce((sum, value) => sum + value, 0) / filtered.length) * 1000) / 1000;
+}
+
+function pct(value: number | null | undefined): number | null {
+  if (!Number.isFinite(value as number)) return null;
+  return Math.round((value as number) * 10000) / 100;
+}
+
+function parseCsvEnv(raw: string | undefined): string[] {
+  return String(raw ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 @Injectable()
 export class AiManagerService implements OnModuleInit {
   private readonly logger = new Logger(AiManagerService.name);
@@ -189,6 +227,448 @@ export class AiManagerService implements OnModuleInit {
     });
     const sync = await this.restartAll();
     return { settings, sync };
+  }
+
+  async getIntelligenceOverview(accessibleCameraIds?: string[]) {
+    const [settings, health, cameras, commercialAllowed] = await Promise.all([
+      this.getSettings(),
+      this.aiService.getHealth(),
+      this.camerasService.findAllInternal(),
+      this.commercialPolicy.isAllowed('aiAdvanced').catch(() => false),
+    ]);
+
+    const allowedSet = Array.isArray(accessibleCameraIds) ? new Set(accessibleCameraIds) : null;
+    const visibleCameras = allowedSet ? cameras.filter((camera: any) => allowedSet.has(camera.id)) : cameras;
+    const processors = health?.processors && typeof health.processors === 'object' ? health.processors as Record<string, any> : {};
+    const cameraRows = visibleCameras.map((camera: any) => this.buildIntelligenceCamera(camera, processors[camera.id], settings));
+    const serviceOnline = health?.status === 'online';
+    const enabledRows = cameraRows.filter((camera) => camera.participation.aiEnabled && camera.participation.allowedByPolicy);
+    const runningRows = cameraRows.filter((camera) => camera.runtime.running);
+    const criticalRows = cameraRows.filter((camera) => camera.health.severity === 'critical');
+    const warningRows = cameraRows.filter((camera) => camera.health.severity === 'warning');
+
+    const status = !commercialAllowed
+      ? 'restricted'
+      : !settings.enabled
+        ? 'disabled'
+        : !serviceOnline
+          ? 'offline'
+          : criticalRows.length
+            ? 'critical'
+            : warningRows.length
+              ? 'attention'
+              : 'ok';
+
+    return {
+      generatedAt: new Date().toISOString(),
+      status,
+      service: {
+        online: serviceOnline,
+        healthStatus: health?.status ?? 'offline',
+        activeProcessors: Array.isArray(health?.active_processors) ? health.active_processors : Object.keys(processors),
+        lastError: asString(health?.model_registry?.lastError ?? health?.last_error),
+      },
+      commercial: {
+        aiAdvancedAllowed: commercialAllowed,
+      },
+      settings: {
+        enabled: settings.enabled,
+        mode: settings.mode,
+        modeLabel: this.modeLabel(settings.mode),
+        updatedAt: settings.updatedAt,
+      },
+      runtimePolicy: this.runtimePolicy(),
+      model: this.modelState(health, settings.mode),
+      summary: {
+        totalCameras: cameraRows.length,
+        onlineCameras: cameraRows.filter((camera) => camera.camera.online).length,
+        aiEnabledCameras: cameraRows.filter((camera) => camera.participation.aiEnabled).length,
+        allowedByPolicyCameras: cameraRows.filter((camera) => camera.participation.allowedByPolicy).length,
+        expectedProcessors: enabledRows.length,
+        runningProcessors: runningRows.length,
+        directCameraSources: runningRows.filter((camera) => camera.source.kind === 'direct_camera').length,
+        mediaMtxSources: runningRows.filter((camera) => camera.source.usesMediaMtx).length,
+        hibernatingProcessors: runningRows.filter((camera) => camera.runtime.hibernating).length,
+        activeLiveSessions: runningRows.reduce((sum, camera) => sum + camera.liveView.activeSessions, 0),
+        avgCaptureFps: avg(runningRows.map((camera) => camera.stream.captureFps)),
+        avgInferenceFps: avg(runningRows.map((camera) => camera.stream.inferenceFps)),
+        avgFrameAgeMs: avg(runningRows.map((camera) => camera.stream.frameAgeAvgMs)),
+        avgInferLatencyMs: avg(runningRows.map((camera) => camera.performance.inferAvgMs)),
+        inferP95Ms: avg(runningRows.map((camera) => camera.performance.inferP95Ms)),
+        poolBusyDrops: runningRows.reduce((sum, camera) => sum + camera.performance.poolBusyDrops, 0),
+        advancedInferErrors: runningRows.reduce((sum, camera) => sum + camera.performance.advancedInferErrors, 0),
+        captureDroppedFrames: runningRows.reduce((sum, camera) => sum + camera.stream.droppedFrames, 0),
+      },
+      recommendations: this.globalRecommendations({
+        status,
+        settings,
+        serviceOnline,
+        commercialAllowed,
+        cameraRows,
+      }),
+      cameras: cameraRows,
+    };
+  }
+
+  async getCameraIntelligence(cameraId: string) {
+    const overview = await this.getIntelligenceOverview([cameraId]);
+    const camera = overview.cameras.find((item: any) => item.camera.id === cameraId) ?? null;
+    const latest = await this.aiService.getLatestDetections(cameraId, 1500, 20);
+    return {
+      generatedAt: new Date().toISOString(),
+      overview: {
+        status: overview.status,
+        settings: overview.settings,
+        model: overview.model,
+        runtimePolicy: overview.runtimePolicy,
+      },
+      camera,
+      latestDetections: latest,
+    };
+  }
+
+  async restartCamera(cameraId: string) {
+    await this.aiService.stopAnalysis(cameraId).catch(() => undefined);
+    return this.startCamera(cameraId);
+  }
+
+  private buildIntelligenceCamera(cam: any, processor: any, settings: any) {
+    const performance = processor?.performance ?? {};
+    const stream = processor?.stream ?? {};
+    const source = processor?.source ?? {};
+    const liveView = processor?.live_view ?? {};
+    const featureFlags = liveView?.feature_flags ?? {};
+    const adaptiveMetrics = liveView?.adaptive?.metrics ?? {};
+    const captureFramesEnqueued = asNumber(processor?.capture_frames_enqueued);
+    const captureFramesDropped = asNumber(processor?.capture_frames_dropped);
+    const captureDropRatio = captureFramesEnqueued + captureFramesDropped > 0
+      ? captureFramesDropped / (captureFramesEnqueued + captureFramesDropped)
+      : 0;
+    const liveSubtype = cam.liveSubtype ?? cam.subtype ?? 0;
+    const liveChannel = cam.liveChannel ?? cam.channel ?? 1;
+    const recordingSubtype = cam.recordingSubtype ?? cam.subtype ?? 0;
+    const recordingChannel = cam.recordingChannel ?? cam.channel ?? 1;
+    const analyticsSubtype = cam.analyticsSubtype ?? 1;
+    const analyticsChannel = cam.analyticsChannel ?? cam.channel ?? 1;
+    const analyticsSeparated = analyticsSubtype !== liveSubtype || analyticsChannel !== liveChannel;
+    const dbCodec = asString(cam.detectedVideoCodec ?? cam.streamVideoCodec ?? cam.recordingVideoCodec);
+    const streamCodec = asString(stream?.codec ?? source?.analyticsSourceCodec ?? source?.analytics_source_codec ?? dbCodec);
+    const sourceKind = asString(source?.kind) ?? (processor ? 'unknown' : 'not_started');
+    const usesMediaMtx = asBool(source?.usesMediaMtx ?? source?.uses_mediamtx);
+    const running = Boolean(processor?.running);
+    const hibernating = Boolean(processor?.hibernating);
+    const aiEnabled = cam.aiEnabled !== false;
+    const allowedByPolicy = isCameraAllowedByAiEnv(cam);
+    const liveActiveSessions = asNumber(liveView?.active_sessions);
+
+    const row = {
+      camera: {
+        id: cam.id,
+        name: cam.name,
+        ip: cam.ip,
+        online: cam.status === 'ONLINE',
+        status: cam.status,
+        site: cam.site?.name ?? null,
+        area: cam.area?.name ?? null,
+        group: cam.group?.name ?? null,
+        lastSeenAt: cam.lastSeenAt ?? null,
+      },
+      participation: {
+        aiEnabled,
+        allowedByPolicy,
+        expectedToRun: settings.enabled && aiEnabled && allowedByPolicy,
+        blockedReason: !aiEnabled
+          ? 'camera_ai_disabled'
+          : !allowedByPolicy
+            ? 'filtered_by_ai_env'
+            : null,
+      },
+      profiles: {
+        recording: {
+          channel: recordingChannel,
+          subtype: recordingSubtype,
+          codec: cam.recordingVideoCodec ?? null,
+          width: cam.recordingWidth ?? cam.detectedWidth ?? null,
+          height: cam.recordingHeight ?? cam.detectedHeight ?? null,
+          fps: cam.recordingFps ?? cam.detectedFps ?? null,
+          mode: cam.recordingMode,
+          enabled: Boolean(cam.recordingEnabled),
+        },
+        live: {
+          channel: liveChannel,
+          subtype: liveSubtype,
+          protocol: cam.preferredLiveProtocol ?? 'webrtc',
+          codec: cam.streamVideoCodec ?? cam.detectedVideoCodec ?? null,
+          width: cam.streamWidth ?? cam.detectedWidth ?? null,
+          height: cam.streamHeight ?? cam.detectedHeight ?? null,
+          fps: cam.streamFps ?? cam.detectedFps ?? null,
+        },
+        analytics: {
+          channel: analyticsChannel,
+          subtype: analyticsSubtype,
+          separatedFromLive: analyticsSeparated,
+          expectedSource: 'direct_camera',
+          audioExpected: false,
+        },
+      },
+      source: {
+        kind: sourceKind,
+        usesMediaMtx,
+        directCamera: sourceKind === 'direct_camera' && !usesMediaMtx,
+        audioRequested: asBool(source?.audioRequested ?? source?.audio_requested),
+        analyticsRtspUrl: asString(source?.analyticsSourceUrlSanitized ?? source?.analytics_source_url_sanitized ?? source?.analyticsRtspUrl ?? source?.analytics_rtsp_url),
+        codec: streamCodec,
+        transcodedForAi: asBool(source?.analyticsTranscodedForAi ?? source?.analytics_transcoded_for_ai),
+        fallbackReason: asString(source?.analyticsFallbackReason ?? source?.analytics_fallback_reason),
+      },
+      runtime: {
+        running,
+        hibernating,
+        analysisType: asString(processor?.analysis_type),
+        advancedAnalysisType: asString(processor?.advanced_analysis_type),
+        processFpsTarget: asNullableNumber(processor?.process_fps),
+        advancedFpsTarget: asNullableNumber(processor?.advanced_process_fps),
+        motionTrigger: asString(processor?.motion_trigger),
+        lastSeen: processor?.last_seen ?? null,
+        lastError: asString(processor?.last_error),
+      },
+      stream: {
+        codec: streamCodec,
+        width: asNullableNumber(stream?.width),
+        height: asNullableNumber(stream?.height),
+        fps: asNullableNumber(stream?.fps),
+        captureFps: asNullableNumber(stream?.capture_fps),
+        inferenceFps: asNullableNumber(stream?.inference_fps),
+        frameAgeLastMs: asNullableNumber(stream?.frame_age_last_ms),
+        frameAgeAvgMs: asNullableNumber(stream?.frame_age_avg_ms),
+        latestFrameOnly: stream?.latest_frame_only !== false,
+        bufferSize: asNumber(stream?.buffer_size, 1),
+        queueSize: asNumber(stream?.queue_size),
+        droppedFrames: asNumber(stream?.dropped_frames ?? captureFramesDropped),
+        captureFramesEnqueued,
+        captureFramesDropped,
+        captureDropRatio,
+      },
+      performance: {
+        processedFrames: asNumber(performance?.processed_frames),
+        processFpsReal: asNullableNumber(performance?.process_fps_real),
+        advancedInferRuns: asNumber(performance?.advanced_infer_runs),
+        advancedInferErrors: asNumber(performance?.advanced_infer_errors),
+        inferLastMs: asNullableNumber(performance?.advanced_infer_last_ms),
+        inferAvgMs: asNullableNumber(performance?.advanced_infer_avg_ms),
+        inferP95Ms: asNullableNumber(performance?.advanced_infer_p95_ms),
+        poolBusyDrops: asNumber(performance?.pool_busy_drops),
+        overlayPayloadFrames: asNumber(performance?.overlay_payload_frames),
+        overlayEmptyFrames: asNumber(performance?.overlay_empty_frames),
+        overlayPayloadRatio: asNullableNumber(performance?.overlay_payload_ratio),
+      },
+      liveView: {
+        activeSessions: liveActiveSessions,
+        qosMode: asString(liveView?.qos_mode),
+        selectedSessions: asNumber(liveView?.sessions_by_mode?.selected),
+        gridSessions: asNumber(liveView?.sessions_by_mode?.grid),
+        qosLiveEnabled: asBool(featureFlags?.qos_live_enabled),
+        adaptiveEnabledForCamera: asBool(featureFlags?.adaptive_enabled_for_camera),
+        cpuPercent: asNullableNumber(adaptiveMetrics?.cpu_percent),
+        dropRatio: asNullableNumber(adaptiveMetrics?.drop_ratio),
+      },
+      health: {
+        state: 'unknown',
+        severity: 'info',
+        label: 'Sem diagnóstico',
+      },
+      recommendations: [] as Array<{ severity: 'info' | 'warning' | 'critical'; code: string; message: string }>,
+    };
+
+    const recommendations = this.cameraRecommendations(row);
+    const worst = recommendations.find((item) => item.severity === 'critical')
+      ?? recommendations.find((item) => item.severity === 'warning')
+      ?? recommendations[0]
+      ?? null;
+    row.recommendations = recommendations;
+    row.health = this.cameraHealth(row, worst);
+    return row;
+  }
+
+  private cameraRecommendations(row: any) {
+    const items: Array<{ severity: 'info' | 'warning' | 'critical'; code: string; message: string }> = [];
+    if (!row.camera.online) {
+      items.push({ severity: 'critical', code: 'camera_offline', message: 'Câmera offline; a IA não consegue capturar frames.' });
+      return items;
+    }
+    if (!row.participation.aiEnabled) {
+      items.push({ severity: 'info', code: 'camera_disabled', message: 'IA desativada nesta câmera.' });
+      return items;
+    }
+    if (!row.participation.allowedByPolicy) {
+      items.push({ severity: 'info', code: 'filtered_by_env', message: 'Câmera fora do filtro operacional de IA deste servidor.' });
+      return items;
+    }
+    if (row.participation.expectedToRun && !row.runtime.running) {
+      items.push({ severity: 'critical', code: 'processor_not_running', message: 'Câmera deveria estar em análise, mas não há processador ativo.' });
+    }
+    if (row.runtime.lastError) {
+      items.push({ severity: 'critical', code: 'processor_error', message: `Erro no processador: ${row.runtime.lastError}` });
+    }
+    if (!row.profiles.analytics.separatedFromLive) {
+      items.push({ severity: 'warning', code: 'analytics_not_separated', message: 'Analytics usa o mesmo perfil da live; prefira substream leve dedicado.' });
+    }
+    if (row.source.usesMediaMtx) {
+      items.push({ severity: 'warning', code: 'analytics_via_mediamtx', message: 'IA está usando MediaMTX como fallback; ideal é RTSP direto da câmera.' });
+    }
+    if (row.source.audioRequested) {
+      items.push({ severity: 'warning', code: 'audio_requested', message: 'IA recebeu solicitação de áudio; analytics deve ser vídeo sem áudio.' });
+    }
+    if (isHevcCodec(row.source.codec)) {
+      items.push({ severity: 'warning', code: 'analytics_hevc', message: 'Stream de analytics em HEVC; H.264 no substream costuma reduzir travamentos de captura.' });
+    }
+    if (Number.isFinite(row.stream.captureFps) && row.stream.captureFps !== null && row.stream.captureFps < 0.8 && row.runtime.running) {
+      items.push({ severity: 'warning', code: 'low_capture_fps', message: 'FPS real de captura baixo; verificar substream, codec ou rede da câmera.' });
+    }
+    if (Number.isFinite(row.stream.frameAgeAvgMs) && row.stream.frameAgeAvgMs !== null && row.stream.frameAgeAvgMs > 900) {
+      items.push({ severity: 'warning', code: 'high_frame_age', message: 'Frames chegam envelhecidos; latest-frame-only pode estar descartando demais ou a captura está lenta.' });
+    }
+    if (row.performance.poolBusyDrops > 0) {
+      items.push({ severity: 'warning', code: 'pool_busy', message: 'Pool de inferência ocupou totalmente em algum momento; reduzir FPS ou revisar threads se crescer.' });
+    }
+    if (row.performance.advancedInferErrors > 0) {
+      items.push({ severity: 'critical', code: 'infer_errors', message: 'Há erros de inferência avançada nesta câmera.' });
+    }
+    if (!items.length) {
+      items.push({ severity: 'info', code: 'healthy', message: 'Pipeline de IA saudável para a configuração atual.' });
+    }
+    return items;
+  }
+
+  private cameraHealth(row: any, worst: { severity: 'info' | 'warning' | 'critical'; code: string; message: string } | null) {
+    if (!row.participation.aiEnabled || !row.participation.allowedByPolicy) {
+      return { state: 'disabled', severity: 'info', label: 'Fora da IA' };
+    }
+    if (!row.camera.online) {
+      return { state: 'offline', severity: 'critical', label: 'Câmera offline' };
+    }
+    if (!row.runtime.running) {
+      return { state: 'stopped', severity: 'critical', label: 'IA parada' };
+    }
+    if (worst?.severity === 'critical') {
+      return { state: worst.code, severity: 'critical', label: 'Falha na IA' };
+    }
+    if (worst?.severity === 'warning') {
+      return { state: worst.code, severity: 'warning', label: 'Atenção' };
+    }
+    if (row.runtime.hibernating) {
+      return { state: 'hibernating', severity: 'info', label: 'Hibernando' };
+    }
+    return { state: 'healthy', severity: 'info', label: 'Saudável' };
+  }
+
+  private globalRecommendations(input: {
+    status: string;
+    settings: any;
+    serviceOnline: boolean;
+    commercialAllowed: boolean;
+    cameraRows: any[];
+  }) {
+    const items: Array<{ severity: 'info' | 'warning' | 'critical'; code: string; message: string }> = [];
+    if (!input.commercialAllowed) {
+      items.push({ severity: 'critical', code: 'commercial_restricted', message: 'Recurso de IA bloqueado pela política comercial.' });
+    }
+    if (!input.settings.enabled) {
+      items.push({ severity: 'info', code: 'global_disabled', message: 'IA global desligada; live, gravação e reprodução continuam independentes.' });
+    }
+    if (input.settings.enabled && !input.serviceOnline) {
+      items.push({ severity: 'critical', code: 'ai_service_offline', message: 'Serviço Python de IA não respondeu ao health check.' });
+    }
+    const expected = input.cameraRows.filter((camera) => camera.participation.expectedToRun);
+    const missing = expected.filter((camera) => !camera.runtime.running);
+    if (missing.length) {
+      items.push({ severity: 'critical', code: 'missing_processors', message: `${missing.length} câmera(s) deveriam estar em análise, mas não têm processador ativo.` });
+    }
+    const mediaMtx = input.cameraRows.filter((camera) => camera.runtime.running && camera.source.usesMediaMtx);
+    if (mediaMtx.length) {
+      items.push({ severity: 'warning', code: 'mediamtx_fallback', message: `${mediaMtx.length} câmera(s) usando fallback via MediaMTX para analytics.` });
+    }
+    const busyDrops = input.cameraRows.reduce((sum, camera) => sum + camera.performance.poolBusyDrops, 0);
+    if (busyDrops > 0) {
+      items.push({ severity: 'warning', code: 'pool_busy_drops', message: `Pool de inferência registrou ${busyDrops} drop(s); observar antes de aumentar FPS/modelo.` });
+    }
+    if (!items.length) {
+      items.push({ severity: 'info', code: 'ready', message: 'IA operacional, separada da live e sem gargalos críticos no momento.' });
+    }
+    return items;
+  }
+
+  private modelState(health: any, mode: string) {
+    const staticProfiles = health?.static_profiles ?? {};
+    const selectedProfile = staticProfiles?.[mode] ?? staticProfiles?.general ?? {};
+    const registry = health?.model_registry ?? {};
+    const detectors = registry?.detectors && typeof registry.detectors === 'object' ? registry.detectors : {};
+    const detectorRows = Object.entries(detectors).map(([name, value]: [string, any]) => ({
+      name,
+      model: asString(value?.model),
+      runtime: asString(value?.runtime ?? selectedProfile?.runtime),
+      requestedPrecision: asString(value?.requested_precision),
+      activePrecision: asString(value?.active_precision),
+      inputSizes: Array.isArray(value?.available_input_sizes) ? value.available_input_sizes : [],
+      selectedInputSize: asNullableNumber(value?.last_selected_input_size),
+      poolBusyDrops: asNumber(value?.pool_busy_drops),
+      inferenceThreads: asNullableNumber(value?.inference_threads),
+      workers: asNullableNumber(value?.infer_workers),
+      classes: Array.isArray(value?.active_class_ids) ? value.active_class_ids : selectedProfile?.class_ids ?? [],
+      loadedModelPath: asString(value?.loaded_model_path),
+      openvinoDevice: asString(value?.openvino_device),
+      performanceHint: asString(value?.openvino_performance_hint),
+    }));
+    return {
+      mode,
+      profile: {
+        model: selectedProfile?.model ?? (mode === 'motion' ? 'motion' : null),
+        runtime: selectedProfile?.runtime ?? null,
+        precision: selectedProfile?.precision ?? null,
+        analysisWidth: selectedProfile?.analysis_width ?? null,
+        analysisHeight: selectedProfile?.analysis_height ?? null,
+        imgsz: selectedProfile?.imgsz ?? selectedProfile?.detector_size ?? null,
+        detectionFps: selectedProfile?.detection_fps ?? null,
+        classes: Array.isArray(selectedProfile?.classes) ? selectedProfile.classes : [],
+        classIds: Array.isArray(selectedProfile?.class_ids) ? selectedProfile.class_ids : [],
+        tracker: selectedProfile?.tracker ?? null,
+        overlayMode: selectedProfile?.overlay_mode ?? null,
+        overlayTtlMs: selectedProfile?.overlay_ttl_ms ?? null,
+        lostTtlMs: selectedProfile?.lost_ttl_ms ?? null,
+      },
+      registry: {
+        status: registry?.status ?? null,
+        lastError: registry?.lastError ?? null,
+        detectors: detectorRows,
+      },
+      threading: health?.inference_threading ?? null,
+    };
+  }
+
+  private runtimePolicy() {
+    return {
+      autoStart: String(process.env.AI_AUTO_START_ENABLED ?? 'true') !== 'false',
+      forceSingleCamera: ['1', 'true', 'yes', 'on'].includes(String(process.env.AI_FORCE_SINGLE_CAMERA ?? 'false').toLowerCase()),
+      singleCameraId: asString(process.env.AI_SINGLE_CAMERA_ID),
+      enabledCameraIds: parseCsvEnv(process.env.AI_ENABLED_CAMERA_IDS),
+      activeCameraIds: parseCsvEnv(process.env.AI_ACTIVE_CAMERA_IDS),
+      analyticsCameraIds: parseCsvEnv(process.env.AI_ANALYTICS_CAMERA_IDS),
+      rtspStreamProfile: asString(process.env.AI_RTSP_STREAM_PROFILE) ?? 'analytics',
+      rtspSubtype: asString(process.env.AI_RTSP_SUBTYPE) ?? 'auto',
+      analyticsSource: asString(process.env.AI_ANALYTICS_SOURCE) ?? 'direct_camera',
+      latestFrameOnly: String(process.env.AI_LATEST_FRAME_ONLY ?? 'true') !== 'false',
+      hevcFallbackEnabled: String(process.env.AI_ANALYTICS_HEVC_FALLBACK ?? 'true').toLowerCase() !== 'false',
+      cpuReservePercent: asNullableNumber(process.env.AI_CPU_RESERVE_PERCENT),
+      inferenceThreadsOverride: asNullableNumber(process.env.AI_INFERENCE_THREADS_OVERRIDE),
+      inferenceWorkerCount: asNullableNumber(process.env.AI_INFERENCE_WORKER_COUNT),
+      frontendOverlayMaxAgeMs: asNullableNumber(process.env.FRONTEND_OVERLAY_MAX_AGE_MS),
+    };
+  }
+
+  private modeLabel(mode: string) {
+    if (mode === 'general') return 'Pessoa e veículos';
+    if (mode === 'face') return 'Rosto';
+    return 'Movimento';
   }
 
   private async buildAiSource(cam: any): Promise<{ rtspUrl: string; info: Record<string, unknown> }> {

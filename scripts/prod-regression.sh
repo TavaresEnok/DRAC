@@ -176,6 +176,14 @@ check_central() {
   else
     warn "Central nao respondeu /api/health"
   fi
+  if curl -fsS --max-time 10 \
+    -H "X-DRAC-Installation-Id: ${CLOUD_INSTALLATION_ID:-}" \
+    -H "X-DRAC-License-Key: ${CLOUD_LICENSE_KEY:-}" \
+    "${CLOUD_API_URL%/}/api/agent/status" >/dev/null 2>&1; then
+    ok "Central confirmou identidade e licença da instalação"
+  else
+    fail "Central nao confirmou identidade/licenca em /api/agent/status"
+  fi
 }
 
 run_restore_check() {
@@ -206,11 +214,19 @@ main() {
   check_central
 
   if [ -x "$ROOT_DIR/scripts/production-readiness.sh" ]; then
-    if "$ROOT_DIR/scripts/production-readiness.sh"; then
-      ok "Readiness completo aprovado"
-    else
-      fail "Readiness completo falhou"
-    fi
+    "$ROOT_DIR/scripts/production-readiness.sh"
+    readiness_status=$?
+    case "$readiness_status" in
+      0)
+        ok "Readiness completo aprovado"
+        ;;
+      1)
+        warn "Readiness completo aprovado com itens em atencao"
+        ;;
+      *)
+        fail "Readiness completo encontrou bloqueios"
+        ;;
+    esac
   fi
 
   run_restore_check

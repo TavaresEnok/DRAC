@@ -287,7 +287,7 @@
             <div class="metric-card"><label>Com comunicação</label><strong id="m-online">0</strong><span>últimos minutos</span></div>
             <div class="metric-card"><label>Exigem atenção</label><strong id="m-attention">0</strong><span>operação ou contrato</span></div>
             <div class="metric-card"><label>Câmeras ativas</label><strong id="m-cameras">0</strong><span id="m-cameras-sub">total da frota</span></div>
-            <div class="metric-card"><label>Alarmes abertos</label><strong id="m-alarms">0</strong><span>reportados pelos servidores</span></div>
+            <div class="metric-card"><label>Alertas operacionais</label><strong id="m-alarms">0</strong><span>alarmes e streaming</span></div>
             <div class="metric-card"><label>Maior uso de disco</label><strong id="m-disk">-%</strong><span>entre todos os clientes</span></div>
           </div>
           <section class="panel" style="margin-bottom:16px">
@@ -431,12 +431,12 @@
                   <div class="deploy-steps">
                     <div class="deploy-step done"><div class="deploy-dot">1</div><div><strong>Gerar cliente</strong><span>A Central cria licença e comando único.</span></div></div>
                     <div class="deploy-step current"><div class="deploy-dot">2</div><div><strong>Executar comando</strong><span>Rodar no servidor Linux do cliente. O instalador configura dependências, Docker, `.env`, containers e migrações.</span></div></div>
-                    <div class="deploy-step pending"><div class="deploy-dot">3</div><div><strong>Aguardar sinal</strong><span>A instalação aparece como conectada após o primeiro heartbeat.</span></div></div>
+                    <div class="deploy-step pending"><div class="deploy-dot">3</div><div><strong>Confirmação automática</strong><span>O instalador registra e confirma o servidor na Central antes de concluir.</span></div></div>
                   </div>
                   <div class="kv" style="margin-top:14px">
                     <div>Painel local</div><div id="install-local-url">-</div>
                     <div>Central</div><div id="install-central-url">-</div>
-                    <div>Tempo para aparecer</div><div>até 90s</div>
+                    <div>Tempo para aparecer</div><div>durante a instalação</div>
                   </div>
                 </div>
               </div>
@@ -601,6 +601,7 @@
         'auth.login_blocked': 'Login bloqueado',
         'auth.logout': 'Saída do painel',
         'agent.heartbeat_denied': 'Heartbeat recusado',
+        'agent.status_denied': 'Consulta do agente recusada',
         'installation.license_changed': 'Contrato alterado',
         'installation.provision_created': 'Instalação gerada',
         'installation.provision_regenerated': 'Instalação regerada',
@@ -799,7 +800,7 @@
           ${renderTrendCard(item, 'cameraOnline', 'Câmeras online')}
           ${renderTrendCard(item, 'diskUsagePercent', 'Uso de disco', '%', 100)}
           ${renderTrendCard(item, 'memoryUsagePercent', 'Memória do servidor', '%', 100)}
-          ${renderTrendCard(item, 'openAlarms', 'Alarmes abertos')}
+          ${renderTrendCard(item, 'streamLiveFailuresLast24h', 'Falhas de live')}
         </div>`;
       }
       function fleetSeries(items, key, mode = 'sum') {
@@ -846,8 +847,8 @@
         document.querySelector('#fleet-trends').innerHTML = `<div class="trend-grid">
           ${renderSeriesCard('Câmeras online', fleetSeries(items, 'cameraOnline'))}
           ${renderSeriesCard('Maior disco', fleetSeries(items, 'diskUsagePercent', 'max'), '%', 100)}
-          ${renderSeriesCard('Maior memória', fleetSeries(items, 'memoryUsagePercent', 'max'), '%', 100)}
-          ${renderSeriesCard('Alarmes abertos', fleetSeries(items, 'openAlarms'))}
+          ${renderSeriesCard('Risco streaming', fleetSeries(items, 'streamHighCpuRiskCameras'))}
+          ${renderSeriesCard('Falhas de live', fleetSeries(items, 'streamLiveFailuresLast24h'))}
         </div>`;
       }
       function renderResources(status, item = null) {
@@ -864,17 +865,19 @@
         const camTotal = totals?.cameraTotal ?? state.installations.reduce((sum, i) => sum + number(metric(i, 'cameraTotal', 0)), 0);
         const alarms = totals?.openAlarms ?? state.installations.reduce((sum, i) => sum + number(metric(i, 'openAlarms', 0)), 0);
         const maxDisk = totals?.maxDiskUsagePercent ?? state.installations.reduce((max, i) => Math.max(max, number(metric(i, 'diskUsagePercent', 0))), 0);
+        const streamRisk = totals?.streamHighCpuRiskCameras ?? state.installations.reduce((sum, i) => sum + number(metric(i, 'streamHighCpuRiskCameras', 0)), 0);
+        const recordingAttention = totals?.recordingAttentionCameras ?? state.installations.reduce((sum, i) => sum + number(metric(i, 'recordingAttentionCameras', 0)), 0);
         document.querySelector('#m-total').textContent = fmt.format(totals?.installations ?? state.installations.length);
         document.querySelector('#m-total-sub').textContent = `${fmt.format(items.length)} no filtro atual`;
         document.querySelector('#m-online').textContent = fmt.format(online);
         document.querySelector('#m-attention').textContent = fmt.format(attention);
         document.querySelector('#m-cameras').textContent = fmt.format(camOnline);
         document.querySelector('#m-cameras-sub').textContent = `${fmt.format(camTotal)} cadastradas`;
-        document.querySelector('#m-alarms').textContent = fmt.format(alarms);
+        document.querySelector('#m-alarms').textContent = fmt.format(alarms + streamRisk + recordingAttention);
         document.querySelector('#m-disk').textContent = state.installations.length ? `${maxDisk}%` : '-%';
         document.querySelector('#list-summary').textContent = `${fmt.format(items.length)} cliente(s) exibido(s)`;
         const fleet = document.querySelector('#fleet-status');
-        fleet.textContent = attention ? `${attention} em atenção` : 'Frota estável';
+        fleet.textContent = attention || streamRisk || recordingAttention ? `${attention + (streamRisk ? 1 : 0) + (recordingAttention ? 1 : 0)} em atenção` : 'Frota estável';
         fleet.className = `badge ${attention ? 'warn' : 'ok'}`;
       }
       function renderRows(items) {
@@ -927,7 +930,7 @@
               <div class="quick-stat"><label>Câmeras</label><strong>${metric(item, 'cameraOnline', 0)}/${metric(item, 'cameraTotal', 0)}</strong></div>
               <div class="quick-stat"><label>Produção</label><strong>${readinessLabel(item)}</strong></div>
               <div class="quick-stat"><label>Disco</label><strong>${metric(item, 'diskUsagePercent', '-')}%</strong></div>
-              <div class="quick-stat"><label>Alarmes</label><strong>${fmt.format(number(metric(item, 'openAlarms', 0)))}</strong></div>
+              <div class="quick-stat"><label>Streaming</label><strong>${fmt.format(number(metric(item, 'streamHighCpuRiskCameras', 0)))}</strong></div>
             </div>
             <div class="section">
               <div class="section-title">Estado operacional</div>
@@ -938,6 +941,11 @@
                 <div>Contrato</div><div>${contractLabels[item.licenseStatus] || 'Regular'}</div>
                 <div>Gravações</div><div>${fmt.format(number(metric(item, 'recordingCount', 0)))} segmentos</div>
                 <div>Gravação ativa</div><div>${fmt.format(number(metric(item, 'activeRecordingCount', 0)))}</div>
+                <div>Live com transcode</div><div>${fmt.format(number(metric(item, 'streamLiveTranscodeLikely', 0)))}</div>
+                <div>Falhas de live 24h</div><div>${fmt.format(number(metric(item, 'streamLiveFailuresLast24h', 0)))}</div>
+                <div>Câmeras com gravação em atenção</div><div>${fmt.format(number(metric(item, 'recordingAttentionCameras', 0)))}</div>
+                <div>Gap gravação 24h</div><div>${fmt.format(Math.round(number(metric(item, 'recordingGapSecondsLast24h', 0)) / 60))} min</div>
+                <div>Ajustes seguros</div><div>${fmt.format(number(metric(item, 'streamOptimizationSafeActions', 0)))}</div>
               </div>
             </div>
             <div class="section">
@@ -1052,6 +1060,12 @@
           if (number(metric(item, 'diskUsagePercent', 0)) >= 85) alerts.push({ title: 'Armazenamento alto', message: `${metric(item, 'diskUsagePercent', 0)}% de uso em ${item.customerName || item.id}.`, item, tone: 'warn' });
           const camIssue = number(metric(item, 'cameraOffline', 0)) + number(metric(item, 'cameraError', 0));
           if (camIssue) alerts.push({ title: 'Câmeras em atenção', message: `${camIssue} câmera(s) com falha em ${item.customerName || item.id}.`, item, tone: 'warn' });
+          const streamRisk = number(metric(item, 'streamHighCpuRiskCameras', 0));
+          if (streamRisk) alerts.push({ title: 'Streaming em atenção', message: `${streamRisk} câmera(s) com risco alto de CPU/live em ${item.customerName || item.id}.`, item, tone: streamRisk >= 3 ? 'bad' : 'warn' });
+          const liveFailures = number(metric(item, 'streamLiveFailuresLast24h', 0));
+          if (liveFailures) alerts.push({ title: 'Falhas recentes de live', message: `${liveFailures} falha(s) de live nas últimas 24h em ${item.customerName || item.id}.`, item, tone: liveFailures >= 10 ? 'bad' : 'warn' });
+          const recordingAttention = number(metric(item, 'recordingAttentionCameras', 0));
+          if (recordingAttention) alerts.push({ title: 'Gravação em atenção', message: `${recordingAttention} câmera(s) com gap ou segmento ausente em ${item.customerName || item.id}.`, item, tone: 'warn' });
           for (const alert of item.alerts || []) alerts.push({ title: alertTitle(alert), message: alertMessage(alert), item, tone: alert.level === 'critical' ? 'bad' : 'warn' });
         }
         return alerts;

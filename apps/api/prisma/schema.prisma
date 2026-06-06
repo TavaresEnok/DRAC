@@ -97,6 +97,7 @@ model Camera {
   recordingBitrateKbps   Int?
   audioEnabled           Boolean      @default(false)
   aiEnabled              Boolean      @default(true)
+  alarmsEnabled          Boolean      @default(true)
   hasEdgeAi              Boolean      @default(false)
   motionTrigger          String       @default("SYSTEM")
   detectedVideoCodec     String?

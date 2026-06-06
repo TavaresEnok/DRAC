@@ -35,7 +35,6 @@ type AccessPermission = {
 
 const roleColor = (r: string) => {
   if (r === 'admin') return 'bg-[hsl(var(--primary)_/_0.12)] text-[hsl(var(--primary))] border-[hsl(var(--primary)_/_0.25)]';
-  if (r === 'supervisor') return 'bg-slate-500/15 text-slate-300 border-slate-500/30';
   if (r === 'operator') return 'bg-slate-500/10 text-slate-400 border-slate-500/25';
   return 'bg-orange-500/15 text-orange-400 border-orange-500/30';
 };
@@ -56,7 +55,6 @@ const roleOptions: Array<{ value: ApiUserRole; label: string }> = [
 const visibleRoleLabel = (role: string) => {
   if (role === 'admin') return 'Administrador';
   if (role === 'operator') return 'Operador';
-  if (role === 'supervisor') return 'Supervisor';
   return 'Visualizador';
 };
 
@@ -98,12 +96,12 @@ export default function UsuariosPage() {
 
   const availableRoleOptions = canManageGlobalAccess ? roleOptions : roleOptions.filter((option) => option.value !== 'ADMIN');
 
-  const filtered = userList.filter(u =>
+  const filtered = useMemo(() => userList.filter(u =>
     !search || u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase())
-  );
+  ), [userList, search]);
 
-  const selectedGroup = groups.find((group) => group.id === selectedGroupId) ?? groups[0] ?? null;
-  const selectedUser = userList.find((user) => user.id === selectedUserId) ?? userList[0] ?? null;
+  const selectedGroup = useMemo(() => groups.find((group) => group.id === selectedGroupId) ?? groups[0] ?? null, [groups, selectedGroupId]);
+  const selectedUser = useMemo(() => userList.find((user) => user.id === selectedUserId) ?? userList[0] ?? null, [userList, selectedUserId]);
 
   const permissionsByUser = useMemo(() => {
     const map = new Map<string, AccessPermission[]>();
@@ -217,6 +215,27 @@ export default function UsuariosPage() {
     }
   };
 
+  const setGroupAlarms = async (enabled: boolean) => {
+    if (!selectedGroup) return;
+    setAccessLoading(true);
+    try {
+      const { data } = await apiClient().post(`/camera-groups/${selectedGroup.id}/alarms`, { enabled });
+      await loadData();
+      toast({
+        title: enabled ? 'Alarmes ligados no grupo' : 'Alarmes desligados no grupo',
+        description: `${data?.affected ?? 0} câmera(s) de ${selectedGroup.name} atualizada(s).`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Falha ao atualizar alarmes do grupo',
+        description: error instanceof Error ? error.message : 'Não foi possível atualizar os alarmes.',
+        variant: 'destructive',
+      });
+    } finally {
+      setAccessLoading(false);
+    }
+  };
+
   const grantGroupAccess = async () => {
     const userId = selectedUser?.id;
     const groupId = selectedGroup?.id;
@@ -268,10 +287,14 @@ export default function UsuariosPage() {
     setUserSaving(true);
     try {
       if (editUser) {
+        // O frontend só representa 3 papéis; SUPER_ADMIN e ADMIN aparecem como 'admin'.
+        // Só envia `role` se o editor realmente mudou o campo, para não rebaixar um
+        // SUPER_ADMIN para ADMIN sem querer ao salvar outras alterações.
+        const mappedOriginalRole: ApiUserRole = editUser.role === 'admin' ? 'ADMIN' : editUser.role === 'operator' ? 'OPERATOR' : 'VIEWER';
         await apiClient().patch(`/users/${editUser.id}`, {
           name,
           email,
-          role: userForm.role,
+          ...(userForm.role !== mappedOriginalRole ? { role: userForm.role } : {}),
           isActive: userForm.isActive,
           ...(userForm.password ? { password: userForm.password } : {}),
         });
@@ -303,10 +326,13 @@ export default function UsuariosPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-6 py-3">
-        <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-6 pt-5 pb-4">
+        <div className="flex items-center gap-2.5">
           <Users className="h-4 w-4 text-primary" />
-          <h1 className="text-lg font-semibold">Usuários e acessos</h1>
+          <div>
+            <h1 className="text-[18px] font-semibold tracking-tight">Usuários e acessos</h1>
+            <p className="text-[11px] text-muted-foreground mt-0.5">Perfis definem ações · grupos definem quais câmeras cada pessoa vê</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <input
@@ -481,6 +507,26 @@ export default function UsuariosPage() {
                 </div>
               </div>
 
+              {selectedGroup && (
+                <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-background/55 px-3 py-2">
+                  <span className="text-[11px] text-muted-foreground">Alarmes deste grupo:</span>
+                  <button
+                    onClick={() => void setGroupAlarms(true)}
+                    disabled={accessLoading}
+                    className="rounded border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50"
+                  >
+                    Ligar
+                  </button>
+                  <button
+                    onClick={() => void setGroupAlarms(false)}
+                    disabled={accessLoading}
+                    className="rounded border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-50"
+                  >
+                    Desligar
+                  </button>
+                </div>
+              )}
+
               <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
                 {cameras.map((camera) => {
                   const checked = groupCameraIds.has(camera.id);
@@ -607,7 +653,7 @@ export default function UsuariosPage() {
                 type="password"
                 value={userForm.password}
                 onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
-                placeholder={editUser ? 'Deixe em branco para manter' : 'Mínimo 10, maiúscula, número e símbolo'}
+                placeholder={editUser ? 'Deixe em branco para manter' : 'Mínimo 12, com maiúscula, minúscula e número'}
                 className="h-8 w-full rounded border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </div>

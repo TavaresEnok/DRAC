@@ -32,6 +32,15 @@ git -C "$ROOT_DIR" status --short > "$WORK_DIR/git-status.txt" 2>&1 || true
 
 if [ -f "$ENV_FILE" ]; then
   sanitize_env < "$ENV_FILE" > "$WORK_DIR/env.sanitized"
+  central_url="$(sed -n 's/^CLOUD_API_URL=//p' "$ENV_FILE" | tail -n 1 | tr -d '\r' | sed -E 's/^["'\"']|["'\"']$//g')"
+  installation_id="$(sed -n 's/^CLOUD_INSTALLATION_ID=//p' "$ENV_FILE" | tail -n 1 | tr -d '\r' | sed -E 's/^["'\"']|["'\"']$//g')"
+  license_key="$(sed -n 's/^CLOUD_LICENSE_KEY=//p' "$ENV_FILE" | tail -n 1 | tr -d '\r' | sed -E 's/^["'\"']|["'\"']$//g')"
+  if [ -n "$central_url" ] && [ -n "$installation_id" ] && [ -n "$license_key" ]; then
+    curl -fsS --max-time 10 \
+      -H "X-DRAC-Installation-Id: $installation_id" \
+      -H "X-DRAC-License-Key: $license_key" \
+      "${central_url%/}/api/agent/status" > "$WORK_DIR/central-agent-status.json" 2>&1 || true
+  fi
 fi
 
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' > "$WORK_DIR/docker-ps.txt" 2>&1 || true

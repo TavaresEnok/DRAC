@@ -58,6 +58,21 @@ export class CameraGroupsController {
 
   @Roles(UserRole.ADMIN)
   @RequirePermission('cameraConfig')
+  @Post(':id/alarms')
+  async setAlarms(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() body: { enabled?: boolean },
+    @Req() req: Request,
+  ) {
+    const enabled = body?.enabled !== false;
+    const result = await this.cameraGroupsService.setAlarmsForGroup(id, enabled);
+    await this.auditService.log(user.id, 'camera_group.alarms_set', 'CameraGroup', id, { enabled, affected: result.affected }, req);
+    return result;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
   @Post(':id/cameras/:cameraId')
   async addCamera(@CurrentUser() user: AuthUser, @Param('id') id: string, @Param('cameraId') cameraId: string, @Req() req: Request) {
     const group = await this.cameraGroupsService.addCamera(id, cameraId);

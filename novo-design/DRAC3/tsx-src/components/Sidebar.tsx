@@ -1,0 +1,203 @@
+import { Link, useLocation } from 'wouter';
+import { motion } from 'framer-motion';
+import {
+  Monitor, PlaySquare,
+  Camera, Settings,
+  ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
+  Server, Users, Radar, Brain, Bell, Activity,
+  HardDrive, FolderKey, ShieldCheck, FileText, ClipboardList,
+  Crosshair, Archive, Gauge,
+} from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { useSidebarStore } from '../store/sidebarStore';
+import { useAuthStore } from '../store/authStore';
+
+const NAV_SECTIONS = [
+  {
+    label: 'Monitoramento',
+    icon: Radar,
+    items: [
+      { path: '/live',      label: 'Ao Vivo',       icon: Monitor },
+      { path: '/playback',  label: 'Reprodução',    icon: PlaySquare },
+      { path: '/events',    label: 'Eventos',       icon: Activity },
+      { path: '/alarms',    label: 'Alertas',       icon: Bell },
+      { path: '/ai',        label: 'IA',            icon: Brain },
+      { path: '/ptz',       label: 'Controle PTZ',  icon: Crosshair },
+    ],
+  },
+  {
+    label: 'Infraestrutura',
+    icon: Server,
+    items: [
+      { path: '/cameras',   label: 'Câmeras',           icon: Camera },
+      { path: '/storage',   label: 'Armazenamento',     icon: HardDrive },
+      { path: '/performance',label: 'Desempenho',       icon: Gauge },
+    ],
+  },
+  {
+    label: 'Administração',
+    icon: Users,
+    items: [
+      { path: '/users',     label: 'Usuários',          icon: Users,         roles: ['admin', 'operator'] },
+      { path: '/groups',    label: 'Grupos',            icon: FolderKey,     roles: ['admin', 'supervisor'] },
+      { path: '/roles',     label: 'Funções',           icon: ShieldCheck,   roles: ['admin'] },
+      { path: '/audit',     label: 'Auditoria',         icon: ClipboardList, roles: ['admin', 'supervisor'] },
+      { path: '/reports',   label: 'Relatórios',        icon: FileText,      roles: ['admin', 'supervisor'] },
+      { path: '/evidence',  label: 'Evidências',        icon: Archive,       roles: ['admin', 'supervisor', 'operator'] },
+      { path: '/settings',  label: 'Configurações',     icon: Settings,      roles: ['admin'] },
+    ],
+  },
+];
+
+const ROLE_COLOR: Record<string, string> = {
+  admin:      'text-[hsl(var(--primary))]',
+  supervisor: 'text-[hsl(var(--chart-2))]',
+  operator:   'text-[hsl(var(--muted-foreground))]',
+};
+
+export function Sidebar({ onAtalhosOpen }: { onAtalhosOpen?: () => void }) {
+  const { isExpanded, toggle } = useSidebarStore();
+  const { user, logout } = useAuthStore();
+  const [location] = useLocation();
+
+  const roleColor = ROLE_COLOR[user?.role ?? 'operator'] ?? ROLE_COLOR.operator;
+
+  const visibleSections = NAV_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) =>
+      !('roles' in item) || (item.roles as string[]).includes(user?.role ?? 'operator')
+    ),
+  })).filter((section) => section.items.length > 0);
+
+  return (
+    <motion.aside
+      animate={{ width: isExpanded ? 240 : 56 }}
+      transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+      className="sidebar-shell relative flex flex-col h-full overflow-hidden shrink-0"
+      style={{ minWidth: isExpanded ? 240 : 56 }}
+    >
+      {/* ── Brand header ── */}
+      <div className="sidebar-brand flex items-center h-14 px-3 shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          <div className="sidebar-mark shrink-0 w-8 h-8 rounded-xl flex items-center justify-center">
+            <Shield className="w-3.5 h-3.5 text-[hsl(var(--primary))]" />
+          </div>
+          {isExpanded && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.08 }}
+              className="min-w-0"
+            >
+              <div className="text-[13px] font-semibold text-sidebar-foreground leading-tight tracking-tight">DRAC</div>
+              <div className="text-[10px] text-[hsl(var(--muted-foreground))]">VMS</div>
+            </motion.div>
+          )}
+        </div>
+        <button
+          onClick={toggle}
+          className="sidebar-toggle shrink-0 w-7 h-7 flex items-center justify-center rounded-xl transition-colors"
+          data-testid="button-sidebar-toggle"
+        >
+          {isExpanded ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+
+      {/* ── Navigation ── */}
+      <nav className="flex-1 overflow-y-auto px-2 py-4 space-y-5">
+        {visibleSections.map((section) => (
+          <div key={section.label} className="space-y-1.5">
+            {isExpanded && (
+              <div className="flex items-center gap-2 px-3 pt-1 text-[9px] font-mono uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground)_/_0.7)]">
+                <section.icon className="w-3 h-3" />
+                <span>{section.label}</span>
+              </div>
+            )}
+            <div className="space-y-0.5">
+              {section.items.map(({ path, label, icon: Icon }) => {
+                const isActive = location === path || (path !== '/live' && location.startsWith(path));
+                return isExpanded ? (
+                  <Link key={path} href={path}>
+                    <div
+                      data-testid={`nav-${label.toLowerCase().replace(/[^a-z]/g, '-')}`}
+                      className={`sidebar-item relative flex items-center gap-3 h-9 px-3 rounded-lg cursor-pointer transition-colors duration-150
+                        ${isActive
+                          ? 'sidebar-item-active bg-[hsl(var(--sidebar-accent))] text-sidebar-accent-foreground'
+                          : 'text-[hsl(var(--sidebar-foreground)_/_0.65)] hover:bg-[hsl(var(--sidebar-accent)_/_0.6)] hover:text-sidebar-foreground'
+                        }`}
+                    >
+                      {isActive && (
+                        <span className="absolute left-0 inset-y-2 w-0.5 rounded-full bg-[hsl(var(--sidebar-primary))]" />
+                      )}
+                      <Icon className="w-3.5 h-3.5 shrink-0" />
+                      <span className="text-[12px] font-medium flex-1 truncate">{label}</span>
+                    </div>
+                  </Link>
+                ) : (
+                  <Tooltip key={path} delayDuration={0}>
+                    <TooltipTrigger asChild>
+                      <Link href={path}>
+                        <div
+                          className={`relative flex items-center justify-center h-9 w-10 rounded-lg cursor-pointer transition-colors duration-150 mx-auto
+                            ${isActive
+                              ? 'bg-[hsl(var(--sidebar-accent))] text-sidebar-accent-foreground'
+                              : 'text-[hsl(var(--sidebar-foreground)_/_0.65)] hover:bg-[hsl(var(--sidebar-accent)_/_0.6)] hover:text-sidebar-foreground'
+                            }`}
+                        >
+                          {isActive && (
+                            <span className="absolute left-0 inset-y-2.5 w-0.5 rounded-full bg-[hsl(var(--sidebar-primary))]" />
+                          )}
+                          <Icon className="w-3.5 h-3.5 shrink-0" />
+                        </div>
+                      </Link>
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="text-xs">{label}</TooltipContent>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </nav>
+
+      {/* ── Bottom controls ── */}
+      <div className="sidebar-footer px-2 py-2 shrink-0 space-y-1">
+        {isExpanded && (
+          <button
+            onClick={onAtalhosOpen}
+            className="sidebar-footer-btn w-full flex items-center gap-3 h-9 px-3 rounded-xl text-[hsl(var(--sidebar-foreground)_/_0.55)] hover:text-sidebar-foreground transition-colors"
+          >
+            <Keyboard className="w-3.5 h-3.5 shrink-0" />
+            <span className="text-[12px]">Atalhos</span>
+            <span className="ml-auto font-mono text-[9px] text-[hsl(var(--muted-foreground)_/_0.6)] bg-[hsl(var(--sidebar-border)_/_0.8)] px-1.5 py-0.5 rounded-md">?</span>
+          </button>
+        )}
+
+        {user && (
+          <div className={`sidebar-user flex items-center gap-2.5 h-11 px-2.5 rounded-lg ${isExpanded ? 'pr-2' : 'justify-center'}`}>
+            <div className="shrink-0 w-7 h-7 rounded-lg bg-[hsl(var(--primary)_/_0.12)] border border-[hsl(var(--primary)_/_0.18)] flex items-center justify-center">
+              <span className="text-[10px] font-bold text-[hsl(var(--primary))]">
+                {user.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}
+              </span>
+            </div>
+            {isExpanded && (
+              <div className="flex-1 min-w-0">
+                <div className="text-[12px] font-medium text-sidebar-foreground truncate leading-tight">{user.name}</div>
+                <div className={`text-[9px] font-mono capitalize tracking-[0.12em] ${roleColor}`}>{user.role}</div>
+              </div>
+            )}
+            {isExpanded && (
+              <button
+                onClick={logout}
+                className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-[hsl(var(--sidebar-foreground)_/_0.4)] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive)_/_0.08)] transition-colors"
+                data-testid="button-logout"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </motion.aside>
+  );
+}

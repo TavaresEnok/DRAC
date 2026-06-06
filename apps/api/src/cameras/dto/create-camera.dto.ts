@@ -176,6 +176,10 @@ export class CreateCameraDto {
 
   @IsOptional()
   @IsBoolean()
+  alarmsEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   hasEdgeAi?: boolean;
 
   @IsOptional()

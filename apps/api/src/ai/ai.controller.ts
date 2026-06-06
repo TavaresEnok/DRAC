@@ -48,6 +48,23 @@ export class AiController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @Get('intelligence')
+  async getIntelligence(@CurrentUser() user: AuthUser) {
+    const accessibleCameraIds = await this.accessControlService.getAccessibleCameraIds(user);
+    return this.aiManagerService.getIntelligenceOverview(accessibleCameraIds);
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Get('intelligence/cameras/:cameraId')
+  async getCameraIntelligence(
+    @CurrentUser() user: AuthUser,
+    @Param('cameraId') cameraId: string,
+  ) {
+    await this.accessControlService.assertCanViewCamera(user, cameraId);
+    return this.aiManagerService.getCameraIntelligence(cameraId);
+  }
+
+  @Roles(UserRole.OPERATOR)
   @Patch('settings')
   async updateSettings(@Body() body: UpdateAiSettingsBody) {
     return this.aiManagerService.updateSettings(body);
@@ -58,6 +75,14 @@ export class AiController {
   async sync() {
     await this.commercialPolicy.assertFeature('aiAdvanced');
     return this.aiManagerService.restartAll();
+  }
+
+  @Roles(UserRole.OPERATOR)
+  @Post('intelligence/cameras/:cameraId/restart')
+  async restartCamera(@CurrentUser() user: AuthUser, @Param('cameraId') cameraId: string) {
+    await this.accessControlService.assertCanRecordCamera(user, cameraId);
+    await this.commercialPolicy.assertFeature('aiAdvanced', user);
+    return this.aiManagerService.restartCamera(cameraId);
   }
 
   @Roles(UserRole.OPERATOR)
@@ -73,6 +98,32 @@ export class AiController {
   async stop(@CurrentUser() user: AuthUser, @Param('cameraId') cameraId: string) {
     await this.accessControlService.assertCanRecordCamera(user, cameraId);
     return this.aiService.stopAnalysis(cameraId);
+  }
+
+  // Overlay de IA em lote: a página Live envia todas as câmeras visíveis de uma vez,
+  // mantendo 1 requisição por ciclo de polling independentemente do tamanho da grade.
+  @Roles(UserRole.VIEWER)
+  @Throttle({ default: { limit: 600, ttl: 60000 } })
+  @Get('detections/latest-batch')
+  async latestDetectionsBatch(
+    @CurrentUser() user: AuthUser,
+    @Query('cameraIds') cameraIds?: string,
+    @Query('maxAgeMs') maxAgeMs?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const requestedIds = (cameraIds ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .slice(0, 64);
+    const accessibleIds = new Set(await this.accessControlService.getAccessibleCameraIds(user));
+    const allowedIds = [...new Set(requestedIds.filter((id) => accessibleIds.has(id)))];
+    const resolvedMaxAgeMs = Number.isFinite(Number(maxAgeMs)) ? Math.max(200, Math.min(30000, Number(maxAgeMs))) : 5000;
+    const resolvedLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.min(50, Number(limit))) : 12;
+    if (!allowedIds.length) {
+      return { cameras: {}, generatedAt: new Date().toISOString() };
+    }
+    return this.aiService.getLatestDetectionsBatch(allowedIds, resolvedMaxAgeMs, resolvedLimit);
   }
 
   @Roles(UserRole.VIEWER)

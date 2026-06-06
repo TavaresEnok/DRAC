@@ -85,7 +85,7 @@ export default function EventosPage() {
   return (
     <div className="h-full min-h-0 p-5">
       <div className="grid h-full min-h-0 grid-cols-1 xl:grid-cols-[390px_minmax(0,1fr)] gap-4">
-        <div className="flex min-h-0 flex-col rounded-2xl border border-card-border bg-card overflow-hidden">
+        <div className="flex min-h-0 flex-col rounded-2xl border border-border bg-card overflow-hidden">
           <div className="px-4 pt-4 pb-3 border-b border-border space-y-3">
             <div className="space-y-1">
               <h2 className="text-[14px] font-semibold tracking-tight">Eventos</h2>
@@ -225,7 +225,7 @@ export default function EventosPage() {
 
         <div className="flex min-h-0 flex-col gap-4">
           <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_0.9fr] gap-4 min-h-0 flex-1">
-            <div className="rounded-2xl border border-card-border bg-card overflow-hidden min-h-0 flex flex-col">
+            <div className="rounded-2xl border border-border bg-card overflow-hidden min-h-0 flex flex-col">
               <div className="px-4 py-3 border-b border-border flex items-start justify-between gap-3">
                 <div>
                   <h3 className="mt-1 text-[16px] font-semibold tracking-tight">{current ? EVENT_TYPE_LABELS[current.type] ?? current.type : 'Sem seleção'}</h3>
@@ -285,7 +285,7 @@ export default function EventosPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-card-border bg-card overflow-hidden min-h-0 flex flex-col">
+            <div className="rounded-2xl border border-border bg-card overflow-hidden min-h-0 flex flex-col">
               <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                 <div>
                   <div className="text-[10px] font-mono uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">Contexto da câmera</div>

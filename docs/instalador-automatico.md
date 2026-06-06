@@ -112,7 +112,7 @@ Depois que a API local sobe, ela envia heartbeat para:
 POST /api/agent/heartbeat
 ```
 
-A central cadastra a instalacao automaticamente no primeiro heartbeat. Nao e necessario abrir porta no cliente para a central entrar; a conexao sai do servidor do cliente para a central.
+A central cadastra a instalacao automaticamente no primeiro heartbeat. O instalador envia e confirma esse primeiro heartbeat imediatamente, sem esperar o ciclo periódico do conector. Nao e necessario abrir porta no cliente para a central entrar; a conexao sai do servidor do cliente para a central.
 
 ## Preflight Comercial
 
