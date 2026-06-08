@@ -22,6 +22,10 @@ export function getApiBaseUrl() {
       }
     }
 
+    if (!isLocalHost(hostname)) {
+      return '/api';
+    }
+
     return `${protocol}//${hostname}:3000`;
   }
 
