@@ -95,7 +95,6 @@ type AlarmApiItem = {
   isSnoozed?: boolean;
   snoozedUntil?: string | null;
   occurrenceCount?: number;
-  occurredAt?: string;
 };
 
 const API_URL = getApiBaseUrl();
@@ -220,10 +219,10 @@ function AlarmCard({ alarm, onAck, onResolve, onAddNote }: { alarm: Alarm; onAck
                       const at = typeof delivery?.at === 'string' ? delivery.at : '';
                       const attempt = typeof delivery?.attempt === 'number' ? delivery.attempt : null;
                       const tone = status === 'DELIVERED'
-                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                        ? 'border-[hsl(var(--status-online)_/_0.3)] bg-[hsl(var(--status-online)_/_0.1)] text-[hsl(var(--status-online))]'
                         : status === 'SKIPPED'
-                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                          : 'border-red-500/30 bg-red-500/10 text-red-300';
+                          ? 'border-[hsl(var(--status-warning)_/_0.3)] bg-[hsl(var(--status-warning)_/_0.1)] text-[hsl(var(--status-warning))]'
+                          : 'border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))]';
                       return (
                         <div key={`${channel}-${status}-${idx}`} className={`rounded border px-2 py-1 text-[10px] ${tone}`}>
                           <div className="flex items-center justify-between gap-2">

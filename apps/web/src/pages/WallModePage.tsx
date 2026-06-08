@@ -12,15 +12,15 @@ const layouts = [
 ];
 
 const statusDot = (s: string) => {
-  if (s === 'online' || s === 'recording' || s === 'motion') return 'bg-red-500 rec-pulse';
-  if (s === 'alarm') return 'bg-red-500 rec-pulse';
-  if (s === 'offline' || s === 'no_signal') return 'bg-slate-600';
-  return 'bg-amber-500';
+  if (s === 'online' || s === 'recording' || s === 'motion') return 'bg-[hsl(var(--destructive))] rec-pulse';
+  if (s === 'alarm') return 'bg-[hsl(var(--destructive))] rec-pulse';
+  if (s === 'offline' || s === 'no_signal') return 'bg-white/25';
+  return 'bg-[hsl(var(--status-warning))]';
 };
 
 const statusOverlay = (s: string) => {
-  if (s === 'offline' || s === 'no_signal') return { label: 'SEM SINAL', cls: 'bg-red-500/20 text-red-400 border-red-500/40' };
-  if (s === 'maintenance') return { label: 'MANUTENÇÃO', cls: 'bg-amber-500/20 text-amber-400 border-amber-500/40' };
+  if (s === 'offline' || s === 'no_signal') return { label: 'SEM SINAL', cls: 'bg-[hsl(var(--destructive)_/_0.2)] text-[hsl(var(--destructive))] border-[hsl(var(--destructive)_/_0.4)]' };
+  if (s === 'maintenance') return { label: 'MANUTENÇÃO', cls: 'bg-[hsl(var(--status-warning)_/_0.2)] text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning)_/_0.4)]' };
   return null;
 };
 
@@ -36,16 +36,16 @@ export default function WallModePage() {
   return (
     <div className="h-screen w-full bg-black flex flex-col overflow-hidden">
       {showBar && (
-        <div className="flex items-center justify-between px-4 py-1.5 bg-slate-950 border-b border-slate-800 z-20 flex-shrink-0">
+        <div className="flex items-center justify-between px-4 py-1.5 bg-black border-b border-white/10 z-20 flex-shrink-0">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setLocation('/live')}
-              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+              className="flex items-center gap-1.5 text-xs text-white/60 hover:text-white transition-colors"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               Sair do Modo Mural
             </button>
-            <span className="text-slate-700">|</span>
+            <span className="text-white/20">|</span>
             <div className="flex items-center gap-1">
               {layouts.map(l => (
                 <button
@@ -55,7 +55,7 @@ export default function WallModePage() {
                     'h-6 px-2 rounded text-[10px] font-mono border transition-colors',
                     layout.label === l.label
                       ? 'bg-primary text-primary-foreground border-primary'
-                      : 'border-slate-700 text-slate-400 hover:text-white hover:border-slate-500'
+                      : 'border-white/15 text-white/55 hover:text-white hover:border-white/35'
                   )}
                 >
                   {l.label}
@@ -66,16 +66,16 @@ export default function WallModePage() {
           <div className="flex items-center gap-4">
             {activeAlertas > 0 && (
               <div className="flex items-center gap-1.5 alarm-blink">
-                <Bell className="h-3.5 w-3.5 text-red-500" />
-                <span className="text-xs text-red-400">{activeAlertas} alerta{activeAlertas === 1 ? '' : 's'} ativo{activeAlertas === 1 ? '' : 's'}</span>
+                <Bell className="h-3.5 w-3.5 text-[hsl(var(--destructive))]" />
+                <span className="text-xs text-[hsl(var(--destructive))]">{activeAlertas} alerta{activeAlertas === 1 ? '' : 's'} ativo{activeAlertas === 1 ? '' : 's'}</span>
               </div>
             )}
-            <span className="text-xs font-mono text-slate-500">
+            <span className="text-xs font-mono text-white/40">
               {new Date().toISOString().replace('T', ' ').substring(0, 19)}
             </span>
             <button
               onClick={() => setShowBar(false)}
-              className="text-[10px] text-slate-600 hover:text-slate-400"
+              className="text-[10px] text-white/35 hover:text-white/70"
             >
               Ocultar
             </button>
@@ -86,7 +86,7 @@ export default function WallModePage() {
       {!showBar && (
         <button
           onClick={() => setShowBar(true)}
-          className="absolute top-2 left-1/2 -translate-x-1/2 z-30 h-5 px-4 rounded-full bg-slate-900/80 border border-slate-700 text-[10px] text-slate-500 hover:text-white hover:bg-slate-800/90 transition-colors"
+          className="absolute top-2 left-1/2 -translate-x-1/2 z-30 h-5 px-4 rounded-full bg-black/80 border border-white/15 text-[10px] text-white/45 hover:text-white hover:bg-black/90 transition-colors"
         >
           Mostrar controles
         </button>
@@ -99,10 +99,10 @@ export default function WallModePage() {
         {displayCams.map(cam => {
           const overlay = statusOverlay(cam.status);
           return (
-            <div key={cam.id} className="relative bg-slate-950 overflow-hidden group">
+            <div key={cam.id} className="relative bg-black overflow-hidden group">
               <div className="absolute inset-0 scan-line-overlay opacity-40" />
               <div className="absolute inset-0 flex items-center justify-center">
-                <Camera className="h-8 w-8 text-slate-800" />
+                <Camera className="h-8 w-8 text-white/10" />
               </div>
 
               <div className="absolute top-1.5 left-1.5 flex items-center gap-1.5 z-10">

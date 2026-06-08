@@ -5,13 +5,21 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useVmsDataStore, type Camera as VmsCamera } from '../store/vmsDataStore';
 
 const STATUS_COLORS: Record<string, string> = {
-  online: 'hsl(150,65%,42%)',
-  recording: 'hsl(0,72%,51%)',
-  motion: 'hsl(35,95%,55%)',
-  alarm: 'hsl(0,72%,51%)',
+  online: 'hsl(var(--status-online))',
+  recording: 'hsl(var(--destructive))',
+  motion: 'hsl(var(--status-warning))',
+  alarm: 'hsl(var(--destructive))',
   offline: 'hsl(var(--muted-foreground))',
   no_signal: 'hsl(var(--muted-foreground))',
-  maintenance: 'hsl(35,95%,55%)',
+  maintenance: 'hsl(var(--status-warning))',
+};
+
+const STATUS_FILTER_LABELS: Record<string, string> = {
+  all: 'Todos',
+  online: 'Online',
+  recording: 'Gravando',
+  alarm: 'Alarme',
+  offline: 'Offline',
 };
 
 type ZonaLayout = {
@@ -106,14 +114,14 @@ export default function MapPage() {
   const floorCameraCount = activeFloor?.zones.reduce((sum, zone) => sum + zone.cameras.length, 0) ?? 0;
 
   return (
-    <div className="flex h-full min-h-0 p-4 gap-4">
-      <div className="flex-1 flex flex-col gap-3 min-w-0 min-h-0">
-        <div className="flex items-center gap-1 shrink-0 flex-wrap">
+    <div className="flex h-full min-h-0 gap-4 p-6">
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {floors.map((floor) => (
             <button
               key={floor.id}
               onClick={() => setActiveFloorId(floor.id)}
-              className={`px-4 py-2 rounded text-xs font-medium transition-colors ${activeFloor?.id === floor.id ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'border border-border text-[hsl(var(--muted-foreground))] hover:text-foreground hover:bg-[hsl(var(--accent))]'}`}
+              className={`h-9 rounded-md px-4 text-xs font-medium transition-colors ${activeFloor?.id === floor.id ? 'bg-primary text-primary-foreground' : 'border border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground'}`}
             >
               {floor.name}
             </button>
@@ -123,32 +131,35 @@ export default function MapPage() {
               <button
                 key={status}
                 onClick={() => setStatusFilter(status)}
-                className={`px-2.5 py-1.5 rounded text-[10px] font-mono capitalize transition-colors ${statusFilter === status ? 'bg-[hsl(var(--accent))] text-foreground border border-border' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`}
+                className={`h-8 rounded-md px-2.5 text-[10px] font-mono transition-colors ${statusFilter === status ? 'border border-border bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground'}`}
               >
-                {status === 'all' ? 'todos' : status}
+                {STATUS_FILTER_LABELS[status] ?? status}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="flex-1 bg-card border border-border rounded-lg overflow-hidden relative min-h-0">
+        <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
           {!activeFloor ? (
             <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-              Nenhuma planta operacional disponivel.
+              Nenhuma planta operacional disponível. Cadastre uma imagem de planta para posicionar as câmeras sobre o desenho real do local.
             </div>
           ) : (
-            <svg viewBox="0 0 980 560" className="w-full h-full" style={{ background: 'hsl(210,16%,8%)' }}>
+            <svg viewBox="0 0 980 560" className="h-full w-full" style={{ background: 'hsl(var(--card))' }}>
               {Array.from({ length: 22 }, (_, i) => (
-                <line key={`h-${i}`} x1="0" y1={i * 26} x2="980" y2={i * 26} stroke="hsl(210,12%,14%)" strokeWidth="1" />
+                <line key={`h-${i}`} x1="0" y1={i * 26} x2="980" y2={i * 26} stroke="hsl(var(--border))" strokeWidth="1" opacity="0.45" />
               ))}
               {Array.from({ length: 38 }, (_, i) => (
-                <line key={`v-${i}`} x1={i * 26} y1="0" x2={i * 26} y2="560" stroke="hsl(210,12%,14%)" strokeWidth="1" />
+                <line key={`v-${i}`} x1={i * 26} y1="0" x2={i * 26} y2="560" stroke="hsl(var(--border))" strokeWidth="1" opacity="0.45" />
               ))}
 
-              <rect x="24" y="24" width="932" height="512" rx="10" fill="none" stroke="hsl(210,12%,18%)" strokeWidth="1.5" />
-              <text x="48" y="54" fill="hsl(210,12%,68%)" fontSize="16" fontWeight="600">{activeFloor.name}</text>
-              <text x="48" y="76" fill="hsl(210,10%,50%)" fontSize="10" fontFamily="'JetBrains Mono', monospace">
+              <rect x="24" y="24" width="932" height="512" rx="8" fill="none" stroke="hsl(var(--border))" strokeWidth="1.5" />
+              <text x="48" y="54" fill="hsl(var(--foreground))" fontSize="16" fontWeight="600">{activeFloor.name}</text>
+              <text x="48" y="76" fill="hsl(var(--muted-foreground))" fontSize="10" fontFamily="'JetBrains Mono', monospace">
                 {floorZonaCount} zonas · {floorCameraCount} câmeras mapeadas
+              </text>
+              <text x="48" y="96" fill="hsl(var(--muted-foreground))" fontSize="10" fontFamily="'Plus Jakarta Sans', sans-serif">
+                Planta real ainda não configurada; exibindo mapa esquemático gerado pelas zonas.
               </text>
 
               {activeFloor.zones.map((zone) => (
@@ -159,16 +170,16 @@ export default function MapPage() {
                     width={zone.w}
                     height={zone.h}
                     rx="8"
-                    fill="hsl(210,14%,10%)"
-                    stroke="hsl(210,12%,22%)"
+                    fill="hsl(var(--background))"
+                    stroke="hsl(var(--border))"
                     strokeWidth="1.2"
                   />
                   <text
                     x={zone.x + 16}
                     y={zone.y + 18}
-                    fill="hsl(210,12%,70%)"
+                    fill="hsl(var(--foreground))"
                     fontSize="10"
-                    fontFamily="'Inter', sans-serif"
+                    fontFamily="'Plus Jakarta Sans', sans-serif"
                     fontWeight="600"
                   >
                     {zone.label}
@@ -177,7 +188,8 @@ export default function MapPage() {
                     x={zone.x + zone.w - 16}
                     y={zone.y + 18}
                     textAnchor="end"
-                    fill="hsl(185,90%,50%,0.65)"
+                    fill="hsl(var(--primary))"
+                    opacity="0.8"
                     fontSize="9"
                     fontFamily="'JetBrains Mono', monospace"
                   >
@@ -197,7 +209,7 @@ export default function MapPage() {
                           onClick={() => setSelectedCamera((current) => current?.id === camera.id ? null : camera)}
                           style={{ cursor: 'pointer' }}
                         >
-                          <circle r={selected ? 9 : 7} fill="hsl(210,16%,8%)" stroke={color} strokeWidth={selected ? 2.2 : 1.6} />
+                          <circle r={selected ? 9 : 7} fill="hsl(var(--card))" stroke={color} strokeWidth={selected ? 2.2 : 1.6} />
                           <circle r="2.2" fill={color} />
                           {camera.status === 'alarm' && (
                             <circle r="12" fill="none" stroke={color} strokeWidth="1" opacity="0.4">
@@ -215,8 +227,8 @@ export default function MapPage() {
         </div>
       </div>
 
-      <div className="w-80 shrink-0 rounded-lg border border-border bg-card overflow-hidden">
-        <div className="px-4 py-3 border-b border-border">
+      <div className="w-80 shrink-0 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+        <div className="border-b border-border px-4 py-3">
           <div className="text-xs font-semibold">Detalhes da Câmera</div>
           <div className="text-[11px] text-muted-foreground mt-0.5">
             {selectedCamera ? 'Selecione uma ação para a câmera atual.' : 'Selecione um marcador no mapa.'}
@@ -225,9 +237,9 @@ export default function MapPage() {
 
         {selectedCamera ? (
           <div className="p-4 space-y-4">
-            <div className="aspect-video rounded-md border border-border bg-[linear-gradient(145deg,hsl(222_22%_9%),hsl(220_20%_12%))] flex items-center justify-center relative overflow-hidden">
+            <div className="relative flex aspect-video items-center justify-center overflow-hidden rounded-md border border-border bg-background">
               <Camera className="h-8 w-8 text-muted-foreground/40" />
-              <div className="absolute top-2 left-2 text-[10px] font-mono bg-black/40 px-1.5 py-0.5 rounded text-white/70">
+              <div className="absolute left-2 top-2 rounded-md border border-border bg-card/85 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
                 {selectedCamera.code}
               </div>
             </div>
@@ -272,7 +284,7 @@ export default function MapPage() {
                 <Info className="w-3.5 h-3.5" />
                 <span className="font-medium text-foreground">Operacional</span>
               </div>
-              <div>Mapa gerado a partir de unidade, andar e zona reais das câmeras cadastradas.</div>
+              <div>Mapa gerado a partir de unidade, andar e zona reais das câmeras cadastradas. Quando uma imagem de planta for enviada, os marcadores passam a ser posicionados sobre o desenho real.</div>
             </div>
           </div>
         ) : (

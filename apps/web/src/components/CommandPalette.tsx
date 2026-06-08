@@ -3,7 +3,9 @@ import { useLocation } from 'wouter';
 import {
   Monitor, PlaySquare,
   Camera, Settings,
-  Gauge, LogOut, Sun, Moon, Shield, Clock, Users, FolderKey, ShieldCheck
+  Gauge, LogOut, Sun, Moon, Shield, Clock, Users, FolderKey, ShieldCheck,
+  Activity, Bell, Brain, Crosshair, HardDrive, ClipboardList, FileText,
+  Archive, Map as MapIcon, Search, LayoutGrid, type LucideIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command';
@@ -11,15 +13,34 @@ import { useAuthStore } from '../store/authStore';
 import { useThemeStore } from '../store/themeStore';
 import { useVmsDataStore } from '../store/vmsDataStore';
 
-const PAGES = [
+type PalettePage = {
+  label: string;
+  path: string;
+  icon: LucideIcon;
+  description: string;
+  roles?: string[];
+};
+
+const PAGES: PalettePage[] = [
   { label: 'Ao Vivo', path: '/live', icon: Monitor, description: 'Grade de câmeras e controles' },
   { label: 'Reprodução', path: '/playback', icon: PlaySquare, description: 'Revisar gravações' },
+  { label: 'Eventos', path: '/events', icon: Activity, description: 'Linha de eventos operacionais' },
+  { label: 'Alertas', path: '/alarms', icon: Bell, description: 'Tratamento e regras de alarme' },
+  { label: 'IA', path: '/ai', icon: Brain, description: 'Status e operação da inteligência' },
+  { label: 'Controle PTZ', path: '/ptz', icon: Crosshair, description: 'Movimentação e presets PTZ' },
   { label: 'Câmeras', path: '/cameras', icon: Camera, description: 'Gestão e configuração de câmeras' },
-  { label: 'Monitoramento', path: '/storage', icon: Gauge, description: 'Disco, retenção e saúde operacional' },
-  { label: 'Usuários', path: '/users', icon: Users, description: 'Gestão de usuários' },
-  { label: 'Grupos', path: '/groups', icon: FolderKey, description: 'Câmeras e acessos por grupo' },
-  { label: 'Funções', path: '/roles', icon: ShieldCheck, description: 'Perfis e permissões' },
-  { label: 'Configurações', path: '/settings', icon: Settings, description: 'Configuração do sistema' },
+  { label: 'Armazenamento', path: '/storage', icon: HardDrive, description: 'Disco, retenção e saúde operacional' },
+  { label: 'Desempenho', path: '/performance', icon: Gauge, description: 'CPU, memória, streams e diagnóstico' },
+  { label: 'Mapa / Planta', path: '/map', icon: MapIcon, description: 'Localização das câmeras por ambiente' },
+  { label: 'Modo Mural', path: '/wall', icon: LayoutGrid, description: 'Visualização de parede operacional' },
+  { label: 'Investigação', path: '/investigation', icon: Search, description: 'Casos, evidências e linha de trabalho' },
+  { label: 'Evidências', path: '/evidence', icon: Archive, description: 'Pacotes e cadeia de custódia', roles: ['admin', 'supervisor', 'operator'] },
+  { label: 'Usuários', path: '/users', icon: Users, description: 'Gestão de usuários', roles: ['admin', 'operator'] },
+  { label: 'Grupos', path: '/groups', icon: FolderKey, description: 'Câmeras e acessos por grupo', roles: ['admin', 'supervisor'] },
+  { label: 'Funções', path: '/roles', icon: ShieldCheck, description: 'Perfis e permissões', roles: ['admin'] },
+  { label: 'Auditoria', path: '/audit', icon: ClipboardList, description: 'Trilha de ações do sistema', roles: ['admin', 'supervisor'] },
+  { label: 'Relatórios', path: '/reports', icon: FileText, description: 'Relatórios operacionais', roles: ['admin', 'supervisor'] },
+  { label: 'Configurações', path: '/settings', icon: Settings, description: 'Configuração do sistema', roles: ['admin'] },
 ];
 
 interface Props {
@@ -32,10 +53,9 @@ export function CommandPalette({ open, onClose }: Props) {
   const { logout, user } = useAuthStore();
   const { theme, setTheme } = useThemeStore();
   const cameras = useVmsDataStore((state) => state.cameras);
+  const role = user?.role ?? 'operator';
   const visiblePages = PAGES.filter((page) => {
-    if (page.path === '/settings' || page.path === '/groups' || page.path === '/roles') return user?.role === 'admin';
-    if (page.path === '/users') return user?.role === 'admin' || user?.role === 'operator';
-    return true;
+    return !page.roles || page.roles.includes(role);
   });
 
   const recent = [
@@ -70,7 +90,7 @@ export function CommandPalette({ open, onClose }: Props) {
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.96, y: -8 }}
           transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-          className="w-full max-w-lg rounded-lg border border-border overflow-hidden shadow-2xl"
+          className="w-full max-w-lg rounded-lg border border-border overflow-hidden shadow-lg"
           style={{ background: 'hsl(var(--card))' }}
           onClick={e => e.stopPropagation()}
         >

@@ -23,6 +23,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/storage':       'Armazenamento',
   '/performance':   'Desempenho',
   '/settings':      'Configurações',
+  '/ai':            'Inteligência Artificial',
   '/users':         'Usuários',
   '/roles':         'Funções e Permissões',
   '/groups':        'Grupos',
@@ -121,7 +122,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto pb-6">
+        <main className="flex-1 min-h-0 overflow-hidden">
           <AnimatePresence mode="wait">
             <motion.div
               key={location}
@@ -129,7 +130,7 @@ export function AppLayout({ children }: AppLayoutProps) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -5 }}
               transition={{ duration: 0.13, ease: 'easeOut' }}
-              className="h-full"
+              className="h-full min-h-0 overflow-hidden"
             >
               {children}
             </motion.div>

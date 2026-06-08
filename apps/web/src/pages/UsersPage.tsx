@@ -35,8 +35,8 @@ type AccessPermission = {
 
 const roleColor = (r: string) => {
   if (r === 'admin') return 'bg-[hsl(var(--primary)_/_0.12)] text-[hsl(var(--primary))] border-[hsl(var(--primary)_/_0.25)]';
-  if (r === 'operator') return 'bg-slate-500/10 text-slate-400 border-slate-500/25';
-  return 'bg-orange-500/15 text-orange-400 border-orange-500/30';
+  if (r === 'operator') return 'bg-muted text-muted-foreground border-border';
+  return 'bg-[hsl(var(--status-warning)_/_0.15)] text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning)_/_0.3)]';
 };
 
 const levelLabel: Record<PermissionLevel, string> = {
@@ -413,7 +413,7 @@ export default function UsuariosPage() {
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant="outline" className={cn('text-[10px]',
-                          u.active ? 'border-emerald-500/30 bg-emerald-500/15 text-emerald-400' : 'border-red-500/30 bg-red-500/15 text-red-400'
+                          u.active ? 'border-[hsl(var(--status-online)_/_0.3)] bg-[hsl(var(--status-online)_/_0.15)] text-[hsl(var(--status-online))]' : 'border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.15)] text-[hsl(var(--destructive))]'
                         )}>{u.active ? 'Ativo' : 'Bloqueado'}</Badge>
                       </td>
                       <td className="px-4 py-3">
@@ -424,10 +424,10 @@ export default function UsuariosPage() {
                           <button
                             onClick={() => void toggleLock(u.id, !u.active)}
                             className={cn('flex h-6 w-6 items-center justify-center rounded border transition-colors',
-                              !u.active ? 'border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20' : 'border-border bg-card hover:bg-accent'
+                              !u.active ? 'border-[hsl(var(--status-online)_/_0.3)] bg-[hsl(var(--status-online)_/_0.1)] hover:bg-[hsl(var(--status-online)_/_0.2)]' : 'border-border bg-card hover:bg-accent'
                             )}
                           >
-                            {!u.active ? <Unlock className="h-3 w-3 text-emerald-400" /> : <UserX className="h-3 w-3" />}
+                            {!u.active ? <Unlock className="h-3 w-3 text-[hsl(var(--status-online))]" /> : <UserX className="h-3 w-3" />}
                           </button>
                         </div>
                       </td>
@@ -513,7 +513,7 @@ export default function UsuariosPage() {
                   <button
                     onClick={() => void setGroupAlarms(true)}
                     disabled={accessLoading}
-                    className="rounded border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50"
+                    className="rounded border border-[hsl(var(--status-online)_/_0.4)] bg-[hsl(var(--status-online)_/_0.1)] px-2.5 py-1 text-[11px] text-[hsl(var(--status-online))] hover:bg-[hsl(var(--status-online)_/_0.2)] disabled:opacity-50"
                   >
                     Ligar
                   </button>

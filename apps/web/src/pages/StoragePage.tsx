@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import axios from 'axios';
-import { HardDrive, Thermometer, RefreshCw, Cpu, MemoryStick, Activity, Trash2, Server, ShieldAlert } from 'lucide-react';
+import { HardDrive, Thermometer, RefreshCw, Cpu, MemoryStick, Activity, Trash2, Server, ShieldAlert, ChevronDown } from 'lucide-react';
 import { useVmsDataStore } from '../store/vmsDataStore';
 import { useAuthStore } from '../store/authStore';
 import { getApiBaseUrl } from '../lib/api-base';
@@ -32,6 +32,22 @@ function Bar({ value }: { value: number }) {
   return <div className="h-1.5 rounded-full bg-[hsl(var(--border))] overflow-hidden"><div className={`h-full ${tone}`} style={{ width: `${value}%` }} /></div>;
 }
 
+function StorageSection({ title, open, onToggle, children }: { title: string; open: boolean; onToggle: () => void; children: ReactNode }) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left transition-colors hover:bg-accent/45"
+      >
+        <span className="text-sm font-semibold">{title}</span>
+        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open ? <div className="border-t border-border">{children}</div> : null}
+    </section>
+  );
+}
+
 export default function MonitoramentoPage() {
   const API_URL = getApiBaseUrl();
   const accessToken = useAuthStore((state) => state.accessToken);
@@ -60,6 +76,15 @@ export default function MonitoramentoPage() {
   } | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
+  const [openStorageSections, setOpenStorageSections] = useState({
+    health: true,
+    volumes: true,
+    cameras: true,
+  });
+
+  const toggleStorageSection = (key: keyof typeof openStorageSections) => {
+    setOpenStorageSections((current) => ({ ...current, [key]: !current[key] }));
+  };
 
   useEffect(() => {
     if (!accessToken) return;
@@ -165,8 +190,7 @@ export default function MonitoramentoPage() {
           <div className="bg-card border border-border rounded-xl p-4"><div className="text-[10px] uppercase text-[hsl(var(--muted-foreground))]">Livre</div><div className="mt-2 text-2xl font-semibold">{free.toFixed(1)} TB</div></div>
         </div>
       </div>
-      <details className="rounded-lg border border-border bg-card shadow-sm">
-        <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">Saúde do servidor</summary>
+      <StorageSection title="Saúde do servidor" open={openStorageSections.health} onToggle={() => toggleStorageSection('health')}>
         <div className="flex items-start justify-between gap-4 border-b border-border/70 px-5 py-4">
           <div className="min-w-0">
             <h3 className="text-[15px] font-semibold text-foreground">Uso atual</h3>
@@ -209,9 +233,8 @@ export default function MonitoramentoPage() {
             </div>
           </div>
         </div>
-      </details>
-      <details className="bg-card border border-border rounded-lg">
-        <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">Volumes</summary>
+      </StorageSection>
+      <StorageSection title="Volumes" open={openStorageSections.volumes} onToggle={() => toggleStorageSection('volumes')}>
         <div className="px-5 py-4 border-b border-border flex items-center justify-between">
           <div>
             <div className="text-xs font-semibold text-[hsl(var(--muted-foreground))]">Detalhes de armazenamento</div>
@@ -242,9 +265,8 @@ export default function MonitoramentoPage() {
             ))}
           </tbody>
         </table>
-      </details>
-      <details className="bg-card border border-border rounded-xl">
-        <summary className="cursor-pointer px-5 py-4 text-sm font-semibold">Uso por câmera</summary>
+      </StorageSection>
+      <StorageSection title="Uso por câmera" open={openStorageSections.cameras} onToggle={() => toggleStorageSection('cameras')}>
         <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3">
           <div>
             <div className="text-xs font-semibold text-[hsl(var(--muted-foreground))]">Gravações e clipes exportados no período selecionado</div>
@@ -291,7 +313,7 @@ export default function MonitoramentoPage() {
             </tbody>
           </table>
         </div>
-      </details>
+      </StorageSection>
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="bg-card border border-border rounded-xl p-4">
           <div className="text-xs text-[hsl(var(--muted-foreground))]">Retenção</div>

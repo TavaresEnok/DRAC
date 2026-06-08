@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from 'react';
+import { Component, Suspense, lazy, useEffect, type ErrorInfo, type ReactNode } from 'react';
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from 'wouter';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -43,6 +43,45 @@ function AppFallback() {
   );
 }
 
+class PageErrorBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[DRAC] Falha ao renderizar página', error, info.componentStack);
+  }
+
+  componentDidUpdate(prevProps: { resetKey: string }) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="flex min-h-full items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-lg border border-border bg-card p-5 text-center shadow-sm">
+          <div className="text-sm font-semibold text-foreground">Esta página não conseguiu carregar</div>
+          <div className="mt-2 text-xs text-muted-foreground">
+            {this.state.error.message || 'Erro inesperado ao abrir a tela.'}
+          </div>
+          <button
+            type="button"
+            onClick={() => this.setState({ error: null })}
+            className="mt-4 inline-flex h-9 items-center justify-center rounded-md border border-border px-4 text-xs font-medium hover:bg-accent"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
 function ProtectedRoute({ component: Page, adminOnly = false }: { component: React.ComponentType; adminOnly?: boolean }) {
   const { isAuthenticated, isBootstrapped, isLoading, user } = useAuthStore();
   const [, setLocation] = useLocation();
@@ -61,7 +100,9 @@ function ProtectedRoute({ component: Page, adminOnly = false }: { component: Rea
 
   return (
     <AppLayout>
-      <Page />
+      <PageErrorBoundary resetKey={window.location.pathname}>
+        <Page />
+      </PageErrorBoundary>
     </AppLayout>
   );
 }

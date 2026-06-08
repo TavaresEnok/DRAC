@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
 import { motion } from 'framer-motion';
-import { Shield, Eye, EyeOff, Lock, User, AlertCircle } from 'lucide-react';
+import { Shield, Eye, EyeOff, Lock, User, AlertCircle, Camera, CheckCircle2, Server } from 'lucide-react';
 import { format } from 'date-fns';
 import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
@@ -58,43 +58,70 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen w-full flex flex-col bg-background relative overflow-hidden">
+    <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-background">
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,hsl(var(--border)_/_0.45)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border)_/_0.35)_1px,transparent_1px)] bg-[size:42px_42px]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)_/_0.13),transparent_34%),linear-gradient(180deg,hsl(var(--background)_/_0.72),hsl(var(--background))_72%)]" />
 
-      {/* Top bar */}
-      <div className="relative flex items-center justify-between px-6 py-4 border-b border-border bg-card/70">
-        <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded bg-[hsl(var(--primary)_/_0.12)] border border-[hsl(var(--primary)_/_0.22)] flex items-center justify-center">
-            <Shield className="w-3 h-3 text-[hsl(var(--primary))]" />
+      <header className="relative flex items-center justify-between border-b border-border/70 bg-card/55 px-6 py-4 backdrop-blur-md">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[hsl(var(--primary)_/_0.22)] bg-[hsl(var(--primary)_/_0.1)]">
+            <Shield className="h-4 w-4 text-[hsl(var(--primary))]" />
           </div>
-          <span className="text-xs font-medium text-[hsl(var(--muted-foreground))]">
-            DRAC VMS
-          </span>
+          <div>
+            <div className="text-[13px] font-semibold leading-none">DRAC VMS</div>
+            <div className="mt-1 text-[10px] text-muted-foreground">Acesso seguro ao servidor local</div>
+          </div>
         </div>
-        <div className="text-[11px] text-[hsl(var(--muted-foreground))] tabular-nums">
+        <div className="font-mono text-[11px] text-muted-foreground tabular-nums">
           {format(now, 'dd/MM/yyyy HH:mm:ss')}
         </div>
-      </div>
+      </header>
 
-      {/* Main form */}
-      <div className="relative flex-1 flex items-center justify-center">
+      <div className="relative grid flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_420px]">
+        <section className="hidden min-h-0 flex-col justify-between border-r border-border/70 p-10 lg:flex">
+          <div className="max-w-xl">
+            <div className="mb-5 inline-flex items-center gap-2 rounded-lg border border-border bg-card/70 px-3 py-1.5 text-[11px] text-muted-foreground">
+              <Server className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
+              Instalação operacional
+            </div>
+            <h1 className="text-3xl font-semibold tracking-tight">Monitoramento profissional, direto no seu servidor.</h1>
+            <p className="mt-4 max-w-lg text-sm leading-6 text-muted-foreground">
+              Entre para operar câmeras, gravações, alertas e usuários com uma interface limpa e preparada para rotina real de CFTV.
+            </p>
+          </div>
+
+          <div className="grid max-w-xl grid-cols-3 gap-3">
+            {[
+              { icon: Camera, label: 'Live', value: 'WebRTC' },
+              { icon: Shield, label: 'Acesso', value: 'Protegido' },
+              { icon: CheckCircle2, label: 'Status', value: 'Local' },
+            ].map(({ icon: Icon, label, value }) => (
+              <div key={label} className="rounded-lg border border-border bg-card/70 p-4">
+                <Icon className="mb-4 h-5 w-5 text-[hsl(var(--primary))]" />
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+                <div className="mt-1 text-sm font-semibold">{value}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div className="flex items-center justify-center p-6">
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: 'easeOut' }}
-          className="w-full max-w-[380px] rounded-lg border border-border bg-card/80 px-6 py-7 shadow-sm"
+          className="w-full max-w-[390px] rounded-lg border border-border bg-card/90 px-6 py-7 shadow-sm backdrop-blur-md"
         >
-          {/* Logo */}
           <div className="text-center mb-7">
-            <div className="w-12 h-12 mx-auto mb-4 rounded-xl bg-[hsl(var(--primary)_/_0.08)] border border-[hsl(var(--primary)_/_0.18)] flex items-center justify-center">
+            <div className="w-12 h-12 mx-auto mb-4 rounded-lg bg-[hsl(var(--primary)_/_0.08)] border border-[hsl(var(--primary)_/_0.18)] flex items-center justify-center">
               <Shield className="w-6 h-6 text-[hsl(var(--primary))]" />
             </div>
             <h1 className="text-xl font-semibold tracking-tight text-foreground">DRAC VMS</h1>
             <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1.5">
-              Acesso ao servidor local de monitoramento
+              Identifique-se para iniciar a operação
             </p>
           </div>
 
-          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] tracking-wide uppercase" htmlFor="username">
@@ -150,18 +177,10 @@ export default function LoginPage() {
               </motion.div>
             )}
 
-            {/* Sign-in button — steel blue, elegant */}
             <button
               type="submit"
               disabled={loading}
-              className="w-full h-10 rounded-md text-[13px] font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-              style={{
-                background: 'linear-gradient(135deg, hsl(213 72% 54%), hsl(213 65% 49%))',
-                color: '#fff',
-                boxShadow: '0 1px 3px hsl(213 72% 30% / 0.4)',
-              }}
-              onMouseEnter={e => { (e.target as HTMLElement).style.opacity = '0.92'; }}
-              onMouseLeave={e => { (e.target as HTMLElement).style.opacity = '1'; }}
+              className="w-full h-10 rounded-md bg-primary text-[13px] font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
               data-testid="button-login"
             >
               {loading ? (
@@ -173,7 +192,6 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Installation card */}
           <div className="mt-6 rounded-md border border-border/60 bg-background/55 px-4 py-3">
             <div className="text-[11px] text-foreground/80 font-medium">Instalação local</div>
             <div className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">
@@ -187,6 +205,7 @@ export default function LoginPage() {
             </span>
           </div>
         </motion.div>
+      </div>
       </div>
     </div>
   );

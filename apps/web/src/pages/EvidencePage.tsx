@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { format } from 'date-fns';
-import { CheckCircle2, Clock3, FileArchive, ShieldCheck, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock3, FileArchive, RefreshCw, ShieldCheck, XCircle } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
@@ -159,19 +159,29 @@ export default function EvidencePage() {
   };
 
   return (
-    <div className="p-6 max-w-6xl space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-[18px] font-semibold tracking-tight">Evidências e Exportação</h2>
-          <p className="text-[11px] text-[hsl(var(--muted-foreground))]">Fluxo real com aprovação, execução e assinatura de pacote.</p>
+    <div className="flex h-full flex-col">
+      <div className="shrink-0 border-b border-border px-6 py-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-card text-primary">
+              <ShieldCheck className="h-4 w-4" />
+            </span>
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight">Evidências</h1>
+              <p className="mt-0.5 text-xs text-muted-foreground">Aprovação, exportação, assinatura e verificação de pacotes.</p>
+            </div>
+          </div>
+          <button onClick={() => void load(investigationId)} className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-xs font-medium hover:bg-accent">
+            <RefreshCw className="h-3.5 w-3.5" />
+            Atualizar
+          </button>
         </div>
-        <button onClick={() => void load(investigationId)} className="h-8 px-3 rounded border border-border text-xs hover:bg-[hsl(var(--accent))]">Atualizar</button>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-[320px_1fr]">
-        <div className="rounded-xl border border-border bg-card p-3 space-y-3">
+      <div className="grid flex-1 gap-4 overflow-y-auto p-6 md:grid-cols-[340px_1fr]">
+        <aside className="h-fit rounded-lg border border-border bg-card p-4 shadow-sm">
           <div>
-            <div className="text-xs font-medium mb-1">Investigação</div>
+            <div className="mb-1 text-xs font-medium">Investigação</div>
             <Select value={investigationId || '__none__'} onValueChange={(value) => { if (value !== '__none__') void load(value); }}>
               <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Selecione" /></SelectTrigger>
               <SelectContent>
@@ -182,7 +192,7 @@ export default function EvidencePage() {
           </div>
 
           <div>
-            <div className="text-xs font-medium mb-1">Formato</div>
+            <div className="mb-1 text-xs font-medium">Formato</div>
             <Select value={formatType} onValueChange={(v) => setFormatType(v as 'MP4' | 'AVI' | 'NATIVE')}>
               <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -194,11 +204,11 @@ export default function EvidencePage() {
           </div>
 
           <div>
-            <div className="text-xs font-medium mb-1">Motivo da solicitação</div>
-            <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={4} className="w-full rounded border border-border bg-background p-2 text-xs" />
+            <div className="mb-1 text-xs font-medium">Motivo da solicitação</div>
+            <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={4} className="w-full rounded-md border border-border bg-background p-2 text-xs outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/30" />
           </div>
 
-          <button onClick={() => void requestExport()} disabled={!investigationId || !reason.trim()} className="h-9 w-full rounded bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold disabled:opacity-50">
+          <button onClick={() => void requestExport()} disabled={!investigationId || !reason.trim()} className="h-9 w-full rounded-md bg-primary text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50">
             Solicitar Exportação
           </button>
           <button
@@ -216,12 +226,12 @@ export default function EvidencePage() {
               }
             }}
             disabled={!investigationId || retrying}
-            className="h-8 w-full rounded border border-border text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-50"
+            className="h-8 w-full rounded-md border border-border text-xs hover:bg-accent disabled:opacity-50"
           >
             {retrying ? 'Enfileirando...' : 'Reprocessar assinaturas pendentes'}
           </button>
-          <div className="pt-1 border-t border-border space-y-2">
-            <div className="text-xs font-medium">Verificar pacote (.json)</div>
+          <div className="space-y-2 border-t border-border pt-3">
+            <div className="text-xs font-medium">Verificar pacote</div>
             <input
               type="file"
               accept="application/json,.json"
@@ -231,10 +241,10 @@ export default function EvidencePage() {
                 if (file) void verifyPackageFile(file);
                 event.currentTarget.value = '';
               }}
-              className="block w-full text-[11px] file:mr-2 file:h-7 file:rounded file:border file:border-border file:bg-background file:px-2 file:text-[11px]"
+              className="block w-full text-[11px] file:mr-2 file:h-7 file:rounded-md file:border file:border-border file:bg-background file:px-2 file:text-[11px]"
             />
             {verifyResult ? (
-              <div className={`rounded border p-2 text-[11px] ${verifyResult.ok ? 'border-emerald-500/40 text-emerald-500' : 'border-rose-500/40 text-rose-500'}`}>
+              <div className={`rounded border p-2 text-[11px] ${verifyResult.ok ? 'border-[hsl(var(--status-online)_/_0.4)] text-[hsl(var(--status-online))]' : 'border-[hsl(var(--destructive)_/_0.4)] text-[hsl(var(--destructive))]'}`}>
                 <div className="font-semibold">{verifyResult.ok ? 'Pacote válido' : 'Pacote inválido'}</div>
                 <div>Hash: {verifyResult.hashValid ? 'válido' : 'inválido'}</div>
                 <div>Assinatura: {verifyResult.signatureValid ? 'válida' : 'inválida'}</div>
@@ -244,10 +254,13 @@ export default function EvidencePage() {
               </div>
             ) : null}
           </div>
-        </div>
+        </aside>
 
-        <div className="rounded-xl border border-border bg-card overflow-hidden">
-          <div className="px-4 py-3 border-b border-border text-xs font-medium">Histórico de Exportações</div>
+        <section className="min-h-0 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <div className="text-sm font-semibold">Histórico de exportações</div>
+            <div className="text-[11px] text-muted-foreground">{exportsList.length} registro(s)</div>
+          </div>
           <div className="max-h-[65vh] overflow-auto divide-y divide-border">
             {loading && <div className="px-4 py-4 text-xs text-[hsl(var(--muted-foreground))]">Carregando...</div>}
             {!loading && exportsList.length === 0 && <div className="px-4 py-4 text-xs text-[hsl(var(--muted-foreground))]">Sem registros de exportação.</div>}
@@ -256,19 +269,19 @@ export default function EvidencePage() {
               const status = String(meta.status ?? '').toUpperCase();
               const progress = Number(meta.progress ?? 0);
               return (
-                <div key={entry.id} className="px-4 py-3 space-y-2">
+                <div key={entry.id} className="space-y-2 px-4 py-3">
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-semibold">{entry.label}</div>
                     <div className="text-[10px] font-mono text-[hsl(var(--muted-foreground))]">{format(new Date(entry.createdAt), 'yyyy-MM-dd HH:mm:ss')}</div>
                   </div>
                   <div className="flex items-center gap-2 text-[11px]">
-                    {entry.type === 'export_package' ? <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> : <Clock3 className="h-3.5 w-3.5 text-amber-500" />}
+                    {entry.type === 'export_package' ? <ShieldCheck className="h-3.5 w-3.5 text-[hsl(var(--status-online))]" /> : <Clock3 className="h-3.5 w-3.5 text-[hsl(var(--status-warning))]" />}
                     <span className="font-mono">{entry.type}</span>
-                    {status && <span className="rounded border border-border px-1.5 py-0.5 text-[10px]">{status}</span>}
+                    {status && <span className="rounded-md border border-border px-1.5 py-0.5 text-[10px]">{status}</span>}
                     {Number.isFinite(progress) && progress > 0 ? <span className="font-mono text-[10px] text-[hsl(var(--muted-foreground))]">{progress}%</span> : null}
                   </div>
                   {Number.isFinite(progress) && progress > 0 && progress < 100 ? (
-                    <div className="h-1.5 rounded bg-[hsl(var(--muted))] overflow-hidden">
+                    <div className="h-1.5 overflow-hidden rounded bg-muted">
                       <div className="h-full bg-[hsl(var(--primary))]" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
                     </div>
                   ) : null}
@@ -277,18 +290,18 @@ export default function EvidencePage() {
                     <div className="flex flex-wrap gap-2 pt-1">
                       {user?.role === 'admin' && status === 'PENDING' && (
                         <>
-                          <button onClick={() => void review(entry.id, 'APPROVED')} className="h-7 px-2.5 rounded border border-emerald-500/40 text-emerald-500 text-xs inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> Aprovar</button>
-                          <button onClick={() => void review(entry.id, 'REJECTED')} className="h-7 px-2.5 rounded border border-rose-500/40 text-rose-500 text-xs inline-flex items-center gap-1"><XCircle className="h-3.5 w-3.5" /> Rejeitar</button>
+                          <button onClick={() => void review(entry.id, 'APPROVED')} className="inline-flex h-7 items-center gap-1 rounded-md border border-[hsl(var(--status-online)_/_0.4)] px-2.5 text-xs text-[hsl(var(--status-online))]"><CheckCircle2 className="h-3.5 w-3.5" /> Aprovar</button>
+                          <button onClick={() => void review(entry.id, 'REJECTED')} className="inline-flex h-7 items-center gap-1 rounded-md border border-[hsl(var(--destructive)_/_0.4)] px-2.5 text-xs text-[hsl(var(--destructive))]"><XCircle className="h-3.5 w-3.5" /> Rejeitar</button>
                         </>
                       )}
                       {status === 'APPROVED' && (
-                        <button onClick={() => void execute(entry.id)} className="h-7 px-2.5 rounded border border-primary/40 text-primary text-xs inline-flex items-center gap-1"><FileArchive className="h-3.5 w-3.5" /> Executar Exportação</button>
+                        <button onClick={() => void execute(entry.id)} className="inline-flex h-7 items-center gap-1 rounded-md border border-primary/40 px-2.5 text-xs text-primary"><FileArchive className="h-3.5 w-3.5" /> Executar Exportação</button>
                       )}
                     </div>
                   )}
                   {entry.type === 'export_package' && status !== 'PROCESSING' && status !== 'QUEUED' && (
                     <div className="pt-1">
-                      <button onClick={() => void downloadPackage(entry.id)} className="h-7 px-2.5 rounded border border-primary/40 text-primary text-xs inline-flex items-center gap-1">
+                      <button onClick={() => void downloadPackage(entry.id)} className="inline-flex h-7 items-center gap-1 rounded-md border border-primary/40 px-2.5 text-xs text-primary">
                         <FileArchive className="h-3.5 w-3.5" /> Download Pacote
                       </button>
                     </div>
@@ -297,7 +310,7 @@ export default function EvidencePage() {
               );
             })}
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );

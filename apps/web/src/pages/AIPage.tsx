@@ -250,25 +250,26 @@ function formatResolution(width?: number | null, height?: number | null) {
 }
 
 function severityClasses(severity: Severity) {
-  if (severity === 'critical') return 'border-red-500/30 bg-red-500/10 text-red-200';
-  if (severity === 'warning') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
-  return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200';
+  if (severity === 'critical') return 'border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))]';
+  if (severity === 'warning') return 'border-[hsl(var(--status-warning)_/_0.3)] bg-[hsl(var(--status-warning)_/_0.1)] text-[hsl(var(--status-warning))]';
+  return 'border-border bg-muted/50 text-muted-foreground';
 }
 
 function statusBadge(status: string) {
-  if (status === 'ok') return { label: 'Operacional', className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' };
+  if (status === 'ok') return { label: 'Operacional', className: 'border-[hsl(var(--status-online)_/_0.3)] bg-[hsl(var(--status-online)_/_0.1)] text-[hsl(var(--status-online))]' };
   if (status === 'disabled') return { label: 'Desligada', className: 'border-border bg-background text-muted-foreground' };
-  if (status === 'restricted') return { label: 'Restrita', className: 'border-red-500/30 bg-red-500/10 text-red-200' };
-  if (status === 'offline') return { label: 'Serviço offline', className: 'border-red-500/30 bg-red-500/10 text-red-200' };
-  if (status === 'critical') return { label: 'Crítica', className: 'border-red-500/30 bg-red-500/10 text-red-200' };
-  return { label: 'Atenção', className: 'border-amber-500/30 bg-amber-500/10 text-amber-200' };
+  if (status === 'restricted') return { label: 'Restrita', className: 'border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))]' };
+  if (status === 'offline') return { label: 'Serviço offline', className: 'border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))]' };
+  if (status === 'critical') return { label: 'Crítica', className: 'border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))]' };
+  return { label: 'Atenção', className: 'border-[hsl(var(--status-warning)_/_0.3)] bg-[hsl(var(--status-warning)_/_0.1)] text-[hsl(var(--status-warning))]' };
 }
 
 function healthBadge(camera: AiCamera) {
-  if (camera.health.severity === 'critical') return 'border-red-500/30 bg-red-500/10 text-red-200';
-  if (camera.health.severity === 'warning') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+  if (!camera.participation.aiEnabled) return 'border-border bg-background text-muted-foreground';
+  if (camera.health.severity === 'critical') return 'border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))]';
+  if (camera.health.severity === 'warning') return 'border-[hsl(var(--status-warning)_/_0.3)] bg-[hsl(var(--status-warning)_/_0.1)] text-[hsl(var(--status-warning))]';
   if (camera.health.state === 'disabled') return 'border-border bg-background text-muted-foreground';
-  return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
+  return 'border-[hsl(var(--status-online)_/_0.3)] bg-[hsl(var(--status-online)_/_0.1)] text-[hsl(var(--status-online))]';
 }
 
 function modelRuntimeLabel(intelligence: AiIntelligence | null) {
@@ -305,7 +306,7 @@ function RecommendationList({ items }: { items: Recommendation[] }) {
       {items.slice(0, 8).map((item) => (
         <div key={`${item.code}-${item.message}`} className={cn('rounded-lg border px-3 py-2 text-sm', severityClasses(item.severity))}>
           <div className="flex items-start gap-2">
-            {item.severity === 'critical' ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />}
+            {item.severity === 'critical' ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> : item.severity === 'warning' ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> : <ZapOff className="mt-0.5 h-4 w-4 shrink-0" />}
             <span>{item.message}</span>
           </div>
         </div>
@@ -460,10 +461,10 @@ export default function AIPage() {
           </div>
         </header>
 
-        {message ? <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{message}</div> : null}
-        {error ? <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</div> : null}
+        {message ? <div className="rounded-lg border border-[hsl(var(--status-online)_/_0.25)] bg-[hsl(var(--status-online)_/_0.1)] px-4 py-3 text-sm text-[hsl(var(--status-online))]">{message}</div> : null}
+        {error ? <div className="rounded-lg border border-[hsl(var(--destructive)_/_0.25)] bg-[hsl(var(--destructive)_/_0.1)] px-4 py-3 text-sm text-[hsl(var(--destructive))]">{error}</div> : null}
         {intelligence?.model?.registry?.lastError ? (
-          <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <div className="rounded-lg border border-[hsl(var(--destructive)_/_0.25)] bg-[hsl(var(--destructive)_/_0.1)] px-4 py-3 text-sm text-[hsl(var(--destructive))]">
             {String(intelligence.model.registry.lastError)}
           </div>
         ) : null}

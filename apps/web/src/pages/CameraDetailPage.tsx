@@ -268,9 +268,9 @@ function StatusPill({ label, tone = 'neutral' }: { label: string; tone?: 'neutra
     <span
       className={cn(
         'inline-flex h-7 items-center rounded-md border px-2.5 text-[11px] font-medium',
-        tone === 'good' && 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-        tone === 'warn' && 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-        tone === 'bad' && 'border-red-500/30 bg-red-500/10 text-red-300',
+        tone === 'good' && 'border-[hsl(var(--status-online)_/_0.3)] bg-[hsl(var(--status-online)_/_0.1)] text-[hsl(var(--status-online))]',
+        tone === 'warn' && 'border-[hsl(var(--status-warning)_/_0.3)] bg-[hsl(var(--status-warning)_/_0.1)] text-[hsl(var(--status-warning))]',
+        tone === 'bad' && 'border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))]',
         tone === 'neutral' && 'border-border bg-card text-muted-foreground',
       )}
     >
@@ -1165,9 +1165,9 @@ export default function CameraDetailPage() {
                 </div>
               ) : null}
               <div className="scan-line-overlay absolute inset-0" />
-              {!cam.isOnline && <Camera className="h-12 w-12 text-slate-700" />}
+              {!cam.isOnline && <Camera className="h-12 w-12 text-muted-foreground/35" />}
               <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
-                <div className={cn('h-2 w-2 rounded-full', isRecordingActive ? 'rec-pulse bg-red-500' : 'bg-emerald-400')} />
+                <div className={cn('h-2 w-2 rounded-full', isRecordingActive ? 'rec-pulse bg-[hsl(var(--destructive))]' : 'bg-[hsl(var(--status-online))]')} />
                 <span className="rounded bg-black/60 px-1.5 text-xs font-mono text-white/80">{cam.code}</span>
               </div>
               <div className="absolute bottom-2 left-2 right-2 z-10 flex justify-between">
@@ -1195,8 +1195,8 @@ export default function CameraDetailPage() {
                 className={cn(
                   'inline-flex h-9 items-center justify-center gap-1.5 rounded-md border bg-background/55 text-xs disabled:opacity-50',
                   isRecordingActive
-                    ? 'border-red-500/45 text-red-300 hover:bg-red-500/10'
-                    : 'border-emerald-500/45 text-emerald-300 hover:bg-emerald-500/10',
+                    ? 'border-[hsl(var(--destructive)_/_0.45)] text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive)_/_0.1)]'
+                    : 'border-[hsl(var(--status-online)_/_0.45)] text-[hsl(var(--status-online))] hover:bg-[hsl(var(--status-online)_/_0.1)]',
                 )}
                 title={isRecordingActive ? 'Parar gravação manual' : 'Iniciar gravação manual'}
               >
@@ -1272,7 +1272,7 @@ export default function CameraDetailPage() {
                     type="button"
                     onClick={() => void triggerCameraAlarm()}
                     disabled={triggeringAlarm || !cam.isOnline}
-                    className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-amber-500/35 bg-amber-500/10 text-xs font-medium text-amber-300 hover:bg-amber-500/15 disabled:opacity-50"
+                    className="inline-flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-[hsl(var(--status-warning)_/_0.35)] bg-[hsl(var(--status-warning)_/_0.1)] text-xs font-medium text-[hsl(var(--status-warning))] hover:bg-[hsl(var(--status-warning)_/_0.15)] disabled:opacity-50"
                     title="Aciona a saída de alarme por 1,5s e desliga automaticamente"
                   >
                     {triggeringAlarm ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <BellRing className="h-3.5 w-3.5" />}
@@ -1302,7 +1302,7 @@ export default function CameraDetailPage() {
           </TabsList>
 
           <TabsContent value="playback" className="mt-4">
-            <div className="rounded-2xl border border-border bg-card/60 p-5">
+            <div className="rounded-lg border border-border bg-card/60 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Reprodução</p>
@@ -1345,7 +1345,7 @@ export default function CameraDetailPage() {
                 .map((event) => (
                   <div key={event.id} className="flex items-center gap-3 rounded border border-border bg-card/40 px-4 py-2 text-xs">
                     <span className="font-mono text-muted-foreground">{new Date(event.timestamp).toISOString().substring(11, 19)}</span>
-                    <Badge variant="outline" className="border-slate-500/30 bg-slate-500/15 text-[10px] text-slate-400">
+                    <Badge variant="outline" className="border-border bg-muted text-[10px] text-muted-foreground">
                       {event.type}
                     </Badge>
                     <span className="font-mono text-muted-foreground">{event.description}</span>
@@ -1452,7 +1452,7 @@ export default function CameraDetailPage() {
                           <div className={cn(
                             'rounded-lg border px-3 py-2',
                             pipelineSummary?.analytics?.separatedFromLive === false
-                              ? 'border-amber-500/35 bg-amber-500/10'
+                              ? 'border-[hsl(var(--status-warning)_/_0.35)] bg-[hsl(var(--status-warning)_/_0.1)]'
                               : 'border-border/70 bg-card',
                           )}>
                             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">IA</div>

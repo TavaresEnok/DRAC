@@ -4,21 +4,39 @@ import {
   Monitor, PlaySquare,
   Camera, Settings,
   Gauge, Activity, ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
-  Server, Users, Radar, Brain, FolderKey, ShieldCheck, Search, Sun, Moon
+  Server, Users, Radar, Brain, FolderKey, ShieldCheck, Search, Sun, Moon,
+  Bell, ClipboardList, FileText, Archive, Crosshair, HardDrive,
+  type LucideIcon,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSidebarStore } from '../store/sidebarStore';
 import { useAuthStore } from '../store/authStore';
 import { useThemeStore } from '../store/themeStore';
 
-const NAV_SECTIONS = [
+type NavItem = {
+  path: string;
+  label: string;
+  icon: LucideIcon;
+  roles?: string[];
+};
+
+type NavSection = {
+  label: string;
+  icon: LucideIcon;
+  items: NavItem[];
+};
+
+const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Monitoramento',
     icon: Radar,
     items: [
       { path: '/live', label: 'Ao Vivo', icon: Monitor },
       { path: '/playback', label: 'Reprodução', icon: PlaySquare },
-      { path: '/ai', label: 'Inteligência', icon: Brain },
+      { path: '/events', label: 'Eventos', icon: Activity },
+      { path: '/alarms', label: 'Alertas', icon: Bell },
+      { path: '/ai', label: 'IA', icon: Brain },
+      { path: '/ptz', label: 'Controle PTZ', icon: Crosshair },
     ],
   },
   {
@@ -26,18 +44,21 @@ const NAV_SECTIONS = [
     icon: Server,
     items: [
       { path: '/cameras', label: 'Câmeras', icon: Camera },
-      { path: '/storage', label: 'Armazenamento', icon: Gauge },
-      { path: '/performance', label: 'Desempenho', icon: Activity },
+      { path: '/storage', label: 'Armazenamento', icon: HardDrive },
+      { path: '/performance', label: 'Desempenho', icon: Gauge },
     ],
   },
   {
     label: 'Administração',
     icon: Users,
     items: [
-      { path: '/users', label: 'Usuários', icon: Users },
-      { path: '/groups', label: 'Grupos', icon: FolderKey },
-      { path: '/roles', label: 'Funções', icon: ShieldCheck },
-      { path: '/settings', label: 'Configurações', icon: Settings },
+      { path: '/users', label: 'Usuários', icon: Users, roles: ['admin', 'operator'] },
+      { path: '/groups', label: 'Grupos', icon: FolderKey, roles: ['admin', 'supervisor'] },
+      { path: '/roles', label: 'Funções', icon: ShieldCheck, roles: ['admin'] },
+      { path: '/audit', label: 'Auditoria', icon: ClipboardList, roles: ['admin', 'supervisor'] },
+      { path: '/reports', label: 'Relatórios', icon: FileText, roles: ['admin', 'supervisor'] },
+      { path: '/evidence', label: 'Evidências', icon: Archive, roles: ['admin', 'supervisor', 'operator'] },
+      { path: '/settings', label: 'Configurações', icon: Settings, roles: ['admin'] },
     ],
   },
 ];
@@ -61,14 +82,13 @@ export function Sidebar({
   const { theme, setTheme } = useThemeStore();
   const [location] = useLocation();
   const isDark = theme === 'dark' || theme === 'dim';
+  const role = user?.role ?? 'operator';
 
   const roleColor = ROLE_COLOR[user?.role ?? 'operator'] ?? ROLE_COLOR.operator;
   const visibleSections = NAV_SECTIONS
     .map((section) => ({
       ...section,
-      items: section.label === 'Administração'
-        ? section.items.filter((item) => item.path === '/users' ? user?.role === 'admin' || user?.role === 'operator' : user?.role === 'admin')
-        : section.items,
+      items: section.items.filter((item) => !item.roles || item.roles.includes(role)),
     }))
     .filter((section) => section.items.length > 0);
 

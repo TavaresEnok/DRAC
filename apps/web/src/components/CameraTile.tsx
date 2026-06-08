@@ -18,15 +18,14 @@ interface CameraTileProps {
   liveViewMode?: 'selected' | 'grid';
 }
 
-/* Muted, professional status colors — no neon */
 const STATUS_DOT: Record<string, string> = {
-  online:      'hsl(152 36% 45%)',   /* sage */
-  recording:   'hsl(354 50% 50%)',   /* deep crimson */
-  motion:      'hsl(38 58% 54%)',    /* amber */
-  alarm:       'hsl(354 50% 50%)',   /* deep crimson */
-  offline:     'hsl(218 10% 36%)',   /* slate */
-  no_signal:   'hsl(218 10% 36%)',
-  maintenance: 'hsl(38 58% 54%)',    /* amber */
+  online:      'hsl(var(--status-online))',
+  recording:   'hsl(var(--status-rec))',
+  motion:      'hsl(var(--status-motion))',
+  alarm:       'hsl(var(--status-alarm))',
+  offline:     'hsl(var(--status-offline))',
+  no_signal:   'hsl(var(--status-offline))',
+  maintenance: 'hsl(var(--status-warning))',
 };
 
 export function CameraTile({
@@ -52,9 +51,9 @@ export function CameraTile({
     <motion.div
       className={`relative w-full h-full rounded-sm overflow-hidden cursor-pointer select-none
         ${selected ? 'ring-1 ring-[hsl(var(--primary)_/_0.7)]' : ''}
-        ${isAlarm   ? 'alarm-glow ring-1 ring-[hsl(354_50%_50%_/_0.5)]' : ''}
+        ${isAlarm   ? 'alarm-glow ring-1 ring-[hsl(var(--status-alarm)_/_0.5)]' : ''}
       `}
-      style={{ background: 'hsl(222 18% 9%)', minHeight: compact ? 80 : 120 }}
+      style={{ background: 'hsl(var(--layer-base))', minHeight: compact ? 80 : 120 }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onHoverStart={() => setHovered(true)}
@@ -82,8 +81,8 @@ export function CameraTile({
       {isOffline && (
         <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
           <div className="text-center">
-            <AlertTriangle className="w-4 h-4 text-[hsl(218_10%_40%)] mx-auto mb-1" />
-            <div className="font-mono text-[9px] text-[hsl(218_10%_38%)] tracking-widest uppercase">
+            <AlertTriangle className="w-4 h-4 text-[hsl(var(--status-offline))] mx-auto mb-1" />
+            <div className="font-mono text-[9px] text-[hsl(var(--muted-foreground))] tracking-widest uppercase">
               {camera.status === 'no_signal' ? 'Sem sinal' : 'Offline'}
             </div>
           </div>
@@ -98,12 +97,12 @@ export function CameraTile({
               {camera.code}
             </span>
             {isAlarm && (
-              <span className="text-[9px] text-[hsl(354_55%_68%)] bg-[hsl(354_50%_50%_/_0.18)] border border-[hsl(354_50%_50%_/_0.4)] px-1.5 py-px rounded-sm rec-pulse">
+              <span className="text-[9px] text-[hsl(var(--status-alarm))] bg-[hsl(var(--status-alarm)_/_0.18)] border border-[hsl(var(--status-alarm)_/_0.4)] px-1.5 py-px rounded-sm rec-pulse">
                 Alarme
               </span>
             )}
             {isMotion && (
-              <span className="text-[9px] text-[hsl(38_60%_68%)] bg-[hsl(38_58%_54%_/_0.15)] border border-[hsl(38_58%_54%_/_0.35)] px-1.5 py-px rounded-sm">
+              <span className="text-[9px] text-[hsl(var(--status-motion))] bg-[hsl(var(--status-motion)_/_0.15)] border border-[hsl(var(--status-motion)_/_0.35)] px-1.5 py-px rounded-sm">
                 Movimento
               </span>
             )}
@@ -154,8 +153,8 @@ export function CameraTile({
             <button
               className={`w-6 h-6 flex items-center justify-center rounded border transition-colors ${
                 isManualRecordingActive
-                  ? 'border-red-500/60 bg-red-500/10 text-red-300 hover:bg-red-500/20'
-                  : 'border-emerald-500/60 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+                  ? 'border-[hsl(var(--destructive)_/_0.6)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive)_/_0.2)]'
+                  : 'border-[hsl(var(--status-online)_/_0.6)] bg-[hsl(var(--status-online)_/_0.1)] text-[hsl(var(--status-online))] hover:bg-[hsl(var(--status-online)_/_0.2)]'
               }`}
               onClick={() => onAction?.(isManualRecordingActive ? 'record-stop' : 'record-start', camera)}
               title={isManualRecordingActive ? 'Parar gravação manual' : 'Iniciar gravação manual'}

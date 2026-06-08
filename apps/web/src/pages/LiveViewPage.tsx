@@ -60,7 +60,8 @@ const GRID_CONFIGS: Record<GridSize, { cols: number; rows: number; label: string
 };
 
 const STATUS_FILTERS = ['all', 'online', 'recording', 'motion', 'alarm', 'offline', 'no_signal', 'maintenance'] as const;
-const STATUS_FILTER_LABEL: Record<(typeof STATUS_FILTERS)[number], string> = {
+type StatusFilter = (typeof STATUS_FILTERS)[number];
+const STATUS_FILTER_LABEL: Record<StatusFilter, string> = {
   all: 'Todos',
   online: 'Online',
   recording: 'Gravando',
@@ -469,7 +470,7 @@ export default function LiveViewPage() {
                       <button onClick={() => renameLayout(layout.id)} className="h-7 w-7 rounded border border-border inline-flex items-center justify-center hover:bg-background" title="Renomear">
                         <Pencil className="w-3 h-3" />
                       </button>
-                      <button onClick={() => deleteLayout(layout.id)} className="h-7 w-7 rounded border border-border inline-flex items-center justify-center hover:bg-red-500/10 hover:text-red-400" title="Apagar">
+                      <button onClick={() => deleteLayout(layout.id)} className="h-7 w-7 rounded border border-border inline-flex items-center justify-center hover:bg-[hsl(var(--destructive)_/_0.1)] hover:text-[hsl(var(--destructive))]" title="Apagar">
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
@@ -493,15 +494,15 @@ export default function LiveViewPage() {
                   disabled={recordingActionLoading !== null}
                   className={`ops-button h-7 px-2.5 flex items-center gap-1.5 text-[10px] transition-all ${
                     isRecording
-                      ? 'border-red-500/70 text-red-300 bg-red-500/10'
-                      : 'border-emerald-500/70 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20'
+                      ? 'border-[hsl(var(--destructive)_/_0.7)] text-[hsl(var(--destructive))] bg-[hsl(var(--destructive)_/_0.1)]'
+                      : 'border-[hsl(var(--status-online)_/_0.7)] text-[hsl(var(--status-online))] bg-[hsl(var(--status-online)_/_0.1)] hover:bg-[hsl(var(--status-online)_/_0.2)]'
                   }`}
                   title={isRecording ? 'Parar gravação manual' : 'Iniciar gravação manual'}
                 >
                   {recordingActionLoading ? (
                     <span className="w-2 h-2 rounded-full bg-current animate-pulse" />
                   ) : isRecording ? (
-                    <span className="w-2 h-2 rounded-full bg-red-400 rec-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-[hsl(var(--destructive))] rec-pulse" />
                   ) : (
                     <Circle className="w-3 h-3" />
                   )}
@@ -587,7 +588,7 @@ export default function LiveViewPage() {
                         event.stopPropagation();
                         removeCameraFromSlot(i);
                       }}
-                      className="h-7 w-7 rounded-md border border-white/15 bg-black/70 text-white backdrop-blur hover:bg-red-500/80"
+                      className="h-7 w-7 rounded-md border border-white/15 bg-black/70 text-white backdrop-blur hover:bg-[hsl(var(--destructive)_/_0.8)]"
                       title="Remover câmera deste quadrado"
                     >
                       <X className="w-3.5 h-3.5 mx-auto" />
@@ -652,7 +653,7 @@ export default function LiveViewPage() {
                     {zoneFilters.map(z => <SelectItem key={z} value={z} className="text-xs">{z === '__all__' ? 'Todas as zonas' : z}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as StatusFilter)}>
                   <SelectTrigger className="h-8 text-[10px]">
                     <SelectValue />
                   </SelectTrigger>

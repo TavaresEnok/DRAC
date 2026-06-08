@@ -11,22 +11,22 @@ export const RECORDING_MODE_COPY: Record<RecordingMode, { label: string; detail:
   manual: {
     label: 'Manual',
     detail: 'Só grava quando o operador liga.',
-    className: 'border-slate-500/35 bg-slate-500/10 text-slate-300',
+    className: 'border-border bg-muted text-muted-foreground',
   },
   motion: {
     label: 'Movimento',
     detail: 'Armada: grava quando detectar movimento e para após o período sem movimento.',
-    className: 'border-amber-500/35 bg-amber-500/10 text-amber-300',
+    className: 'border-[hsl(var(--status-warning)_/_0.35)] bg-[hsl(var(--status-warning)_/_0.1)] text-[hsl(var(--status-warning))]',
   },
   continuous: {
     label: 'Contínua',
     detail: 'Intenção 24h: o sistema tenta manter gravando.',
-    className: 'border-sky-500/35 bg-sky-500/10 text-sky-300',
+    className: 'border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.1)] text-[hsl(var(--primary))]',
   },
   schedule: {
     label: 'Agenda',
     detail: 'Segue janela de agenda configurada.',
-    className: 'border-indigo-500/35 bg-indigo-500/10 text-indigo-300',
+    className: 'border-[hsl(var(--chart-5)_/_0.35)] bg-[hsl(var(--chart-5)_/_0.1)] text-[hsl(var(--chart-5))]',
   },
 };
 

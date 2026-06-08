@@ -32,10 +32,10 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 const roleColor = (role: string) => {
-  if (role === 'SUPER_ADMIN') return 'bg-purple-500/15 text-purple-400 border-purple-500/30';
-  if (role === 'ADMIN') return 'bg-blue-500/15 text-blue-400 border-blue-500/30';
-  if (role === 'OPERATOR') return 'bg-orange-500/15 text-orange-400 border-orange-500/30';
-  return 'bg-slate-500/15 text-slate-400 border-slate-500/30';
+  if (role === 'SUPER_ADMIN') return 'bg-[hsl(var(--chart-5)_/_0.15)] text-[hsl(var(--chart-5))] border-[hsl(var(--chart-5)_/_0.3)]';
+  if (role === 'ADMIN') return 'bg-[hsl(var(--primary)_/_0.15)] text-[hsl(var(--primary))] border-[hsl(var(--primary)_/_0.3)]';
+  if (role === 'OPERATOR') return 'bg-[hsl(var(--status-warning)_/_0.15)] text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning)_/_0.3)]';
+  return 'bg-muted text-muted-foreground border-border';
 };
 
 type Matrix = Record<string, Record<string, boolean>>;
@@ -121,19 +121,19 @@ export default function PerfisPage() {
           As permissões abaixo são aplicadas de verdade no servidor (ex.: configuração de câmeras e logs de auditoria).
           O Super Admin nunca é bloqueado.
         </p>
-        <div className="overflow-x-auto rounded-xl border border-border">
+        <div className="overflow-x-auto rounded-lg border border-border bg-card/60">
           <table className="w-full text-sm">
-            <thead className="bg-card border-b border-border">
+            <thead className="border-b border-border bg-background/65">
               <tr>
-                <th className="text-left px-4 py-3 text-xs font-medium text-muted-foreground w-52">Permissão</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground w-52">Permissão</th>
                 {roles.map((role) => (
                   <th key={role} className="px-4 py-3 text-center">
                     <div className="flex flex-col items-center gap-1">
-                      <Badge variant="outline" className={cn('text-[10px]', roleColor(role))}>{ROLE_LABELS[role] ?? role}</Badge>
+                      <Badge variant="outline" className={cn('text-[11px] font-semibold', roleColor(role))}>{ROLE_LABELS[role] ?? role}</Badge>
                       <button
                         onClick={() => openEdit(role)}
                         disabled={role === 'SUPER_ADMIN'}
-                        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 disabled:hover:text-muted-foreground"
+                        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-55 disabled:hover:text-muted-foreground"
                         title={role === 'SUPER_ADMIN' ? 'Super Admin tem acesso total e não pode ser limitado' : 'Editar permissões'}
                       >
                         <Edit2 className="h-2.5 w-2.5" />Editar
@@ -145,18 +145,18 @@ export default function PerfisPage() {
             </thead>
             <tbody>
               {keys.map((key, i) => (
-                <tr key={key} className={cn('border-b border-border', i % 2 === 0 ? 'bg-transparent' : 'bg-card/30')}>
+                <tr key={key} className={cn('border-b border-border/75 transition-colors hover:bg-accent/35', i % 2 === 0 ? 'bg-transparent' : 'bg-background/35')}>
                   <td className="px-4 py-3">
-                    <p className="text-xs font-medium">{PERMISSION_LABELS[key]?.label ?? key}</p>
-                    <p className="text-[10px] text-muted-foreground">{PERMISSION_LABELS[key]?.desc ?? ''}</p>
+                    <p className="text-[13px] font-semibold text-foreground">{PERMISSION_LABELS[key]?.label ?? key}</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">{PERMISSION_LABELS[key]?.desc ?? ''}</p>
                   </td>
                   {roles.map((role) => {
                     const allowed = matrix[role]?.[key];
                     return (
                       <td key={role} className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center">
-                          <div className={cn('h-5 w-5 rounded-full border flex items-center justify-center', allowed ? 'bg-green-500/15 border-green-500/30' : 'bg-slate-500/10 border-border')}>
-                            {allowed ? <Check className="h-3 w-3 text-green-400" /> : <X className="h-3 w-3 text-muted-foreground/40" />}
+                          <div className={cn('h-6 w-6 rounded-full border flex items-center justify-center', allowed ? 'bg-[hsl(var(--status-online)_/_0.18)] border-[hsl(var(--status-online)_/_0.45)]' : 'bg-muted/70 border-border')}>
+                            {allowed ? <Check className="h-3.5 w-3.5 text-[hsl(var(--status-online))]" /> : <X className="h-3.5 w-3.5 text-muted-foreground/65" />}
                           </div>
                         </div>
                       </td>

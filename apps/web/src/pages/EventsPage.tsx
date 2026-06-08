@@ -17,9 +17,10 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   recording_gap: 'Lacuna de Gravação',
   face_detected: 'Rosto Detectado',
   HEALTH_CAMERA_OFFLINE: 'Câmera Offline (Saúde)',
+  HEALTH_CAMERA_RECOVERED: 'Câmera Recuperada (Saúde)',
   HEALTH_RECORDING_STALE: 'Rotina interna de gravação',
   HEALTH_RECORDING_RECOVERED: 'Gravação Recuperada',
-  HEALTH_AUTO_RECOVERED: 'Câmera Recuperada (Saúde)',
+  HEALTH_AUTO_RECOVERED: 'Recuperação Automática (Saúde)',
   HEALTH_RECORDING_RECONNECT_REQUESTED: 'Reconexão de Gravação Solicitada',
   HEALTH_RECORDING_RECONNECT_SUCCESS: 'Reconexão de Gravação Concluída',
   HEALTH_RECORDING_RECONNECT_FAILED: 'Falha na Reconexão de Gravação',
@@ -48,14 +49,16 @@ export default function EventosPage() {
   const [healthFilter, setHealthFilter] = useState('all');
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [localAcknowledged, setLocalAcknowledged] = useState<Set<string>>(new Set());
   const [drawerEvent, setDrawerEvent] = useState<VMSEvent | null>(events[0] ?? null);
 
   const filtered = events.filter(evt => {
     if (search && !evt.cameraName.toLowerCase().includes(search.toLowerCase()) && !evt.description.toLowerCase().includes(search.toLowerCase())) return false;
     if (sevFilter !== 'all' && evt.severity !== sevFilter) return false;
     if (typeFilter !== 'all' && evt.type !== typeFilter) return false;
-    if (ackFilter === 'unacknowledged' && evt.acknowledged) return false;
-    if (ackFilter === 'acknowledged' && !evt.acknowledged) return false;
+    const acknowledged = evt.acknowledged || localAcknowledged.has(evt.id);
+    if (ackFilter === 'unacknowledged' && acknowledged) return false;
+    if (ackFilter === 'acknowledged' && !acknowledged) return false;
     if (healthFilter === 'health' && !evt.type.startsWith('HEALTH_')) return false;
     if (healthFilter === 'stream' && !evt.type.startsWith('STREAM_')) return false;
     if (healthFilter === 'degraded' && evt.type !== 'HEALTH_RECORDING_STALE') return false;
@@ -71,8 +74,8 @@ export default function EventosPage() {
   const stats = useMemo(() => ({
     total: filtered.length,
     critical: filtered.filter(e => e.severity === 'critical').length,
-    open: filtered.filter(e => !e.acknowledged).length,
-  }), [filtered]);
+    open: filtered.filter(e => !e.acknowledged && !localAcknowledged.has(e.id)).length,
+  }), [filtered, localAcknowledged]);
 
   const toggleSelect = (id: string) => {
     setSelected(s => {
@@ -82,10 +85,22 @@ export default function EventosPage() {
     });
   };
 
+  const isAcknowledged = (event?: VMSEvent | null) => Boolean(event?.acknowledged || (event && localAcknowledged.has(event.id)));
+
+  const acknowledgeEvents = (ids: string[]) => {
+    if (!ids.length) return;
+    setLocalAcknowledged((current) => {
+      const next = new Set(current);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+    setSelected(new Set());
+  };
+
   return (
     <div className="h-full min-h-0 p-5">
       <div className="grid h-full min-h-0 grid-cols-1 xl:grid-cols-[390px_minmax(0,1fr)] gap-4">
-        <div className="flex min-h-0 flex-col rounded-2xl border border-border bg-card overflow-hidden">
+        <div className="flex min-h-0 flex-col rounded-lg border border-border bg-card overflow-hidden">
           <div className="px-4 pt-4 pb-3 border-b border-border space-y-3">
             <div className="space-y-1">
               <h2 className="text-[14px] font-semibold tracking-tight">Eventos</h2>
@@ -162,7 +177,7 @@ export default function EventosPage() {
             {selected.size > 0 && (
               <div className="flex items-center gap-2 rounded-xl border border-border bg-[hsl(var(--muted))] px-3 py-2">
                 <span className="text-[11px] text-[hsl(var(--muted-foreground))]">{selected.size} selecionados</span>
-                <button className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-[11px] hover:bg-[hsl(var(--accent))] transition-colors">
+                <button onClick={() => acknowledgeEvents([...selected])} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-[11px] hover:bg-[hsl(var(--accent))] transition-colors">
                   <CheckCheck className="w-3.5 h-3.5" />
                   Reconhecer
                 </button>
@@ -185,7 +200,7 @@ export default function EventosPage() {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
                     onClick={() => setDrawerEvent(evt)}
-                    className={`w-full text-left rounded-2xl border px-3 py-3 transition-all ${isActive ? 'border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.06)]' : 'border-border bg-background hover:bg-[hsl(var(--accent))]'}`}
+                    className={`w-full text-left rounded-lg border px-3 py-3 transition-all ${isActive ? 'border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.06)]' : 'border-border bg-background hover:bg-[hsl(var(--accent))]'}`}
                   >
                     <div className="flex items-start gap-3">
                       <div className="mt-0.5 shrink-0">
@@ -204,7 +219,7 @@ export default function EventosPage() {
                         <div className="mt-2 flex items-center gap-2 text-[10px] text-[hsl(var(--muted-foreground))]">
                           <span>{format(new Date(evt.timestamp), 'HH:mm:ss')}</span>
                           <span>•</span>
-                          <span>{evt.acknowledged ? 'Reconhecido' : 'Aberto'}</span>
+                          <span>{isAcknowledged(evt) ? 'Reconhecido' : 'Aberto'}</span>
                         </div>
                       </div>
                     </div>
@@ -225,7 +240,7 @@ export default function EventosPage() {
 
         <div className="flex min-h-0 flex-col gap-4">
           <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_0.9fr] gap-4 min-h-0 flex-1">
-            <div className="rounded-2xl border border-border bg-card overflow-hidden min-h-0 flex flex-col">
+            <div className="rounded-lg border border-border bg-card overflow-hidden min-h-0 flex flex-col">
               <div className="px-4 py-3 border-b border-border flex items-start justify-between gap-3">
                 <div>
                   <h3 className="mt-1 text-[16px] font-semibold tracking-tight">{current ? EVENT_TYPE_LABELS[current.type] ?? current.type : 'Sem seleção'}</h3>
@@ -250,7 +265,7 @@ export default function EventosPage() {
                   ))}
                 </div>
 
-                <div className="rounded-2xl border border-border bg-background overflow-hidden">
+                <div className="rounded-lg border border-border bg-background overflow-hidden">
                   <div className="relative aspect-video bg-[hsl(220_20%_7%)] overflow-hidden">
                     <div className="absolute inset-0 opacity-70" style={{ background: 'linear-gradient(180deg, hsl(220 20% 9% / 0.95), hsl(220 20% 6% / 1))' }} />
                     <div className="absolute inset-0 opacity-25 bg-[linear-gradient(to_right,hsl(var(--border))_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border))_1px,transparent_1px)] bg-[size:24px_24px]" />
@@ -273,8 +288,8 @@ export default function EventosPage() {
                 <div className="grid grid-cols-3 gap-2">
                   {[
                     { label: 'Severidade', value: current ? severityLabel(current.severity) : '—' },
-                    { label: 'Status', value: current?.acknowledged ? 'Reconhecido' : 'Aberto' },
-                    { label: 'Evento', value: current?.type.replace(/_/g, ' ') ?? '—' },
+                    { label: 'Status', value: isAcknowledged(current) ? 'Reconhecido' : 'Aberto' },
+                    { label: 'Evento', value: current ? (EVENT_TYPE_LABELS[current.type] ?? current.type.replace(/_/g, ' ')) : '—' },
                   ].map(card => (
                     <div key={card.label} className="rounded-xl border border-border px-3 py-2 bg-[hsl(var(--muted))]">
                       <div className="text-[9px] uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">{card.label}</div>
@@ -285,7 +300,7 @@ export default function EventosPage() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-border bg-card overflow-hidden min-h-0 flex flex-col">
+            <div className="rounded-lg border border-border bg-card overflow-hidden min-h-0 flex flex-col">
               <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                 <div>
                   <div className="text-[10px] font-mono uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">Contexto da câmera</div>
@@ -298,7 +313,7 @@ export default function EventosPage() {
               </div>
 
               <div className="p-4 space-y-4 overflow-y-auto">
-                <div className="rounded-2xl border border-border bg-[hsl(var(--muted))] p-4 space-y-3">
+                <div className="rounded-lg border border-border bg-[hsl(var(--muted))] p-4 space-y-3">
                   <div className="flex items-center justify-between gap-2">
                     <div>
                       <div className="text-[11px] font-semibold">{currentCamera?.name ?? 'Câmera indisponível'}</div>
@@ -327,7 +342,7 @@ export default function EventosPage() {
                   </details>
                 </div>
 
-                <div className="rounded-2xl border border-border overflow-hidden bg-[hsl(220_20%_7%)]">
+                <div className="rounded-lg border border-border overflow-hidden bg-[hsl(220_20%_7%)]">
                   <div className="aspect-video relative">
                     <div className="absolute inset-0 bg-[linear-gradient(to_bottom,hsl(220_20%_10%_/_0.15),hsl(220_20%_4%_/_0.75))]" />
                     <div className="absolute inset-0 opacity-30 bg-[linear-gradient(to_right,hsl(var(--border))_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border))_1px,transparent_1px)] bg-[size:28px_28px]" />
@@ -342,7 +357,7 @@ export default function EventosPage() {
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-border p-4">
+                <div className="rounded-lg border border-border p-4">
                   <div className="flex items-center gap-2 mb-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">
                     <Clock className="w-3.5 h-3.5" />
                     Linha do evento
@@ -351,7 +366,7 @@ export default function EventosPage() {
                     {[
                       'Alerta capturado pelo analítico da câmera.',
                       'Correlação automática com zona e severidade.',
-                      current?.acknowledged ? 'Evento já reconhecido pelo operador.' : 'Evento aguardando reconhecimento.',
+                      isAcknowledged(current) ? 'Evento já reconhecido pelo operador.' : 'Evento aguardando reconhecimento.',
                     ].map((line, i) => (
                       <div key={line} className="flex items-start gap-2">
                         <span className="mt-1 w-1.5 h-1.5 rounded-full bg-[hsl(var(--primary))] shrink-0" />
@@ -362,11 +377,11 @@ export default function EventosPage() {
                 </div>
 
                 <div className="flex gap-2">
-                  <button className="flex-1 h-9 rounded-xl bg-[hsl(var(--primary)_/_0.12)] border border-[hsl(var(--primary)_/_0.28)] text-[hsl(var(--primary))] text-[11px] hover:bg-[hsl(var(--primary)_/_0.16)] transition-colors flex items-center justify-center gap-2">
+                  <button onClick={() => current && acknowledgeEvents([current.id])} disabled={!current || isAcknowledged(current)} className="flex-1 h-9 rounded-xl bg-[hsl(var(--primary)_/_0.12)] border border-[hsl(var(--primary)_/_0.28)] text-[hsl(var(--primary))] text-[11px] hover:bg-[hsl(var(--primary)_/_0.16)] transition-colors flex items-center justify-center gap-2 disabled:opacity-45">
                     <CheckCheck className="w-4 h-4" />
-                    Reconhecer
+                    {isAcknowledged(current) ? 'Reconhecido' : 'Reconhecer'}
                   </button>
-                  <button className="flex-1 h-9 rounded-xl border border-border text-[11px] hover:bg-[hsl(var(--accent))] transition-colors flex items-center justify-center gap-2">
+                  <button onClick={() => current && setLocation(`/evidence?eventId=${current.id}`)} disabled={!current} className="flex-1 h-9 rounded-xl border border-border text-[11px] hover:bg-[hsl(var(--accent))] transition-colors flex items-center justify-center gap-2 disabled:opacity-45">
                     <Archive className="w-4 h-4" />
                     Evidência
                   </button>

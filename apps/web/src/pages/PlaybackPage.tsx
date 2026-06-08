@@ -1014,7 +1014,7 @@ export default function PlaybackPage() {
                     <div className="truncate text-xs font-semibold">{camera.name}</div>
                     <div className="text-[10px] text-[hsl(var(--muted-foreground))]">{current ? `${format(new Date(current.startedAt), 'HH:mm:ss')} - ${current.endedAt ? format(new Date(current.endedAt), 'HH:mm:ss') : '--'}` : 'Sem gravação neste horário'}</div>
                   </div>
-                  <span className={`rounded px-2 py-1 text-[10px] ${current ? 'bg-emerald-500/10 text-emerald-300' : 'bg-white/5 text-[hsl(var(--muted-foreground))]'}`}>{current ? 'Disponível' : 'Vazio'}</span>
+                  <span className={`rounded px-2 py-1 text-[10px] ${current ? 'bg-[hsl(var(--status-online)_/_0.1)] text-[hsl(var(--status-online))]' : 'bg-white/5 text-[hsl(var(--muted-foreground))]'}`}>{current ? 'Disponível' : 'Vazio'}</span>
                 </div>
                 <div className="relative h-8 overflow-hidden rounded bg-[hsl(var(--muted))]" onClick={(event) => onTimelineClick(event.clientX, event.currentTarget.getBoundingClientRect())}>
                   {segments.filter((segment) => segment.end >= viewStart && segment.start <= viewEnd).map((segment, index) => {
@@ -1056,11 +1056,11 @@ export default function PlaybackPage() {
         </div>
         <div className={`rounded-lg border px-3 py-2 ${
           selectedHealth?.needsAttention
-            ? 'border-red-500/30 bg-red-500/10'
+            ? 'border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)]'
             : 'border-border bg-card'
         }`}>
           <div className="text-[10px] uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">Saúde</div>
-          <div className={`mt-1 text-sm font-semibold ${selectedHealth?.needsAttention ? 'text-red-300' : 'text-emerald-400'}`}>
+          <div className={`mt-1 text-sm font-semibold ${selectedHealth?.needsAttention ? 'text-[hsl(var(--destructive))]' : 'text-[hsl(var(--status-online))]'}`}>
             {selectedHealth?.needsAttention ? selectedHealth.alertReason ?? 'Atenção necessária' : 'Operacional'}
           </div>
         </div>
@@ -1174,7 +1174,7 @@ export default function PlaybackPage() {
 
             {videoError && !loadingPlayback && !loadingRecordings && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/55">
-                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-center text-xs text-red-200">
+                <div className="rounded-lg border border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] px-4 py-3 text-center text-xs text-[hsl(var(--destructive))]">
                   <div>{videoError}</div>
                   <button
                     type="button"
@@ -1183,7 +1183,7 @@ export default function PlaybackPage() {
                       setVideoError(null);
                       setReloadNonce((current) => current + 1);
                     }}
-                    className="mt-2 rounded border border-red-300/40 px-2.5 py-1 text-[10px] text-red-100 hover:bg-red-500/20"
+                    className="mt-2 rounded border border-[hsl(var(--destructive)_/_0.4)] px-2.5 py-1 text-[10px] text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive)_/_0.2)]"
                   >
                     Tentar novamente este segmento
                   </button>
@@ -1490,7 +1490,7 @@ export default function PlaybackPage() {
                       >
                         {downloadingRecordingId === item.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                       </button>
-                      <span className={`h-2 w-2 rounded-full ${usable ? 'bg-emerald-400/80' : 'bg-red-400/80'}`} />
+                      <span className={`h-2 w-2 rounded-full ${usable ? 'bg-[hsl(var(--status-online)_/_0.8)]' : 'bg-[hsl(var(--destructive)_/_0.8)]'}`} />
                     </div>
                   </div>
                   <div className="mt-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">

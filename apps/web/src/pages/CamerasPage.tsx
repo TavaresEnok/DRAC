@@ -44,7 +44,7 @@ const STATUS_LABEL: Record<(typeof STATUSES)[number], string> = {
 };
 
 const STATUS_BADGE: Record<string, string> = {
-  online: 'bg-[hsl(150,65%,42%_/_0.12)] text-[hsl(150,65%,42%)] border-[hsl(150,65%,42%_/_0.3)]',
+  online: 'bg-[hsl(var(--status-online)_/_0.12)] text-[hsl(var(--status-online))] border-[hsl(var(--status-online)_/_0.3)]',
   recording: 'bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))] border-[hsl(var(--destructive)_/_0.3)]',
   motion: 'bg-[hsl(var(--chart-2)_/_0.12)] text-[hsl(var(--chart-2))] border-[hsl(var(--chart-2)_/_0.3)]',
   alarm: 'bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))] border-[hsl(var(--destructive)_/_0.3)]',
@@ -498,10 +498,25 @@ function WizardModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}>
-      <div className="bg-card border border-border rounded-lg w-[520px] overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-          <h3 className="text-sm font-semibold">Assistente de Nova Câmera</h3>
+    <motion.div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-md"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 14, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 8, scale: 0.98 }}
+        transition={{ duration: 0.16, ease: 'easeOut' }}
+        className="w-full max-w-[560px] overflow-hidden rounded-lg border border-border bg-card shadow-sm"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-border bg-background/40">
+          <div>
+            <h3 className="text-sm font-semibold">Assistente de Nova Câmera</h3>
+            <p className="mt-1 text-[11px] text-muted-foreground">Informe o básico. O DRAC detecta perfis, paths e origem automaticamente.</p>
+          </div>
           <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded hover:bg-[hsl(var(--accent))] transition-colors">
             <X className="w-4 h-4" />
           </button>
@@ -510,7 +525,7 @@ function WizardModal({
         <div className="flex items-center px-5 py-3 border-b border-border">
           {steps.map((s, i) => (
             <div key={s} className="flex items-center">
-              <div className={`flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-bold transition-colors ${i === step ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : i < step ? 'bg-[hsl(var(--chart-3))] text-white' : 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'}`}>
+              <div className={`flex items-center justify-center w-6 h-6 rounded-full border text-[10px] font-bold transition-colors ${i === step ? 'border-[hsl(var(--primary)_/_0.45)] bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : i < step ? 'border-[hsl(var(--status-online)_/_0.35)] bg-[hsl(var(--status-online)_/_0.14)] text-[hsl(var(--status-online))]' : 'border-border bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'}`}>
                 {i < step ? <Check className="w-3 h-3" /> : i + 1}
               </div>
               <span className={`ml-1.5 text-[11px] ${i === step ? 'text-foreground font-medium' : 'text-[hsl(var(--muted-foreground))]'}`}>{s}</span>
@@ -579,7 +594,7 @@ function WizardModal({
                   <div className="mt-2 space-y-1.5">
                     {probeSteps.map((item) => (
                       <div key={item.key} className="flex items-start justify-between gap-3">
-                        <span className={item.status === 'error' ? 'text-red-300' : item.status === 'warning' ? 'text-amber-300' : 'text-emerald-300'}>
+                        <span className={item.status === 'error' ? 'text-[hsl(var(--destructive))]' : item.status === 'warning' ? 'text-[hsl(var(--status-warning))]' : 'text-[hsl(var(--status-online))]'}>
                           {item.label}
                         </span>
                         <span className="min-w-0 flex-1 text-right">
@@ -591,7 +606,7 @@ function WizardModal({
                 </details>
               )}
               {detectedMax && (
-                <div className="rounded border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-300">
+                <div className="rounded border border-[hsl(var(--status-online)_/_0.25)] bg-[hsl(var(--status-online)_/_0.1)] px-3 py-2 text-[11px] text-[hsl(var(--status-online))]">
                   Câmera detectada. Live, gravação e IA foram configuradas automaticamente.
                   <details className="mt-1 text-[hsl(var(--muted-foreground))]">
                     <summary className="cursor-pointer text-[10px]">Detalhes</summary>
@@ -608,10 +623,10 @@ function WizardModal({
               {compatibility && (
                 <div className={`rounded border px-3 py-2 text-[11px] ${
                   compatibility.state === 'ideal'
-                    ? 'border-emerald-500/25 bg-emerald-500/10'
+                    ? 'border-[hsl(var(--status-online)_/_0.25)] bg-[hsl(var(--status-online)_/_0.1)]'
                     : compatibility.state === 'attention'
-                      ? 'border-red-500/25 bg-red-500/10'
-                      : 'border-amber-500/25 bg-amber-500/10'
+                      ? 'border-[hsl(var(--destructive)_/_0.25)] bg-[hsl(var(--destructive)_/_0.1)]'
+                      : 'border-[hsl(var(--status-warning)_/_0.25)] bg-[hsl(var(--status-warning)_/_0.1)]'
                 }`}>
                   <div className="font-medium text-foreground">{compatibility.summary}</div>
                   <div className="mt-1 text-[hsl(var(--muted-foreground))]">
@@ -625,7 +640,7 @@ function WizardModal({
                       <div>Análise: <span className="text-foreground">{compatibility.automaticProfile.analytics}</span></div>
                       {compatibility.hints.map((hint) => (
                         <div key={hint.code} className="border-t border-border pt-2">
-                          <div className={hint.severity === 'critical' ? 'text-red-300' : hint.severity === 'warning' ? 'text-amber-300' : 'text-sky-300'}>
+                          <div className={hint.severity === 'critical' ? 'text-[hsl(var(--destructive))]' : hint.severity === 'warning' ? 'text-[hsl(var(--status-warning))]' : 'text-[hsl(var(--primary))]'}>
                             {hint.title}
                           </div>
                           <div>{hint.message}</div>
@@ -800,8 +815,8 @@ function WizardModal({
             className="px-4 py-2 rounded bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
           >{isSaving ? 'Adicionando...' : step < steps.length - 1 ? 'Próximo' : 'Adicionar Câmera'}</button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -1276,25 +1291,28 @@ export default function CamerasPage() {
                   className="ops-card overflow-hidden hover:-translate-y-px transition-transform cursor-pointer"
                   onClick={() => setEditCamera(cam)}
                 >
-                  <div className="relative h-36 overflow-hidden" style={{ background: cam.thumbnailColor ? `hsl(${cam.thumbnailColor})` : 'hsl(222 20% 9%)' }}>
+                  <div className="relative h-36 overflow-hidden bg-[hsl(220_18%_8%)]">
                     <div className={`absolute top-0 inset-x-0 h-[2.5px] ${STATUS_DOT[cam.status] ?? STATUS_DOT.offline}`} />
                     <div className="absolute top-2 left-2 z-10">
-                      <span className="text-[9px] text-white/60 bg-black/40 px-1.5 py-px rounded-sm font-mono">{cam.code}</span>
+                      <span className="rounded border border-white/10 bg-black/35 px-1.5 py-px font-mono text-[9px] text-white/65">{cam.code}</span>
                     </div>
                     {cam.status === 'recording' && (
                       <div className="absolute top-2 right-2 z-10">
                         <span className="w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-rec))] rec-pulse inline-block" />
                       </div>
                     )}
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <CameraIcon className="h-8 w-8 text-white/25" />
+                    </div>
                     {isOffline ? (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/40">
-                        <CameraIcon className="w-5 h-5 text-muted-foreground/50" />
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/55">
+                        <CameraIcon className="w-5 h-5 text-white/35" />
                         <span className="text-[9px] text-muted-foreground/60 font-mono uppercase tracking-widest">
                           {cam.status === 'no_signal' ? 'Sem sinal' : 'Offline'}
                         </span>
                       </div>
                     ) : (
-                      <div className="absolute inset-0 camera-scanline" />
+                      <div className="absolute inset-0 camera-scanline opacity-45" />
                     )}
                     <div className="absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-black/60 to-transparent" />
                   </div>
@@ -1358,8 +1376,8 @@ export default function CamerasPage() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
-              <div className="h-28 rounded border border-border flex items-center justify-center" style={{ background: 'hsl(210,15%,8%)' }}>
-                <CameraIcon className="w-10 h-10 text-[hsl(var(--muted-foreground)_/_0.2)]" />
+              <div className="h-28 rounded border border-border bg-[hsl(220_18%_8%)] flex items-center justify-center">
+                <CameraIcon className="w-10 h-10 text-white/25" />
               </div>
               <div>
                 <div className="text-sm font-semibold mb-0.5">{liveCam.name}</div>
@@ -1421,8 +1439,8 @@ export default function CamerasPage() {
                     onClick={() => void runManualRecording(liveCam, recordingActive ? 'stop' : 'start')}
                     className={`w-full h-9 rounded border text-xs flex items-center justify-center hover:bg-[hsl(var(--accent))] transition-colors disabled:opacity-45 ${
                       recordingActive
-                        ? 'border-red-500/55 text-red-400'
-                        : 'border-emerald-500/55 text-emerald-400'
+                        ? 'border-[hsl(var(--destructive)_/_0.55)] text-[hsl(var(--destructive))]'
+                        : 'border-[hsl(var(--status-online)_/_0.55)] text-[hsl(var(--status-online))]'
                     }`}
                     disabled={manualRecordingLoading?.cameraId === selectedCam.id}
                     title={recordingActive ? 'Parar gravação manual' : 'Iniciar gravação manual'}
@@ -1437,8 +1455,8 @@ export default function CamerasPage() {
                     onClick={() => void runMotionRecording(liveCam)}
                     className={`w-full h-9 rounded border text-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-45 ${
                       motionActive
-                        ? 'border-red-500/55 bg-red-500/10 text-red-400 hover:bg-red-500/15'
-                        : 'border-emerald-500/55 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15'
+                        ? 'border-[hsl(var(--destructive)_/_0.55)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive)_/_0.15)]'
+                        : 'border-[hsl(var(--status-online)_/_0.55)] bg-[hsl(var(--status-online)_/_0.1)] text-[hsl(var(--status-online))] hover:bg-[hsl(var(--status-online)_/_0.15)]'
                     }`}
                     disabled={motionRecordingLoadingCameraId === selectedCam.id}
                     title={motionActive ? 'Parar clipe atual por movimento' : 'Armar gravação por movimento'}

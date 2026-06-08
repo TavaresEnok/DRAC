@@ -65,7 +65,8 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
 
   const cameraId = camera?.id ?? null;
   useEffect(() => {
-    if (!cameraId || !accessToken) return;
+    const selectedCamera = camera;
+    if (!cameraId || !accessToken || !selectedCamera) return;
     let cancelled = false;
     setForm(null);
     setConfirmDelete(false);
@@ -75,9 +76,9 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
       .then(({ data }) => {
         if (cancelled) return;
         setForm({
-          name: data.name ?? camera.name,
-          ip: data.ip ?? camera.ipAddress,
-          rtspPort: String(data.rtspPort ?? camera.rtspPort ?? 554),
+          name: data.name ?? selectedCamera.name,
+          ip: data.ip ?? selectedCamera.ipAddress,
+          rtspPort: String(data.rtspPort ?? selectedCamera.rtspPort ?? 554),
           username: data.username ?? '',
           password: '',
           rtspPath: data.rtspPath ?? '',
@@ -184,11 +185,11 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
           <>
             <div className="flex-1 overflow-y-auto">
               <Tabs defaultValue="geral" className="flex flex-col">
-                <TabsList className="mx-4 mt-4 shrink-0 grid grid-cols-4 h-9">
-                  <TabsTrigger value="geral" className="text-xs">Geral</TabsTrigger>
-                  <TabsTrigger value="stream" className="text-xs">Stream</TabsTrigger>
-                  <TabsTrigger value="gravacao" className="text-xs">Gravação</TabsTrigger>
-                  <TabsTrigger value="ia" className="text-xs">IA</TabsTrigger>
+                <TabsList className="mx-4 mt-4 grid h-10 shrink-0 grid-cols-4 gap-1 rounded-lg border border-border bg-muted/45 p-1">
+                  <TabsTrigger value="geral" className="rounded-md text-xs text-muted-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm">Geral</TabsTrigger>
+                  <TabsTrigger value="stream" className="rounded-md text-xs text-muted-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm">Stream</TabsTrigger>
+                  <TabsTrigger value="gravacao" className="rounded-md text-xs text-muted-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm">Gravação</TabsTrigger>
+                  <TabsTrigger value="ia" className="rounded-md text-xs text-muted-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm">IA</TabsTrigger>
                 </TabsList>
 
                 {/* GERAL */}

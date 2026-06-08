@@ -647,7 +647,7 @@ export default function InvestigationPage() {
                         <div className="text-white/55">{camera.name}</div>
                       </div>
                       <div className="flex items-center gap-2 text-white/55">
-                        <span className="rounded border border-red-500/30 bg-red-500/10 px-1.5 py-0.5 text-red-300">Gravação</span>
+                        <span className="rounded border border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] px-1.5 py-0.5 text-[hsl(var(--destructive))]">Gravação</span>
                         <span>{camera.ptzCapable ? 'PTZ' : 'Fixa'}</span>
                       </div>
                     </div>

@@ -103,7 +103,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (value: boo
     <button
       type="button"
       onClick={() => onChange(!checked)}
-      className={`relative h-7 w-12 rounded-full border transition-colors ${checked ? 'border-emerald-500/40 bg-emerald-500/20' : 'border-border bg-muted'}`}
+      className={`relative h-7 w-12 rounded-full border transition-colors ${checked ? 'border-[hsl(var(--status-online)_/_0.4)] bg-[hsl(var(--status-online)_/_0.2)]' : 'border-border bg-muted'}`}
       aria-pressed={checked}
     >
       <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-5' : 'translate-x-1'}`} />
@@ -115,7 +115,7 @@ function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className={`h-10 w-full rounded-xl border border-border bg-background/70 px-3 text-sm outline-none transition focus:border-cyan-500/60 focus:ring-2 focus:ring-cyan-500/10 ${props.className ?? ''}`}
+      className={`h-10 w-full rounded-xl border border-border bg-background/70 px-3 text-sm outline-none transition focus:border-[hsl(var(--primary)_/_0.6)] focus:ring-2 focus:ring-[hsl(var(--primary)_/_0.1)] ${props.className ?? ''}`}
     />
   );
 }
@@ -123,9 +123,9 @@ function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
 function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'danger' | 'success' | 'warning' }) {
   const toneClass = {
     neutral: 'border-border bg-background text-muted-foreground',
-    danger: 'border-red-500/25 bg-red-500/10 text-red-300',
-    success: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
-    warning: 'border-amber-500/25 bg-amber-500/10 text-amber-300',
+    danger: 'border-[hsl(var(--destructive)_/_0.25)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))]',
+    success: 'border-[hsl(var(--status-online)_/_0.25)] bg-[hsl(var(--status-online)_/_0.1)] text-[hsl(var(--status-online))]',
+    warning: 'border-[hsl(var(--status-warning)_/_0.25)] bg-[hsl(var(--status-warning)_/_0.1)] text-[hsl(var(--status-warning))]',
   }[tone];
   return <span className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${toneClass}`}>{children}</span>;
 }
@@ -215,7 +215,7 @@ export default function ConfiguracoesPage() {
             onClick={() => void handleSave()}
             disabled={saving || loading || !settings}
             className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:opacity-60 ${
-              saved ? 'bg-emerald-500 text-white shadow-sm shadow-emerald-500/20' : 'bg-foreground text-background hover:bg-foreground/90'
+              saved ? 'bg-[hsl(var(--status-online))] text-white shadow-sm shadow-[hsl(var(--status-online)_/_0.2)]' : 'bg-foreground text-background hover:bg-foreground/90'
             }`}
             data-testid="button-save-settings"
           >

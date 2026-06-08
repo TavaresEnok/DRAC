@@ -93,7 +93,8 @@ function ControlButton({
 export default function PTZPage() {
   const [location, setLocation] = useLocation();
   const accessToken = useAuthStore((state) => state.accessToken);
-  const ptzCameras = useVmsDataStore((state) => state.cameras.filter((camera) => camera.ptzCapable));
+  const cameras = useVmsDataStore((state) => state.cameras);
+  const ptzCameras = useMemo(() => cameras.filter((camera) => camera.ptzCapable), [cameras]);
   const [selectedCamId, setSelectedCamId] = useState('');
   const [speed, setSpeed] = useState(5);
   const [activeDirection, setActiveDirection] = useState<PTZDirection | null>(null);
@@ -298,7 +299,7 @@ export default function PTZPage() {
 
       <div className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[minmax(0,1.35fr)_420px]">
         <div className="flex min-h-0 flex-col gap-4">
-          <div className="relative min-h-[320px] flex-1 overflow-hidden rounded-[22px] border border-border bg-[linear-gradient(160deg,hsl(222_22%_9%),hsl(220_18%_7%))] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+          <div className="relative min-h-[320px] flex-1 overflow-hidden rounded-lg border border-border bg-[linear-gradient(160deg,hsl(222_22%_9%),hsl(220_18%_7%))] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
             {selectedCam?.isOnline ? (
               <LiveStreamPlayer
                 cameraId={selectedCam.id}
@@ -376,7 +377,7 @@ export default function PTZPage() {
               {commandState === 'idle' ? 'Aguardando comando.' : lastCommand}
             </div>
               {ptzRejectedByDevice && (
-                <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                <div className="mt-3 rounded-xl border border-[hsl(var(--status-warning)_/_0.3)] bg-[hsl(var(--status-warning)_/_0.1)] px-3 py-2 text-xs text-[hsl(var(--status-warning))]">
                   O equipamento respondeu ao endpoint, mas rejeitou o PTZ externo. O stream segue online; o bloqueio está no protocolo de controle desta câmera.
                 </div>
               )}
@@ -401,7 +402,7 @@ export default function PTZPage() {
         </div>
 
         <div className="flex min-h-0 flex-col gap-4">
-          <div className="rounded-[22px] border border-border bg-card/75 p-5 shadow-sm">
+          <div className="rounded-lg border border-border bg-card/75 p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <div className="text-sm font-semibold">Direção</div>
@@ -508,7 +509,7 @@ export default function PTZPage() {
             </div>
           </div>
 
-          <div className="rounded-[22px] border border-border bg-card/75 p-5 shadow-sm">
+          <div className="rounded-lg border border-border bg-card/75 p-5 shadow-sm">
             <div className="text-sm font-semibold">Passo curto</div>
             <div className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">Reposicionamento fino.</div>
             <div className="mt-4 grid grid-cols-2 gap-2">
@@ -534,7 +535,7 @@ export default function PTZPage() {
             </div>
           </div>
 
-          <div className="rounded-[22px] border border-border bg-card/75 p-5 shadow-sm">
+          <div className="rounded-lg border border-border bg-card/75 p-5 shadow-sm">
             <div className="text-sm font-semibold">Status da câmera</div>
             <div className="mt-3 space-y-2 text-xs text-[hsl(var(--muted-foreground))]">
               <div className="flex items-center justify-between rounded-xl border border-border bg-background/55 px-3 py-2">

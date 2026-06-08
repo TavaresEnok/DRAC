@@ -175,7 +175,7 @@ function buildProtocolOrder(
   preferred: LiveProtocol | null | undefined,
   codec?: string | null,
   smartOrder?: LiveProtocol[] | null,
-) {
+): LiveProtocol[] {
   const stored = getStoredProtocol(cameraId);
   const order: LiveProtocol[] = [];
   const push = (protocol?: LiveProtocol | null) => {
@@ -557,7 +557,7 @@ export function LiveStreamPlayer({
           sourceCodec,
           data?.smartLive?.protocolOrder ?? null,
         );
-        let protocolOrder = orderedProtocols.filter((protocol) => !failedProtocolsRef.current.has(protocol));
+        let protocolOrder: LiveProtocol[] = orderedProtocols.filter((protocol) => !failedProtocolsRef.current.has(protocol));
         if (!protocolOrder.length) {
           failedProtocolsRef.current.clear();
           protocolOrder = orderedProtocols;
@@ -1158,7 +1158,7 @@ export function LiveStreamPlayer({
       if (cancelled) return;
       lastRenderedFrameRef.current = {
         wallTime: Date.now(),
-        mediaTime: Number.isFinite(metadata.mediaTime) ? metadata.mediaTime : element.currentTime,
+        mediaTime: typeof metadata.mediaTime === 'number' && Number.isFinite(metadata.mediaTime) ? metadata.mediaTime : element.currentTime,
         presentedFrames: metadata.presentedFrames ?? lastRenderedFrameRef.current.presentedFrames + 1,
       };
       fpsWindowFrames += 1;
@@ -1506,7 +1506,7 @@ export function LiveStreamPlayer({
           return (
             <div key={detection.id} className="pointer-events-none absolute z-30" style={style}>
               <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-full">
-                <span className="mx-auto block h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-amber-300/90 drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)]" />
+                <span className="mx-auto block h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-[hsl(var(--status-warning)_/_0.9)] drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)]" />
               </div>
             </div>
           );
@@ -1515,13 +1515,13 @@ export function LiveStreamPlayer({
           <div
             key={detection.id}
             className={`pointer-events-none absolute z-30 rounded-sm border-2 shadow-[0_0_0_1px_rgba(0,0,0,0.45)] ${
-              isFace ? 'border-emerald-400' : 'border-amber-400'
+              isFace ? 'border-[hsl(var(--status-online))]' : 'border-[hsl(var(--status-warning))]'
             }`}
             style={style}
           >
             <span
               className={`absolute -top-6 left-0 max-w-40 truncate rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-black ${
-                isFace ? 'bg-emerald-400' : 'bg-amber-400'
+                isFace ? 'bg-[hsl(var(--status-online))]' : 'bg-[hsl(var(--status-warning))]'
               }`}
             >
               {label}
@@ -1541,7 +1541,7 @@ export function LiveStreamPlayer({
 
       {showOverlay && error && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60">
-          <div className="max-w-[85%] rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-center text-xs text-red-200">
+          <div className="max-w-[85%] rounded-lg border border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] px-4 py-3 text-center text-xs text-[hsl(var(--destructive))]">
             <div className="mb-2 flex items-center justify-center gap-2">
               <AlertTriangle className="h-4 w-4" />
               Stream indisponível
@@ -1554,7 +1554,7 @@ export function LiveStreamPlayer({
                 setIsLoading(true);
                 setReloadNonce((value) => value + 1);
               }}
-              className="mt-3 inline-flex h-8 items-center justify-center rounded border border-red-300/35 bg-black/30 px-3 text-[11px] text-red-100 hover:bg-black/45"
+              className="mt-3 inline-flex h-8 items-center justify-center rounded border border-[hsl(var(--destructive)_/_0.35)] bg-black/30 px-3 text-[11px] text-[hsl(var(--destructive))] hover:bg-black/45"
             >
               Tentar novamente
             </button>
@@ -1573,10 +1573,10 @@ export function LiveStreamPlayer({
           <span
             className={`inline-flex h-4 items-center rounded-sm border px-1.5 text-[8px] font-medium tracking-wider ${
               activeProtocol === 'WEBRTC'
-                ? 'border-emerald-500/25 bg-black/40 text-emerald-300/85'
+                ? 'border-[hsl(var(--status-online)_/_0.25)] bg-black/40 text-[hsl(var(--status-online))]/85'
                 : activeProtocol === 'HLS'
-                  ? 'border-amber-500/25 bg-black/40 text-amber-300/85'
-                  : 'border-sky-500/25 bg-black/40 text-sky-300/85'
+                  ? 'border-[hsl(var(--status-warning)_/_0.25)] bg-black/40 text-[hsl(var(--status-warning))]/85'
+                  : 'border-[hsl(var(--primary)_/_0.25)] bg-black/40 text-[hsl(var(--primary))]/85'
             }`}
           >
             {activeProtocol === 'WEBRTC'

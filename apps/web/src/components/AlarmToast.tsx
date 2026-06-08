@@ -22,7 +22,7 @@ export function AlarmToast({ open, onClose }: AlarmToastProps) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -10, scale: 0.98 }}
           transition={{ duration: 0.18 }}
-          className="fixed top-4 right-4 z-[60] w-[360px] max-w-[calc(100vw-2rem)] rounded-lg border border-[hsl(354_52%_52%_/_0.35)] bg-[hsl(220_22%_8%)] shadow-2xl overflow-hidden"
+          className="fixed top-4 right-4 z-[60] w-[360px] max-w-[calc(100vw-2rem)] rounded-lg border border-[hsl(354_52%_52%_/_0.35)] bg-[hsl(220_22%_8%)] shadow-lg overflow-hidden"
         >
           <div className="h-1 w-full bg-[hsl(354,52%,52%)]" />
           <div className="p-4">
