@@ -16,7 +16,7 @@ export class CameraGroupsService {
   async list(user: AuthUser) {
     const includeCameras = { cameras: true };
     if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) {
-      return this.prisma.cameraGroup.findMany({ where: {}, include: includeCameras, orderBy: { name: 'asc' } });
+      return this.prisma.cameraGroup.findMany({ where: { isActive: true }, include: includeCameras, orderBy: { name: 'asc' } });
     }
 
     const cameraIds = await this.accessControlService.getAccessibleCameraIds(user);

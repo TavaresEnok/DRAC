@@ -162,24 +162,19 @@ export default function MonitoramentoPage() {
   }, [cameras]);
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <h2 className="text-[18px] font-semibold tracking-tight">Armazenamento</h2>
-          <p className="text-xs text-[hsl(var(--muted-foreground))]">Espaço disponível, retenção e saúde das gravações.</p>
+    <div className="flex flex-col h-full min-h-0">
+      {isAdmin && (
+        <div className="px-6 py-3 border-b border-border shrink-0 flex items-center justify-end">
+          <button
+            onClick={() => setConfirmDeleteOpen(true)}
+            disabled={deletingVideos}
+            className="btn btn-sm border-[hsl(var(--destructive)_/_0.35)] text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive)_/_0.08)] disabled:opacity-50"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> {deletingVideos ? 'Apagando...' : 'Apagar vídeos'}
+          </button>
         </div>
-        {isAdmin && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setConfirmDeleteOpen(true)}
-              disabled={deletingVideos}
-              className="flex items-center gap-2 px-3 py-2 rounded border border-[hsl(var(--destructive)_/_0.35)] bg-card text-[hsl(var(--destructive))] text-xs hover:bg-[hsl(var(--destructive)_/_0.08)] transition-colors disabled:opacity-50"
-            >
-              <Trash2 className="w-3.5 h-3.5" /> {deletingVideos ? 'Apagando...' : 'Apagar vídeos'}
-            </button>
-          </div>
-        )}
-      </div>
+      )}
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
       <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
         <div className="bg-card border border-border rounded-xl p-5 flex items-center justify-center">
           <Ring value={percent} />
@@ -351,6 +346,7 @@ export default function MonitoramentoPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      </div>
     </div>
   );
 }

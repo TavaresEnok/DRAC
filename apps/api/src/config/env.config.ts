@@ -40,6 +40,7 @@ export const envConfig = () => ({
   alertScoreCritical: Number(process.env.ALERT_SCORE_CRITICAL ?? 60),
   alertOpenIncidentsCritical: Number(process.env.ALERT_OPEN_INCIDENTS_CRITICAL ?? 5),
   alertRecentWindowMinutes: Number(process.env.ALERT_RECENT_WINDOW_MINUTES ?? 60),
+  cookieSecure: process.env.COOKIE_SECURE, // 'true'/'false' força o valor; se ausente, deriva de NODE_ENV.
   jwtSecret: process.env.JWT_SECRET ?? '',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '8h',
   evidenceHmacSecret: process.env.EVIDENCE_HMAC_SECRET ?? '',

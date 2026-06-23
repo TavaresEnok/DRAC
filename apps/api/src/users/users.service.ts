@@ -1,10 +1,11 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { CameraPermissionLevel, User, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { SettingsService } from '../settings/settings.service';
 import { AccessControlService } from '../access-control/access-control.service';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AuthUser } from '../common/types/auth-user.type';
@@ -171,6 +172,23 @@ export class UsersService {
     });
 
     return this.sanitize(user);
+  }
+
+  async changeOwnPassword(actor: AuthUser, dto: ChangePasswordDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: actor.id } });
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
+
+    const isValid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+    if (!isValid) {
+      throw new UnauthorizedException('Senha atual incorreta.');
+    }
+
+    await this.assertPasswordStrength(dto.newPassword);
+    const passwordHash = await bcrypt.hash(dto.newPassword, 10);
+    await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+    return { success: true };
   }
 
   async softDelete(actor: AuthUser, id: string) {

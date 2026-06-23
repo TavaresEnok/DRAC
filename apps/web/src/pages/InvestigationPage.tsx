@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { addMinutes, format, subHours } from 'date-fns';
-import { Archive, Camera, Clock, Edit, FileText, LoaderCircle, Plus, Save, Search, ShieldAlert, Trash2, X } from 'lucide-react';
+import { Camera, Clock, Edit, FileText, LoaderCircle, Plus, Save, Search, ShieldAlert, Trash2, X } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { toast } from '../hooks/use-toast';
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
@@ -428,9 +429,6 @@ export default function InvestigationPage() {
               ].map(([status, label]) => <SelectItem key={status} value={status} className="text-xs">{label}</SelectItem>)}
             </SelectContent>
           </Select>
-          <button onClick={() => setLocation('/evidence')} className="flex items-center gap-1.5 rounded bg-[hsl(var(--primary))] px-3 py-1.5 text-xs font-semibold text-[hsl(var(--primary-foreground))] hover:opacity-90">
-            <Archive className="h-3.5 w-3.5" /> Abrir evidências
-          </button>
         </div>
       </div>
 
@@ -567,7 +565,7 @@ export default function InvestigationPage() {
         {investigationId && (
           <div className="mt-3 flex items-center gap-2">
             <label className="flex items-center gap-2 text-xs">
-              <input type="checkbox" checked={legalHoldEnabled} onChange={(event) => setLegalHoldEnabled(event.target.checked)} />
+              <Switch checked={legalHoldEnabled} onCheckedChange={setLegalHoldEnabled} />
               Preservação legal ativa
             </label>
             <input value={legalHoldReason} onChange={(event) => setLegalHoldReason(event.target.value)} className="h-8 w-56 rounded border border-border bg-background px-2 text-xs" placeholder="Motivo da preservação" />
@@ -706,7 +704,6 @@ export default function InvestigationPage() {
               <div className="text-xs font-semibold">Evidência</div>
               <div className="mt-0.5 text-[10px] font-mono text-[hsl(var(--muted-foreground))]">{evidence.length} itens</div>
             </div>
-            <button onClick={() => setLocation('/evidence')} className="text-[10px] font-semibold text-[hsl(var(--primary))]">Abrir evidências</button>
           </div>
           <div className="border-b border-border px-4 py-3 space-y-2">
             <div className="text-[11px] font-semibold">Anexar item manual</div>

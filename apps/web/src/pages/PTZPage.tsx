@@ -11,7 +11,6 @@ import {
   LoaderCircle,
   Radar,
   RotateCcw,
-  Volume2,
   ZoomIn,
   ZoomOut,
   ExternalLink,
@@ -182,25 +181,6 @@ export default function PTZPage() {
     }
   }, [activeDirection, selectedCam]);
 
-  const sendSingleStep = useCallback(
-    async (direction: PTZDirection) => {
-      if (!selectedCam || controlsDisabled) return;
-      setCommandState('sending');
-      setLastError(null);
-      try {
-        await sendPtzCommand(selectedCam.id, { action: 'step', direction, speed, durationMs: Math.max(180, speed * 70) });
-        setCommandState('ok');
-        setLastCommand(`Step ${direction} executado em ${selectedCam.name}`);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Falha no step PTZ.';
-        setCommandState('error');
-        setLastError(message);
-        setLastCommand(`Falha no step ${direction} em ${selectedCam.name}`);
-      }
-    },
-    [controlsDisabled, selectedCam, speed],
-  );
-
   const runDiagnostics = useCallback(async () => {
     if (!selectedCam || !accessToken) return;
     setDiagnosing(true);
@@ -248,13 +228,8 @@ export default function PTZPage() {
   }
 
   return (
-      <div className="flex h-full min-h-0 flex-col gap-4 p-4 md:p-5">
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card/70 px-4 py-3 shadow-sm">
-        <div className="min-w-[260px] flex-1">
-          <div className="text-sm font-semibold">Controle PTZ</div>
-          <div className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">Controle direcional com preview ao vivo.</div>
-        </div>
-
+      <div className="flex h-full min-h-0 flex-col">
+      <div className="toolbar flex-wrap">
         <Select value={selectedCamId} onValueChange={setSelectedCamId}>
           <SelectTrigger className="h-10 w-[min(100%,340px)] text-xs">
             <SelectValue placeholder="Selecione uma câmera PTZ" />
@@ -262,7 +237,7 @@ export default function PTZPage() {
           <SelectContent>
             {ptzCameras.map((camera) => (
               <SelectItem key={camera.id} value={camera.id} className="text-xs font-mono">
-                {camera.code} - {camera.name}
+                {camera.name}
               </SelectItem>
             ))}
           </SelectContent>
@@ -280,7 +255,7 @@ export default function PTZPage() {
           type="button"
           onClick={() => selectedCam && setLocation(`/cameras/${selectedCam.id}?tab=ptz`)}
           disabled={!selectedCam}
-          className="inline-flex h-10 items-center gap-2 rounded-xl border border-border px-3 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45"
+          className="btn btn-secondary btn-sm"
         >
           Abrir painel da câmera
           <ExternalLink className="h-3.5 w-3.5" />
@@ -290,14 +265,14 @@ export default function PTZPage() {
           type="button"
           onClick={() => void runDiagnostics()}
           disabled={!selectedCam || diagnosing}
-          className="inline-flex h-10 items-center gap-2 rounded-xl border border-border px-3 text-xs hover:bg-[hsl(var(--accent))] disabled:opacity-45"
+          className="btn btn-secondary btn-sm"
         >
           {diagnosing ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Radar className="h-3.5 w-3.5" />}
           Verificar
         </button>
       </div>
 
-      <div className="grid flex-1 min-h-0 gap-4 xl:grid-cols-[minmax(0,1.35fr)_420px]">
+      <div className="grid flex-1 min-h-0 gap-4 p-4 md:p-5 xl:grid-cols-[minmax(0,1.35fr)_420px]">
         <div className="flex min-h-0 flex-col gap-4">
           <div className="relative min-h-[320px] flex-1 overflow-hidden rounded-lg border border-border bg-[linear-gradient(160deg,hsl(222_22%_9%),hsl(220_18%_7%))] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
             {selectedCam?.isOnline ? (
@@ -366,38 +341,35 @@ export default function PTZPage() {
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            <div className="rounded-lg border border-border bg-card/70 p-4 shadow-sm">
-              <div className="mb-1 text-[11px] text-[hsl(var(--muted-foreground))]">Status</div>
-              <div className="flex items-center gap-2 text-sm font-semibold">
-                {commandState === 'sending' ? <LoaderCircle className="h-4 w-4 animate-spin text-[hsl(var(--primary))]" /> : <Radar className="h-4 w-4 text-[hsl(var(--primary))]" />}
-                {commandState === 'error' ? 'Erro operacional' : commandState === 'sending' ? 'Enviando comando' : 'Pronto'}
-              </div>
+          <div className="rounded-lg border border-border bg-card/70 p-4 shadow-sm">
+            <div className="mb-1 text-[11px] text-[hsl(var(--muted-foreground))]">Status</div>
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              {commandState === 'sending' ? <LoaderCircle className="h-4 w-4 animate-spin text-[hsl(var(--primary))]" /> : <Radar className="h-4 w-4 text-[hsl(var(--primary))]" />}
+              {commandState === 'error' ? 'Erro operacional' : commandState === 'sending' ? 'Enviando comando' : 'Pronto'}
+            </div>
             <div className="mt-2 text-xs text-[hsl(var(--muted-foreground))]">
               {commandState === 'idle' ? 'Aguardando comando.' : lastCommand}
             </div>
-              {ptzRejectedByDevice && (
-                <div className="mt-3 rounded-xl border border-[hsl(var(--status-warning)_/_0.3)] bg-[hsl(var(--status-warning)_/_0.1)] px-3 py-2 text-xs text-[hsl(var(--status-warning))]">
-                  O equipamento respondeu ao endpoint, mas rejeitou o PTZ externo. O stream segue online; o bloqueio está no protocolo de controle desta câmera.
+            {ptzRejectedByDevice && (
+              <div className="mt-3 rounded-xl border border-[hsl(var(--status-warning)_/_0.3)] bg-[hsl(var(--status-warning)_/_0.1)] px-3 py-2 text-xs text-[hsl(var(--status-warning))]">
+                O equipamento respondeu ao endpoint, mas rejeitou o PTZ externo. O stream segue online; o bloqueio está no protocolo de controle desta câmera.
+              </div>
+            )}
+            {lastError && !ptzRejectedByDevice && (
+              <div className="mt-3 rounded-xl border border-[hsl(var(--destructive)_/_0.28)] bg-[hsl(var(--destructive)_/_0.08)] px-3 py-2 text-xs text-[hsl(var(--destructive))]">
+                {lastError}
+              </div>
+            )}
+            {diagnostics && (
+              <details className="mt-3 rounded-xl border border-border bg-background/55 px-3 py-3 text-xs text-[hsl(var(--muted-foreground))]">
+                <summary className="cursor-pointer font-semibold text-foreground">Detalhes de suporte</summary>
+                <div className="mt-2">
+                  <div>Config: porta {diagnostics.configured.onvifPort ?? '-'} · path {diagnostics.configured.onvifPath ?? '-'} · token {diagnostics.configured.onvifProfileToken ?? '-'}</div>
+                  <div className="mt-1">Detectado: porta {diagnostics.detected.onvifPort ?? '-'} · path {diagnostics.detected.onvifPath ?? '-'} · token {diagnostics.detected.onvifProfileToken ?? '-'}</div>
+                  <div className="mt-1">Resultado: {diagnostics.ptzLikelyWorking ? 'provável funcional' : 'falha de comunicação PTZ'}</div>
                 </div>
-              )}
-            </div>
-
-            <div className="rounded-lg border border-border bg-card/70 p-4 shadow-sm">
-              <div className="mb-1 text-[11px] text-[hsl(var(--muted-foreground))]">Recursos</div>
-              <div className="space-y-1 text-xs text-[hsl(var(--muted-foreground))]">
-                <div>Audio: {selectedCam?.hasAudio ? 'sim' : 'nao identificado'}</div>
-                <div>Video: {selectedCam?.isOnline ? 'online' : 'offline'}</div>
-                <div>Gravacao: {selectedCam?.recordingMode === 'continuous' ? 'continua' : selectedCam?.recordingMode}</div>
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-border bg-card/70 p-4 shadow-sm">
-              <div className="mb-1 text-[11px] text-[hsl(var(--muted-foreground))]">Observação</div>
-              <div className="text-xs text-[hsl(var(--muted-foreground))]">
-                Movimentos direcionais e zoom estão disponíveis quando a câmera permite controle externo.
-              </div>
-            </div>
+              </details>
+            )}
           </div>
         </div>
 
@@ -509,65 +481,6 @@ export default function PTZPage() {
             </div>
           </div>
 
-          <div className="rounded-lg border border-border bg-card/75 p-5 shadow-sm">
-            <div className="text-sm font-semibold">Passo curto</div>
-            <div className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">Reposicionamento fino.</div>
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              {([
-                ['Up', 'Subir'],
-                ['Down', 'Descer'],
-                ['Left', 'Esquerda'],
-                ['Right', 'Direita'],
-                ['ZoomIn', 'Zoom +'],
-                ['ZoomOut', 'Zoom -'],
-              ] as Array<[PTZDirection, string]>).map(([direction, label]) => (
-                <button
-                  key={direction}
-                  type="button"
-                  disabled={controlsDisabled}
-                  onClick={() => void sendSingleStep(direction)}
-                  className="rounded-xl border border-border bg-background/55 px-3 py-2 text-left text-xs transition-colors hover:bg-[hsl(var(--accent))] disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  <div className="font-medium">{label}</div>
-                  <div className="mt-1 text-[10px] text-[hsl(var(--muted-foreground))]">Pulso</div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-border bg-card/75 p-5 shadow-sm">
-            <div className="text-sm font-semibold">Status da câmera</div>
-            <div className="mt-3 space-y-2 text-xs text-[hsl(var(--muted-foreground))]">
-              <div className="flex items-center justify-between rounded-xl border border-border bg-background/55 px-3 py-2">
-                <span>Stream online</span>
-                <span>{selectedCam?.isOnline ? 'sim' : 'não'}</span>
-              </div>
-              <div className="flex items-center justify-between rounded-xl border border-border bg-background/55 px-3 py-2">
-                <span>Áudio no live</span>
-                <span className="inline-flex items-center gap-1"><Volume2 className="h-3 w-3" /> {selectedCam?.hasAudio ? 'sim' : 'não'}</span>
-              </div>
-              <div className="flex items-center justify-between rounded-xl border border-border bg-background/55 px-3 py-2">
-                <span>Suporte PTZ</span>
-                <span>{selectedCam?.ptzCapable ? 'sim' : 'não'}</span>
-              </div>
-            </div>
-
-            {lastError && (
-              <div className="mt-4 rounded-xl border border-[hsl(var(--destructive)_/_0.28)] bg-[hsl(var(--destructive)_/_0.08)] px-3 py-2 text-xs text-[hsl(var(--destructive))]">
-                {lastError}
-              </div>
-            )}
-            {diagnostics && (
-              <details className="mt-4 rounded-xl border border-border bg-background/55 px-3 py-3 text-xs text-[hsl(var(--muted-foreground))]">
-                <summary className="cursor-pointer font-semibold text-foreground">Detalhes de suporte</summary>
-                <div className="mt-2">
-                <div>Config: porta {diagnostics.configured.onvifPort ?? '-'} · path {diagnostics.configured.onvifPath ?? '-'} · token {diagnostics.configured.onvifProfileToken ?? '-'}</div>
-                <div className="mt-1">Detectado: porta {diagnostics.detected.onvifPort ?? '-'} · path {diagnostics.detected.onvifPath ?? '-'} · token {diagnostics.detected.onvifProfileToken ?? '-'}</div>
-                <div className="mt-1">Resultado: {diagnostics.ptzLikelyWorking ? 'provável funcional' : 'falha de comunicação PTZ'}</div>
-                </div>
-              </details>
-            )}
-          </div>
         </div>
       </div>
     </div>

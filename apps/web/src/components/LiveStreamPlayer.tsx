@@ -23,9 +23,23 @@ const API_URL = getApiBaseUrl();
 const HLS_FIRST_FRAME_TIMEOUT_MS = 7000;
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 8000;
 const WEBRTC_WHEP_NEGOTIATION_TIMEOUT_MS = 9500;
+// Depois que a conexão WebRTC ESTABELECE (ICE connected) mas o primeiro frame ainda
+// não chegou, quase sempre é o FFmpeg do path fazendo cold start: o runOnDemand foi
+// encerrado após runOnDemandCloseAfter (5 min sem espectador) e precisa reabrir o RTSP,
+// fazer probe e aguardar um keyframe. O timeout normal de 8s estoura no meio desse
+// arranque, faz o cliente desistir do WebRTC, cair para HLS (+7s) e entrar em backoff —
+// é esse empilhamento que levava a reconexão ao voltar para a aba a ~20s. Quando
+// detectamos "conectou, mas sem frame", estendemos o prazo para o publisher esquentar
+// e o vídeo volta no MESMO WebRTC, sem thrashing.
+const WEBRTC_COLD_START_FRAME_TIMEOUT_MS = 17000;
 const WEBRTC_DISCONNECT_GRACE_MS = 6000;
 const LIVE_RESUME_GRACE_MS = 1200;
 const LIVE_SOFT_ONLY_RESUME_MS = 120000;
+// Após este tempo com a aba oculta, derruba o WebRTC para parar o transcode no
+// servidor e o tráfego de rede de uma aba que ninguém está vendo. Como o MediaMTX
+// mantém o FFmpeg aquecido por runOnDemandCloseAfter (5 min), voltar dentro dessa
+// janela reconecta quase instantaneamente, sem boot frio.
+const LIVE_HIDDEN_SUSPEND_MS = 45000;
 const LIVE_STALL_CHECK_INTERVAL_MS = 4000;
 const LIVE_STALL_SOFT_RECOVER_MS = 8000;
 const LIVE_STALL_RECONNECT_MS = 16000;
@@ -33,15 +47,16 @@ const LIVE_RECONNECT_DEBOUNCE_MS = 2500;
 const LIVE_FAST_RETRY_BASE_MS = 1200;
 const LIVE_FAST_RETRY_MAX_MS = 7000;
 const LIVE_EDGE_OFFSET_SECONDS = 0.35;
-const LIVE_RENDER_STALL_RECONNECT_MS = 10000;
-const LIVE_VISUAL_FREEZE_RECONNECT_MS = 45000;
+// Tempo sem NENHUM frame novo apresentado (rVFC) antes de reconectar. É o único
+// detector de congelamento real agora, então precisa tolerar câmeras com "smart
+// codec" que reduzem muito a taxa de quadros em cena 100% estática (alguns enviam
+// ~1 frame a cada vários segundos). 10s era apertado demais e podia reconectar uma
+// câmera saudável de baixa atividade. 20s cobre congelamento real sem falso-positivo.
+const LIVE_RENDER_STALL_RECONNECT_MS = 20000;
 const LIVE_BLACK_FRAME_FAILOVER_MS = 6000;
 const LIVE_VIEW_LEASE_TTL_SECONDS = 20;
 const LIVE_VIEW_HEARTBEAT_MS = 7000;
 const LIVE_PROTOCOL_STORAGE_PREFIX = 'drac-live-protocol';
-// Stream token expires in 5 min on the server; renew 60s before to avoid black screen.
-const STREAM_TOKEN_TTL_MS = 5 * 60 * 1000;
-const STREAM_TOKEN_RENEW_BEFORE_MS = 60 * 1000;
 const STREAM_URL_CACHE_TTL_MS = 60 * 1000;
 type ActiveLiveProtocol = 'WEBRTC' | 'LL-HLS' | 'HLS';
 type LiveProtocol = 'auto' | 'flv' | 'hls' | 'webrtc' | 'mjpeg' | 'llhls';
@@ -273,8 +288,6 @@ export function LiveStreamPlayer({
     mediaTime: 0,
     presentedFrames: 0,
   });
-  const lastVisualHashRef = useRef<string | null>(null);
-  const lastVisualChangeAtRef = useRef(Date.now());
   const blackFrameSinceRef = useRef<number | null>(null);
   const failedProtocolsRef = useRef<Set<LiveProtocol>>(new Set());
   const visualCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -283,6 +296,7 @@ export function LiveStreamPlayer({
   // alternância grid/selected (evita stop+start de lease a cada clique na grade).
   const liveViewModeRef = useRef(liveViewMode);
   liveViewModeRef.current = liveViewMode;
+  const previousLiveViewModeRef = useRef(liveViewMode);
   // Timer to proactively renew the stream token before it expires (avoids black screen)
   const streamTokenRenewTimerRef = useRef<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -296,6 +310,12 @@ export function LiveStreamPlayer({
   const [reloadNonce, setReloadNonce] = useState(0);
   const [protocolReason, setProtocolReason] = useState<string | null>(null);
   const [displayFps, setDisplayFps] = useState<number | null>(null);
+  // Suspende a transmissão quando a aba fica oculta por tempo suficiente, para
+  // não gastar CPU de transcode nem banda com quem não está vendo.
+  const [suspended, setSuspended] = useState(false);
+  const suspendedRef = useRef(false);
+  const suspendTimerRef = useRef<number | null>(null);
+  const [zoom, setZoom] = useState(1);
 
   const tokenHeaders = useMemo(
     () => (accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined),
@@ -305,6 +325,18 @@ export function LiveStreamPlayer({
   useEffect(() => {
     setIsMuted(muted);
   }, [muted]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const step = e.deltaY > 0 ? -0.15 : 0.15;
+      setZoom((prev) => Math.min(4, Math.max(1, parseFloat((prev + step).toFixed(2)))));
+    };
+    container.addEventListener('wheel', onWheel, { passive: false });
+    return () => container.removeEventListener('wheel', onWheel);
+  }, []);
 
   useEffect(() => {
     failedProtocolsRef.current.clear();
@@ -342,29 +374,17 @@ export function LiveStreamPlayer({
     setReloadNonce((value) => value + 1);
   }, []);
 
-  const sampleVideoHash = useCallback((element: HTMLVideoElement) => {
-    if (element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || element.videoWidth <= 0 || element.videoHeight <= 0) {
-      return null;
-    }
-    try {
-      const canvas = visualCanvasRef.current ?? document.createElement('canvas');
-      visualCanvasRef.current = canvas;
-      canvas.width = 16;
-      canvas.height = 9;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return null;
-      ctx.drawImage(element, 0, 0, canvas.width, canvas.height);
-      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      let hash = '';
-      for (let i = 0; i < data.length; i += 16) {
-        const value = ((data[i] ?? 0) + (data[i + 1] ?? 0) + (data[i + 2] ?? 0)) / 3;
-        hash += String.fromCharCode(Math.round(value / 16));
-      }
-      return hash;
-    } catch {
-      return null;
-    }
-  }, []);
+  useEffect(() => {
+    if (previousLiveViewModeRef.current === liveViewMode) return;
+    previousLiveViewModeRef.current = liveViewMode;
+    failedProtocolsRef.current.clear();
+    requestFreshLiveBoot(
+      liveViewMode === 'selected'
+        ? 'Abrindo câmera individual na resolução original...'
+        : 'Ajustando câmera para o grid padrão...',
+      true,
+    );
+  }, [liveViewMode, requestFreshLiveBoot]);
 
   const isLikelyBlackFrame = useCallback((element: HTMLVideoElement) => {
     if (element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || element.videoWidth <= 0 || element.videoHeight <= 0) {
@@ -510,15 +530,18 @@ export function LiveStreamPlayer({
       try {
         // Use cache to deduplicate concurrent requests for the same camera
         // This prevents overwhelming the backend when multiple cameras load simultaneously.
-        // A chave é só o cameraId: incluir o JWT criava entradas órfãs no Map a cada
-        // renovação de token (a expiração é lazy, então elas nunca eram removidas).
-        const cacheKey = `stream-urls:${cameraId}`;
+        // A chave usa câmera + modo de visualização. Grid e câmera individual
+        // precisam perfis diferentes, mas ainda evitamos incluir o JWT para não
+        // deixar entradas órfãs no cache.
+        const cacheKey = `stream-urls:${cameraId}:${liveViewMode}`;
         const data = await streamUrlsCache.getOrFetch(
           cacheKey,
           () => axios.get<{
             preferredLiveProtocol?: 'auto' | 'flv' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg' | null;
             detectedVideoCodec?: string | null;
             sourceVideoCodec?: string | null;
+            deliveryMode?: 'selected' | 'grid';
+            deliveryTarget?: Record<string, unknown> | null;
             smartLive?: {
               enabled?: boolean;
               recommendedProtocol?: LiveProtocol;
@@ -535,7 +558,10 @@ export function LiveStreamPlayer({
             streamTokenExpiresAt?: string | null;
           }>(
             `${API_URL}/camera-stream/${cameraId}/urls`,
-            { headers: tokenHeaders },
+            {
+              headers: tokenHeaders,
+              params: { viewMode: liveViewMode },
+            },
           ).then(res => res.data),
           STREAM_URL_CACHE_TTL_MS,
         );
@@ -573,20 +599,19 @@ export function LiveStreamPlayer({
           throw new Error('Token de stream inválido retornado pela API.');
         }
 
-        // Schedule proactive token renewal before it expires.
+        // NÃO renovamos o token derrubando a conexão. WebRTC (WHEP), HLS e LL-HLS
+        // são servidos DIRETO pelo MediaMTX (authMethod: internal, user "any" com
+        // permissão de read) — nenhum deles carrega o stream token na URL nem o
+        // revalida durante a transmissão. O token só serve para o poster (antes do
+        // 1º frame) e para o FLV legado. Logo, uma reconexão "para renovar token"
+        // só causava um piscar periódico (a cada expiração) sem nenhum ganho.
+        // Se acontecer um reboot por motivo real (stall/freeze/troca de protocolo),
+        // a própria chamada a /urls já emite um token novo. Uma transmissão saudável
+        // permanece conectada indefinidamente, sem piscar.
         if (streamTokenRenewTimerRef.current != null) {
           window.clearTimeout(streamTokenRenewTimerRef.current);
-        }
-        const tokenExpiresAtMs = data?.streamTokenExpiresAt ? new Date(data.streamTokenExpiresAt).getTime() : NaN;
-        const tokenRenewDelayMs = Number.isFinite(tokenExpiresAtMs)
-          ? Math.max(30_000, tokenExpiresAtMs - Date.now() - STREAM_TOKEN_RENEW_BEFORE_MS)
-          : STREAM_TOKEN_TTL_MS - STREAM_TOKEN_RENEW_BEFORE_MS;
-        streamTokenRenewTimerRef.current = window.setTimeout(() => {
-          if (!cancelled) {
-            requestFreshLiveBoot('Renovando token de stream...', true);
-          }
           streamTokenRenewTimerRef.current = null;
-        }, tokenRenewDelayMs);
+        }
 
         const cleanupHls = () => {
           if (!hlsRef.current) return;
@@ -612,7 +637,7 @@ export function LiveStreamPlayer({
           webrtcDisconnectTimerRef.current = null;
         };
 
-        const cleanupWebrtc = async () => {
+        const cleanupWebrtc = async (preserveVideo = false) => {
           abortWebrtcNegotiation();
           clearWebrtcDisconnectTimer();
           if (webrtcPcRef.current) {
@@ -638,11 +663,15 @@ export function LiveStreamPlayer({
           // srcObject takes strict priority over src.  If left non-null,
           // hls.js's MediaSource object URL assigned via element.src is silently
           // ignored and the video element never renders HLS content.
-          try {
-            element.srcObject = null;
-            element.removeAttribute('src');
-            element.load();
-          } catch {
+          // Skipped when reconnecting WebRTC-to-WebRTC so the last decoded frame
+          // stays visible during reconnect instead of flashing black.
+          if (!preserveVideo) {
+            try {
+              element.srcObject = null;
+              element.removeAttribute('src');
+              element.load();
+            } catch {
+            }
           }
           if (webrtcSessionUrlRef.current) {
             try {
@@ -688,7 +717,7 @@ export function LiveStreamPlayer({
           check();
         });
 
-        const waitIceGatheringComplete = (pc: RTCPeerConnection, timeoutMs = 900) => {
+        const waitIceGatheringComplete = (pc: RTCPeerConnection, timeoutMs = 2500) => {
           return new Promise<void>((resolve) => {
             if (pc.iceGatheringState === 'complete') {
               resolve();
@@ -714,15 +743,20 @@ export function LiveStreamPlayer({
 
         const startWebrtc = async (whepUrl: string) => {
           cleanupHls();
-          await cleanupWebrtc();
+          // Pass preserveVideo=true when a live frame is already visible so the
+          // last decoded frame stays on screen while the new connection negotiates.
+          const preserveVideoOnReconnect = preserveFrameOnReloadRef.current && hasFrameRef.current;
+          await cleanupWebrtc(preserveVideoOnReconnect);
 
           if (typeof RTCPeerConnection === 'undefined') {
             throw new Error('Navegador sem suporte WebRTC.');
           }
 
-          element.removeAttribute('src');
-          element.srcObject = null;
-          element.load();
+          if (!preserveVideoOnReconnect) {
+            element.removeAttribute('src');
+            element.srcObject = null;
+            element.load();
+          }
 
           const pc = new RTCPeerConnection({
             bundlePolicy: 'max-bundle',
@@ -762,12 +796,25 @@ export function LiveStreamPlayer({
               if (error) reject(error);
               else resolve();
             };
-            const startupTimeout = window.setTimeout(() => {
+            let coldStartExtended = false;
+            let startupTimeout = window.setTimeout(() => {
               abortController.abort();
               finish(new Error(videoTrackReceived
                 ? 'WebRTC conectou, mas não entregou imagem (vídeo preto ou sem frames) dentro do tempo limite.'
                 : 'WebRTC não conectou ou não entregou track de vídeo dentro do tempo limite.'));
             }, WEBRTC_FIRST_FRAME_TIMEOUT_MS);
+            // Conexão WebRTC pronta, mas sem frame ainda → publisher (FFmpeg) em cold
+            // start. Em vez de estourar em 8s e ir para o próximo protocolo, estende o
+            // prazo do primeiro frame UMA vez para o publisher esquentar no mesmo WebRTC.
+            const extendDeadlineForColdStart = () => {
+              if (coldStartExtended || settled || visibleFrameReceived) return;
+              coldStartExtended = true;
+              window.clearTimeout(startupTimeout);
+              startupTimeout = window.setTimeout(() => {
+                abortController.abort();
+                finish(new Error('WebRTC conectou, mas o stream demorou demais para entregar o primeiro frame (cold start do FFmpeg).'));
+              }, WEBRTC_COLD_START_FRAME_TIMEOUT_MS);
+            };
             const failOrRetryWebrtc = (reason: string, transient: boolean) => {
               if (cancelled || webrtcPcRef.current !== pc) return;
               if (activeProtocolRef.current === 'WEBRTC' && hasFrameRef.current) {
@@ -828,9 +875,15 @@ export function LiveStreamPlayer({
 
             pc.onconnectionstatechange = () => {
               if (cancelled || webrtcPcRef.current !== pc) return;
-              if (pc.connectionState === 'connected' && videoTrackReceived) {
+              if (pc.connectionState === 'connected') {
                 clearWebrtcDisconnectTimer();
-                if (visibleFrameReceived) markHealthy('WEBRTC');
+                if (videoTrackReceived && visibleFrameReceived) {
+                  markHealthy('WEBRTC');
+                } else {
+                  // Transporte pronto, mas ainda sem frame visível: provável cold
+                  // start do FFmpeg do path. Espera o publisher esquentar.
+                  extendDeadlineForColdStart();
+                }
                 return;
               }
               if (pc.connectionState === 'disconnected') {
@@ -851,7 +904,13 @@ export function LiveStreamPlayer({
               if (cancelled || webrtcPcRef.current !== pc) return;
               if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
                 clearWebrtcDisconnectTimer();
-                if (visibleFrameReceived) markHealthy('WEBRTC');
+                if (visibleFrameReceived) {
+                  markHealthy('WEBRTC');
+                } else {
+                  // ICE pronto, mas sem frame ainda: dá tempo para o cold start do
+                  // publisher em vez de cair para HLS + backoff.
+                  extendDeadlineForColdStart();
+                }
                 return;
               }
               if (pc.iceConnectionState === 'disconnected') {
@@ -1061,9 +1120,15 @@ export function LiveStreamPlayer({
       }
     };
 
-    bootDelayTimeout = window.setTimeout(() => {
-      void boot();
-    }, Math.max(0, startDelayMs));
+    // Quando suspenso (aba oculta há muito tempo), o cleanup do ciclo anterior
+    // já derrubou o WebRTC e deu DELETE na sessão; aqui apenas não rebootamos.
+    // Ao voltar a ficar visível, `suspended` volta a false e o effect reexecuta,
+    // disparando um boot fresco que re-anexa ao FFmpeg ainda aquecido no servidor.
+    if (!suspended) {
+      bootDelayTimeout = window.setTimeout(() => {
+        void boot();
+      }, Math.max(0, startDelayMs));
+    }
 
     return () => {
       cancelled = true;
@@ -1123,7 +1188,7 @@ export function LiveStreamPlayer({
         element.load();
       }
     };
-  }, [accessToken, autoPlay, cameraId, failActiveProtocol, getFastRetryDelay, isLikelyBlackFrame, requestFreshLiveBoot, startDelayMs, tokenHeaders, reloadNonce]);
+  }, [accessToken, autoPlay, cameraId, failActiveProtocol, getFastRetryDelay, isLikelyBlackFrame, requestFreshLiveBoot, startDelayMs, tokenHeaders, reloadNonce, suspended]);
 
   useEffect(() => {
     const element = videoRef.current;
@@ -1221,11 +1286,35 @@ export function LiveStreamPlayer({
       if (hiddenAtRef.current == null) {
         hiddenAtRef.current = Date.now();
       }
+      // Agenda a suspensão: se a aba seguir oculta além do limite, derruba o
+      // WebRTC para parar o transcode/banda no servidor.
+      if (suspendTimerRef.current == null && !suspendedRef.current) {
+        suspendTimerRef.current = window.setTimeout(() => {
+          suspendTimerRef.current = null;
+          if (!document.hidden) return;
+          suspendedRef.current = true;
+          setSuspended(true);
+        }, LIVE_HIDDEN_SUSPEND_MS);
+      }
     };
 
     const resumeFromBrowserLifecycle = (forceReconnect = false) => {
       const hiddenForMs = hiddenAtRef.current == null ? 0 : Date.now() - hiddenAtRef.current;
       hiddenAtRef.current = null;
+
+      // Cancela qualquer suspensão pendente ao voltar à aba.
+      if (suspendTimerRef.current != null) {
+        window.clearTimeout(suspendTimerRef.current);
+        suspendTimerRef.current = null;
+      }
+
+      // Se chegamos a suspender, basta retomar: o effect principal reexecuta e
+      // faz um boot fresco que re-anexa ao FFmpeg ainda quente no servidor.
+      if (suspendedRef.current) {
+        suspendedRef.current = false;
+        setSuspended(false);
+        return;
+      }
 
       if (forceReconnect) {
         softResumeAtLiveEdge();
@@ -1285,6 +1374,10 @@ export function LiveStreamPlayer({
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('pageshow', onPageShow);
       window.removeEventListener('pagehide', onPageHide);
+      if (suspendTimerRef.current != null) {
+        window.clearTimeout(suspendTimerRef.current);
+        suspendTimerRef.current = null;
+      }
     };
   }, [autoPlay, requestFreshLiveBoot]);
 
@@ -1329,18 +1422,28 @@ export function LiveStreamPlayer({
 
       const now = Date.now();
       const renderedFrame = lastRenderedFrameRef.current;
+      // Only trigger the rVFC stall watchdog when the video is actually playing.
+      // rVFC stops firing when the element is paused (e.g. autoplay blocked by
+      // the browser policy), which would otherwise cause a spurious reconnect
+      // after LIVE_RENDER_STALL_RECONNECT_MS even though nothing is wrong.
       if (
         typeof element.requestVideoFrameCallback === 'function'
+        && !element.paused
         && now - renderedFrame.wallTime >= LIVE_RENDER_STALL_RECONNECT_MS
       ) {
         failActiveProtocol('imagem congelada sem novos frames');
         return;
       }
 
-      // Detecção por canvas (frame preto / congelamento) faz readback de GPU, que é
-      // custoso quando multiplicado por todos os tiles da grade. Roda só no tile em
-      // destaque; tiles de grade ainda têm o watchdog de render (rVFC) e de progresso
-      // de mídia abaixo, que cobrem travamento sem readback.
+      // Detecção de frame PRETO persistente (readback de GPU custoso → só no tile
+      // em destaque). Mede ausência real de vídeo, não falta de movimento.
+      //
+      // IMPORTANTE: NÃO usamos mais detecção de "congelamento" por mudança de pixels.
+      // Cena estática (corredor vazio, parede, portão parado) entrega frames idênticos
+      // o tempo todo numa câmera 100% saudável — reconectar nesse caso é falso-positivo
+      // e fazia a tela piscar a cada ~45s sem motivo. O sinal correto de vivacidade é o
+      // watchdog de render (rVFC) acima: se frames novos continuam sendo apresentados,
+      // o stream está vivo, com ou sem movimento na cena.
       if (liveViewMode === 'selected') {
         if (isLikelyBlackFrame(element)) {
           if (blackFrameSinceRef.current == null) blackFrameSinceRef.current = now;
@@ -1352,40 +1455,47 @@ export function LiveStreamPlayer({
         } else {
           blackFrameSinceRef.current = null;
         }
+      }
 
-        const visualHash = sampleVideoHash(element);
-        if (visualHash) {
-          if (visualHash !== lastVisualHashRef.current) {
-            lastVisualHashRef.current = visualHash;
-            lastVisualChangeAtRef.current = now;
-          } else if (now - lastVisualChangeAtRef.current >= LIVE_VISUAL_FREEZE_RECONNECT_MS) {
-            lastVisualChangeAtRef.current = now;
-            failActiveProtocol('imagem sem alteração por tempo demais');
-            return;
-          }
+      // O watchdog de progresso por `video.currentTime` SÓ vale para HLS/LL-HLS.
+      // No WebRTC (srcObject = MediaStream) o currentTime é um sinal de vida não
+      // confiável: em vários navegadores ele fica congelado mesmo com os frames
+      // renderizando normalmente. Confiar nele fazia TODOS os tiles do grid
+      // reconectarem em lote a cada ~16s (tela piscando). Para WebRTC, a vivacidade
+      // já é garantida pelo watchdog de render (rVFC) acima; só caímos no stall por
+      // currentTime quando o rVFC não existe no navegador.
+      const protocol = activeProtocolRef.current;
+      const rvfcSupported = typeof element.requestVideoFrameCallback === 'function';
+      const useCurrentTimeStall = protocol !== 'WEBRTC' || !rvfcSupported;
+
+      if (useCurrentTimeStall) {
+        const currentMediaTime = Number.isFinite(element.currentTime) ? element.currentTime : 0;
+        const lastProgress = lastProgressRef.current;
+        if (Math.abs(currentMediaTime - lastProgress.mediaTime) > 0.05) {
+          lastProgressRef.current = { wallTime: now, mediaTime: currentMediaTime };
+          return;
         }
-      }
 
-      const currentMediaTime = Number.isFinite(element.currentTime) ? element.currentTime : 0;
-      const lastProgress = lastProgressRef.current;
-      if (Math.abs(currentMediaTime - lastProgress.mediaTime) > 0.05) {
-        lastProgressRef.current = { wallTime: now, mediaTime: currentMediaTime };
-        return;
-      }
+        const stalledForMs = now - lastProgress.wallTime;
+        if (stalledForMs >= LIVE_STALL_RECONNECT_MS) {
+          failActiveProtocol('transmissão sem progresso');
+          return;
+        }
 
-      const stalledForMs = now - lastProgress.wallTime;
-      if (stalledForMs >= LIVE_STALL_RECONNECT_MS) {
-        failActiveProtocol('transmissão sem progresso');
-        return;
-      }
-
-      if (stalledForMs >= LIVE_STALL_SOFT_RECOVER_MS) {
-        softRecoverStalledPlayer();
-        return;
+        if (stalledForMs >= LIVE_STALL_SOFT_RECOVER_MS) {
+          softRecoverStalledPlayer();
+          return;
+        }
+      } else {
+        // WebRTC: mantém o marcador de progresso sincronizado para evitar um
+        // disparo espúrio caso o protocolo volte a HLS depois.
+        lastProgressRef.current = {
+          wallTime: now,
+          mediaTime: Number.isFinite(element.currentTime) ? element.currentTime : 0,
+        };
       }
 
       // Latency Drift Watchdog: force sync if we fall behind the live edge
-      const protocol = activeProtocolRef.current;
       if (protocol === 'HLS' || protocol === 'LL-HLS') {
         const ranges = element.seekable;
         if (ranges.length > 0) {
@@ -1399,7 +1509,7 @@ export function LiveStreamPlayer({
     }, LIVE_STALL_CHECK_INTERVAL_MS);
 
     return () => window.clearInterval(interval);
-  }, [autoPlay, error, failActiveProtocol, isLikelyBlackFrame, isLoading, liveViewMode, sampleVideoHash]);
+  }, [autoPlay, error, failActiveProtocol, isLikelyBlackFrame, isLoading, liveViewMode]);
 
   useEffect(() => {
     if (!aiOverlayEnabled || !accessToken || !tokenHeaders) return;
@@ -1443,25 +1553,39 @@ export function LiveStreamPlayer({
   }, [accessToken, aiOverlayEnabled, cameraId, error]);
 
   return (
-    <div ref={containerRef} className={`relative overflow-hidden bg-black ${className ?? ''}`} aria-label={`Live ${cameraName}`}>
-      {posterUrl && !hasLiveFrame && (
-        <img
-          src={posterUrl}
-          alt=""
-          className="absolute inset-0 h-full w-full object-contain opacity-80"
-          draggable={false}
-        />
-      )}
+    <div
+      ref={containerRef}
+      className={`relative overflow-hidden bg-black ${className ?? ''}`}
+      aria-label={`Live ${cameraName}`}
+      onDoubleClick={() => setZoom(1)}
+    >
+      <div
+        className="absolute inset-0 w-full h-full"
+        style={{
+          transform: zoom !== 1 ? `scale(${zoom})` : undefined,
+          transformOrigin: 'center',
+          transition: zoom === 1 ? 'transform 0.2s ease-out' : 'none',
+        }}
+      >
+        {posterUrl && !hasLiveFrame && (
+          <img
+            src={posterUrl}
+            alt=""
+            className="absolute inset-0 h-full w-full object-contain opacity-80"
+            draggable={false}
+          />
+        )}
 
-      <video
-        ref={videoRef}
-        className={`relative z-10 h-full w-full object-contain pointer-events-none transition-opacity duration-300 ${
-          posterUrl && !hasLiveFrame ? 'opacity-0' : 'opacity-100'
-        }`}
-        muted={isMuted}
-        playsInline
-        autoPlay={autoPlay}
-      />
+        <video
+          ref={videoRef}
+          className={`relative z-10 h-full w-full object-contain pointer-events-none transition-opacity duration-300 ${
+            posterUrl && !hasLiveFrame ? 'opacity-0' : 'opacity-100'
+          }`}
+          muted={isMuted}
+          playsInline
+          autoPlay={autoPlay}
+        />
+      </div>
 
       {aiOverlayEnabled && detections.map((detection) => {
         const [x1, y1, x2, y2] = detection.bbox;
@@ -1562,8 +1686,14 @@ export function LiveStreamPlayer({
         </div>
       )}
 
-      {(activeProtocol || displayFps != null) && (
-        <div className="absolute bottom-2 left-2 z-30 flex items-center gap-1.5 opacity-55 transition-opacity hover:opacity-90">
+      {zoom > 1 && (
+        <div className="absolute top-2 left-2 z-30 rounded-sm border border-white/10 bg-black/45 px-1.5 py-0.5 text-[9px] font-mono text-white/70">
+          {zoom.toFixed(1)}×
+        </div>
+      )}
+
+      {showOverlay && (activeProtocol || displayFps != null) && (
+        <div className="absolute top-2 right-2 z-30 flex items-center gap-1.5 opacity-55 transition-opacity hover:opacity-90">
           {displayFps != null && (
             <span className="inline-flex h-4 items-center rounded-sm border border-white/10 bg-black/40 px-1.5 text-[8px] font-medium tracking-wider text-white/65">
               {displayFps} FPS
@@ -1589,7 +1719,7 @@ export function LiveStreamPlayer({
         </div>
       )}
 
-      {!isLoading && !error && (
+      {showOverlay && !isLoading && !error && (
         <button
           type="button"
           onClick={() => {

@@ -24,6 +24,13 @@ import {
   sanitizeRtspUrl,
 } from './helpers/rtsp-url.helper';
 import { assessCameraCompatibility } from './helpers/camera-compatibility.helper';
+import {
+  GRID_LIVE_MAX_HEIGHT,
+  GRID_LIVE_MAX_WIDTH,
+  GRID_LIVE_TARGET_FPS,
+  resolveGridLiveProfile,
+} from '../camera-stream/helpers/live-delivery-profile.helper';
+ 
 
 export function sanitizeCamera<T extends { passwordEncrypted: string }>(camera: T): Omit<T, 'passwordEncrypted'> {
   const { passwordEncrypted, ...safeCamera } = camera;
@@ -137,8 +144,10 @@ export class CamerasService {
         recordingMode: dto.recordingMode ?? ((dto.recordingEnabled ?? true) ? 'continuous' : 'manual'),
         retentionDays: dto.retentionDays ?? this.getDefaultRetentionDays(),
         preferredRtspTransport: dto.preferredRtspTransport ?? 'tcp',
-        preferredLiveProtocol: this.normalizeLiveProtocol(dto.preferredLiveProtocol) ?? 'webrtc',
-        streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec, { allowOriginal: true }) ?? 'original',
+        preferredLiveProtocol: this.normalizeLiveProtocol(dto.preferredLiveProtocol) === 'mjpeg'
+          ? 'webrtc'
+          : (this.normalizeLiveProtocol(dto.preferredLiveProtocol) ?? 'webrtc'),
+        streamVideoCodec: 'h264',
         streamWidth: normalizedProfile.streamWidth,
         streamHeight: normalizedProfile.streamHeight,
         streamFps: normalizedProfile.streamFps,
@@ -213,8 +222,10 @@ export class CamerasService {
         recordingMode: dto.recordingMode,
         retentionDays: dto.retentionDays,
         preferredRtspTransport: dto.preferredRtspTransport,
-        preferredLiveProtocol: this.normalizeLiveProtocol(dto.preferredLiveProtocol),
-        streamVideoCodec: this.normalizeVideoCodec(dto.streamVideoCodec, { allowOriginal: true }),
+        preferredLiveProtocol: this.normalizeLiveProtocol(dto.preferredLiveProtocol) === 'mjpeg'
+          ? 'webrtc'
+          : this.normalizeLiveProtocol(dto.preferredLiveProtocol),
+        streamVideoCodec: 'h264',
         streamWidth: normalizedProfile.streamWidth,
         streamHeight: normalizedProfile.streamHeight,
         streamFps: normalizedProfile.streamFps,
@@ -355,6 +366,12 @@ export class CamerasService {
     const analyticsExpectedCodec = analyticsProfile.subtype === liveProfile.subtype ? liveCodec : null;
     const analyticsUsesSubstream = analyticsProfile.channel !== liveProfile.channel || analyticsProfile.subtype !== liveProfile.subtype;
     const liveNeedsBrowserTranscode = isHevcCodec(liveCodec) || Boolean(camera.audioEnabled);
+    const gridLive = resolveGridLiveProfile({
+      detectedWidth: camera.detectedWidth ?? null,
+      detectedHeight: camera.detectedHeight ?? null,
+      streamWidth: camera.streamWidth ?? null,
+      streamHeight: camera.streamHeight ?? null,
+    });
 
     return {
       cameraId: camera.id,
@@ -373,9 +390,12 @@ export class CamerasService {
         subtype: liveProfile.subtype,
         rtspUrl: live.sanitized,
         codec: liveCodec ?? null,
-        width: camera.streamWidth ?? camera.detectedWidth ?? null,
-        height: camera.streamHeight ?? camera.detectedHeight ?? null,
-        fps: camera.streamFps ?? camera.detectedFps ?? null,
+        width: gridLive.width,
+        height: gridLive.height,
+        fps: gridLive.fps,
+        selectedWidth: camera.detectedWidth ?? null,
+        selectedHeight: camera.detectedHeight ?? null,
+        selectedFps: camera.detectedFps ?? null,
         browserProtocol: camera.preferredLiveProtocol ?? 'webrtc',
         browserCodec: liveNeedsBrowserTranscode ? 'h264' : liveCodec ?? 'h264',
         transcodeForBrowser: liveNeedsBrowserTranscode,
@@ -414,6 +434,7 @@ export class CamerasService {
         liveNeedsBrowserTranscode
           ? 'Live pode usar transcode para H.264/WebRTC por codec HEVC ou áudio.'
           : 'Live pode ser entregue sem transcode de vídeo quando o stream for compatível.',
+        `Grid limitado a no máximo ${GRID_LIVE_MAX_WIDTH}x${GRID_LIVE_MAX_HEIGHT} em ${GRID_LIVE_TARGET_FPS} FPS; câmera individual usa a resolução original do perfil live.`,
       ],
     };
   }
@@ -1498,11 +1519,18 @@ export class CamerasService {
       detectedHeight?: number | null;
       detectedFps?: number | null;
       detectedBitrateKbps?: number | null;
+      streamWidth?: number | null;
+      streamHeight?: number | null;
+      streamFps?: number | null;
+      streamBitrateKbps?: number | null;
+      recordingWidth?: number | null;
+      recordingHeight?: number | null;
+      recordingFps?: number | null;
+      recordingBitrateKbps?: number | null;
     } | null,
   ): CameraProfilePayload {
     const maxWidth = existing?.detectedWidth ?? null;
     const maxHeight = existing?.detectedHeight ?? null;
-    const maxFps = existing?.detectedFps ?? null;
     const maxBitrate = existing?.detectedBitrateKbps ?? null;
 
     const clamp = (value: number | null | undefined, max: number | null) => {
@@ -1511,15 +1539,22 @@ export class CamerasService {
       return Math.min(value, max);
     };
 
+    const gridLive = resolveGridLiveProfile({
+      detectedWidth: existing?.detectedWidth ?? null,
+      detectedHeight: existing?.detectedHeight ?? null,
+      streamWidth: profile.streamWidth ?? existing?.streamWidth ?? null,
+      streamHeight: profile.streamHeight ?? existing?.streamHeight ?? null,
+    });
+
     return {
-      streamWidth: clamp(profile.streamWidth, maxWidth),
-      streamHeight: clamp(profile.streamHeight, maxHeight),
-      streamFps: clamp(profile.streamFps, maxFps),
-      streamBitrateKbps: clamp(profile.streamBitrateKbps, maxBitrate),
-      recordingWidth: profile.recordingWidth,
-      recordingHeight: profile.recordingHeight,
-      recordingFps: profile.recordingFps,
-      recordingBitrateKbps: profile.recordingBitrateKbps,
+      streamWidth: clamp(gridLive.width, maxWidth),
+      streamHeight: clamp(gridLive.height, maxHeight),
+      streamFps: gridLive.fps,
+      streamBitrateKbps: clamp(profile.streamBitrateKbps ?? existing?.streamBitrateKbps, maxBitrate),
+      recordingWidth: profile.recordingWidth ?? existing?.recordingWidth,
+      recordingHeight: profile.recordingHeight ?? existing?.recordingHeight,
+      recordingFps: existing?.detectedFps ?? profile.recordingFps ?? existing?.recordingFps ?? null,
+      recordingBitrateKbps: profile.recordingBitrateKbps ?? existing?.recordingBitrateKbps,
     };
   }
 

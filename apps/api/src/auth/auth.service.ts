@@ -1,11 +1,15 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { User, UserRole } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { createHash, randomBytes } from 'node:crypto';
+import nodemailer from 'nodemailer';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { AuthUser, JwtAuthPayload, PlayTokenPayload, StreamTokenPayload } from '../common/types/auth-user.type';
+
+const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 type LoginAttempt = { count: number; lockedUntil: number };
 
@@ -13,6 +17,7 @@ type LoginAttempt = { count: number; lockedUntil: number };
 export class AuthService {
   private static readonly LOCKOUT_MS = 15 * 60 * 1000;
   private readonly loginAttempts = new Map<string, LoginAttempt>();
+  private readonly logger = new Logger(AuthService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -147,6 +152,73 @@ export class AuthService {
       throw new UnauthorizedException('Token de playback inválido.');
     }
     return payload;
+  }
+
+  async forgotPassword(email: string): Promise<void> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({ where: { email: normalizedEmail } });
+    // Resposta idêntica para e-mail inexistente/inativo evita enumeração de contas.
+    if (!user || !user.isActive) return;
+
+    const rawToken = randomBytes(32).toString('hex');
+    const resetTokenHash = createHash('sha256').update(rawToken).digest('hex');
+    const resetTokenExpiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { resetTokenHash, resetTokenExpiresAt },
+    });
+
+    await this.sendResetPasswordEmail(user.email, rawToken);
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    const resetTokenHash = createHash('sha256').update(token).digest('hex');
+    const user = await this.prisma.user.findFirst({ where: { resetTokenHash } });
+
+    if (!user || !user.resetTokenExpiresAt || user.resetTokenExpiresAt.getTime() < Date.now()) {
+      throw new UnauthorizedException('Token de redefinição inválido ou expirado.');
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash, resetTokenHash: null, resetTokenExpiresAt: null },
+    });
+  }
+
+  private async sendResetPasswordEmail(email: string, rawToken: string): Promise<void> {
+    const host = this.configService.get<string>('smtpHost') ?? '';
+    const port = Number(this.configService.get<number>('smtpPort') ?? 587);
+    const secure = Boolean(this.configService.get<boolean>('smtpSecure') ?? false);
+    const user = this.configService.get<string>('smtpUser') ?? '';
+    const pass = this.configService.get<string>('smtpPass') ?? '';
+    const from = this.configService.get<string>('alarmEmailFrom') ?? user;
+
+    if (!host || !from || !user || !pass) {
+      this.logger.warn(`SMTP não configurado: não foi possível enviar e-mail de redefinição de senha para ${email}.`);
+      return;
+    }
+
+    const publicAppUrl = (this.configService.get<string>('publicAppUrl') ?? '').replace(/\/$/, '');
+    const resetLink = publicAppUrl
+      ? `${publicAppUrl}/reset-password?token=${rawToken}`
+      : null;
+
+    const transporter = nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
+    await transporter.sendMail({
+      from,
+      to: email,
+      subject: 'DRAC VMS - Redefinição de senha',
+      text: [
+        'Foi solicitada a redefinição de senha da sua conta no DRAC VMS.',
+        '',
+        resetLink ? `Acesse o link para definir uma nova senha: ${resetLink}` : `Use o código a seguir na tela de redefinição de senha: ${rawToken}`,
+        '',
+        'Este link/código expira em 30 minutos.',
+        'Se você não solicitou esta ação, ignore este e-mail.',
+      ].join('\n'),
+    });
   }
 
   canAssignRole(actorRole: UserRole, targetRole: UserRole): boolean {

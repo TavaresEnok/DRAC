@@ -42,7 +42,10 @@ export class CamerasController {
 
     try {
       const mediamtx = this.moduleRef.get(MediamtxProxyService, { strict: false });
-      await mediamtx.ensurePathForCamera(cameraId);
+      await Promise.all([
+        mediamtx.ensurePathForCamera(cameraId, 'selected'),
+        mediamtx.ensurePathForCamera(cameraId, 'grid'),
+      ]);
     } catch {
       // Live will retry when the camera page requests stream URLs.
     }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Plus, Users, Camera, Settings, Trash2, Check, ChevronRight } from 'lucide-react';
+import { Plus, Users, Camera, Settings, Trash2, Check, ChevronRight, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -71,15 +71,28 @@ export default function GroupsPage() {
   const [newDesc, setNewDesc] = useState('');
   const [creating, setCreating] = useState(false);
 
+  // Edit group dialog
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editDesc, setEditDesc] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+
+  // Delete group dialog
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   // Grant access sheet
   const [grantOpen, setGrantOpen] = useState(false);
   const [grantUserId, setGrantUserId] = useState('');
   const [grantLevel, setGrantLevel] = useState<PermissionLevel>('VIEW');
   const [granting, setGranting] = useState(false);
+  const [alarmsSaving, setAlarmsSaving] = useState(false);
 
   const selGroup = groups.find((g) => g.id === selGroupId) ?? groups[0] ?? null;
   const groupCamIds = new Set(selGroup?.cameras.map((c) => c.id) ?? []);
   const groupPerms = permissions.filter((p) => p.groupId === selGroup?.id);
+  const groupLiveCams = cameras.filter((c) => groupCamIds.has(c.id));
+  const groupAlarmsOn = groupLiveCams.length > 0 && groupLiveCams.every((c) => c.alarmsEnabled);
 
   const load = async () => {
     if (!accessToken) return;
@@ -101,6 +114,23 @@ export default function GroupsPage() {
 
   useEffect(() => { void load(); }, [accessToken]);
 
+  const setGroupAlarms = async (enabled: boolean) => {
+    if (!selGroup || !accessToken) return;
+    setAlarmsSaving(true);
+    try {
+      const { data } = await apiClient(accessToken).post(`/camera-groups/${selGroup.id}/alarms`, { enabled });
+      await Promise.all([loadData(), load()]);
+      toast({
+        title: enabled ? 'Alarmes ligados no grupo' : 'Alarmes desligados no grupo',
+        description: `${data?.affected ?? selGroup.cameras.length} câmera(s) de ${selGroup.name} atualizada(s).`,
+      });
+    } catch (e) {
+      toast({ title: 'Falha ao atualizar alarmes', description: e instanceof Error ? e.message : 'Não foi possível atualizar os alarmes do grupo.', variant: 'destructive' });
+    } finally {
+      setAlarmsSaving(false);
+    }
+  };
+
   const createGroup = async () => {
     if (!newName.trim()) return;
     setCreating(true);
@@ -117,6 +147,42 @@ export default function GroupsPage() {
     } catch (e) {
       toast({ title: 'Erro', description: e instanceof Error ? e.message : 'Falha ao criar grupo.', variant: 'destructive' });
     } finally { setCreating(false); }
+  };
+
+  const openEditGroup = () => {
+    setEditName(selGroup?.name ?? '');
+    setEditDesc(selGroup?.description ?? '');
+    setEditOpen(true);
+  };
+
+  const updateGroup = async () => {
+    if (!selGroup || !editName.trim()) return;
+    setEditSaving(true);
+    try {
+      await apiClient(accessToken).patch(`/camera-groups/${selGroup.id}`, {
+        name: editName.trim(),
+        description: editDesc.trim() || null,
+      });
+      await load();
+      setEditOpen(false);
+      toast({ title: 'Grupo atualizado', description: editName.trim() });
+    } catch (e) {
+      toast({ title: 'Erro', description: e instanceof Error ? e.message : 'Falha ao atualizar grupo.', variant: 'destructive' });
+    } finally { setEditSaving(false); }
+  };
+
+  const deleteGroup = async () => {
+    if (!selGroup) return;
+    setDeleting(true);
+    try {
+      await apiClient(accessToken).delete(`/camera-groups/${selGroup.id}`);
+      setSelGroupId(null);
+      await load();
+      setDeleteOpen(false);
+      toast({ title: 'Grupo removido', description: selGroup.name });
+    } catch (e) {
+      toast({ title: 'Erro', description: e instanceof Error ? e.message : 'Falha ao remover grupo.', variant: 'destructive' });
+    } finally { setDeleting(false); }
   };
 
   const toggleCamera = async (cameraId: string, shouldAdd: boolean) => {
@@ -175,9 +241,9 @@ export default function GroupsPage() {
             <p className="text-[10px] text-muted-foreground mt-0.5">{groups.length} clientes / locais</p>
           </div>
           {isAdmin && (
-            <Button variant="ghost" size="sm" className="w-8 h-8 p-0" onClick={() => setCreateOpen(true)}>
+            <button className="btn btn-secondary btn-sm btn-icon" onClick={() => setCreateOpen(true)}>
               <Plus className="w-4 h-4" />
-            </Button>
+            </button>
           )}
         </div>
 
@@ -250,10 +316,42 @@ export default function GroupsPage() {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              {isAdmin && (
+                <div
+                  className="flex items-center gap-2.5 h-8 rounded-md border border-border px-3"
+                  style={{ background: 'hsl(var(--muted) / 0.5)' }}
+                  title={groupAlarmsOn ? 'Alarmes ativos em todas as câmeras do grupo' : 'Alarmes desligados (ou parciais) no grupo'}
+                >
+                  <span className="flex items-center gap-1.5 text-[11px]" style={{ color: 'var(--tx-2)' }}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${groupAlarmsOn ? 'status-alarm' : ''}`} style={!groupAlarmsOn ? { background: 'var(--s-offline)' } : undefined} />
+                    Alarmes do grupo
+                  </span>
+                  <Switch checked={groupAlarmsOn} disabled={alarmsSaving || !groupLiveCams.length} onCheckedChange={(v) => void setGroupAlarms(v)} />
+                </div>
+              )}
               {tab === 'users' && isAdmin && (
-                <Button size="sm" className="text-xs" onClick={() => setGrantOpen(true)}>
-                  <Plus className="w-3.5 h-3.5 mr-1.5" /> Liberar acesso
-                </Button>
+                <button className="btn btn-primary btn-sm" onClick={() => setGrantOpen(true)}>
+                  <Plus className="w-3.5 h-3.5" /> Liberar acesso
+                </button>
+              )}
+              {isAdmin && (
+                <>
+                  <button
+                    className="btn btn-ghost btn-sm btn-icon"
+                    title="Editar grupo"
+                    onClick={openEditGroup}
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm btn-icon"
+                    title="Excluir grupo"
+                    style={{ color: 'hsl(var(--destructive))' }}
+                    onClick={() => setDeleteOpen(true)}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -411,6 +509,56 @@ export default function GroupsPage() {
               <Button variant="ghost" size="sm" onClick={() => setCreateOpen(false)}>Cancelar</Button>
               <Button size="sm" className="flex-1 justify-center" disabled={creating || !newName.trim()} onClick={() => void createGroup()}>
                 {creating ? 'Criando...' : <><Plus className="w-3.5 h-3.5 mr-1.5" /> Criar grupo</>}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit group dialog ── */}
+      <Dialog open={editOpen} onOpenChange={(o) => !o && setEditOpen(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Editar grupo</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Nome do grupo</Label>
+              <Input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Ex.: Supermercado Central" autoFocus />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Descrição <span className="font-normal text-muted-foreground">(opcional)</span></Label>
+              <Input value={editDesc} onChange={(e) => setEditDesc(e.target.value)} placeholder="Ex.: Loja principal, Recife" />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="ghost" size="sm" onClick={() => setEditOpen(false)}>Cancelar</Button>
+              <Button size="sm" className="flex-1 justify-center" disabled={editSaving || !editName.trim()} onClick={() => void updateGroup()}>
+                {editSaving ? 'Salvando...' : 'Salvar alterações'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Delete group confirmation dialog ── */}
+      <Dialog open={deleteOpen} onOpenChange={(o) => !o && setDeleteOpen(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Excluir grupo</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-[13px] text-muted-foreground">
+              Tem certeza que deseja excluir o grupo{' '}
+              <strong className="text-foreground">{selGroup?.name}</strong>?
+            </p>
+            <p className="text-[11px] text-muted-foreground rounded-lg border border-border bg-muted/30 p-3 leading-relaxed">
+              As câmeras e os acessos de usuários vinculados a este grupo serão removidos.
+              Esta ação não pode ser desfeita.
+            </p>
+            <div className="flex gap-2 pt-2">
+              <Button variant="ghost" size="sm" onClick={() => setDeleteOpen(false)}>Cancelar</Button>
+              <Button variant="destructive" size="sm" className="flex-1 justify-center" disabled={deleting} onClick={() => void deleteGroup()}>
+                {deleting ? 'Excluindo...' : <><Trash2 className="w-3.5 h-3.5 mr-1.5" /> Excluir grupo</>}
               </Button>
             </div>
           </div>

@@ -10,6 +10,7 @@ import {
   ChevronRight, MessageSquare
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip as ReTooltip, ResponsiveContainer } from 'recharts';
+import { Switch } from '@/components/ui/switch';
 import { useAlarmStore } from '../store/alarmStore';
 import { useAuthStore } from '../store/authStore';
 import { Alarm, Camera } from '../store/vmsDataStore';
@@ -582,29 +583,20 @@ export default function AlertasPage() {
 
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex shrink-0 items-center justify-between gap-4 border-b border-border px-6 pb-4 pt-5">
-          <div>
-            <h1 className="text-[18px] font-semibold tracking-tight">Alarmes</h1>
-            <p className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-              <span className={`h-2 w-2 rounded-full ${activeAlertas.length ? 'status-alarm rec-pulse' : 'status-online'}`} />
-              {activeAlertas.length ? `${activeAlertas.length} alarme${activeAlertas.length === 1 ? '' : 's'} ativo${activeAlertas.length === 1 ? '' : 's'}` : 'Tudo normal'}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setWorkspaceMode('advanced')}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Settings2 className="h-3.5 w-3.5" /> Filtros e regras
-            </button>
-            <button
-              onClick={() => setMuted((value) => !value)}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              title={muted ? 'Ativar som' : 'Silenciar alertas'}
-            >
-              {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-            </button>
-          </div>
+        <div className="px-6 py-3 border-b border-border shrink-0 flex items-center justify-end gap-2">
+          <button
+            onClick={() => setWorkspaceMode('advanced')}
+            className="btn btn-secondary btn-sm"
+          >
+            <Settings2 className="h-3.5 w-3.5" /> Filtros e regras
+          </button>
+          <button
+            onClick={() => setMuted((value) => !value)}
+            className="btn btn-secondary btn-sm btn-icon"
+            title={muted ? 'Ativar som' : 'Silenciar alertas'}
+          >
+            {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+          </button>
         </div>
 
         <div className="flex min-h-0 flex-1">
@@ -769,18 +761,10 @@ export default function AlertasPage() {
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Page header */}
-      <div className="px-6 pt-5 pb-4 border-b border-border shrink-0 flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-[18px] font-semibold tracking-tight">Alarmes</h1>
-          <p className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${activeAlertas.length > 0 ? 'status-alarm rec-pulse' : 'status-online'}`} />
-            {activeAlertas.length > 0 ? `${activeAlertas.length} alarme${activeAlertas.length !== 1 ? 's' : ''} ativo${activeAlertas.length !== 1 ? 's' : ''}` : 'Tudo normal'}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
+      <div className="px-6 py-3 border-b border-border shrink-0 flex items-center justify-end gap-2">
           <button
             onClick={() => setWorkspaceMode('operation')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="btn btn-secondary btn-sm"
           >
             <ArrowRight className="h-3.5 w-3.5 rotate-180" />
             Voltar à operação
@@ -788,23 +772,22 @@ export default function AlertasPage() {
           <button
             onClick={handleDeleteAllAlarms}
             disabled={deletingAllAlarms || visibleAlarms.length === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[hsl(var(--destructive)_/_0.35)] text-[hsl(var(--destructive))] text-[11px] transition-colors hover:bg-[hsl(var(--destructive)_/_0.08)] disabled:opacity-45"
+            className="btn btn-sm border-[hsl(var(--destructive)_/_0.35)] text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive)_/_0.08)] disabled:opacity-45"
           >
             <Trash2 className="w-3.5 h-3.5" />
             {deletingAllAlarms ? 'Apagando...' : 'Apagar todos'}
           </button>
           <button
             onClick={() => setMuted((m) => !m)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] transition-colors ${
+            className={`btn btn-sm ${
               muted
                 ? 'border-[hsl(38_58%_54%_/_0.4)] text-[hsl(38,58%,62%)] bg-[hsl(38_58%_54%_/_0.07)]'
-                : 'border-border text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]'
+                : 'btn-secondary'
             }`}
           >
             {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
             {muted ? 'Ativar som dos alertas' : 'Silenciar alertas'}
           </button>
-        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-5 space-y-5 min-w-0">
 
@@ -1068,10 +1051,10 @@ export default function AlertasPage() {
                 <label className="space-y-1 text-xs md:col-span-2"><span>Webhook (opcional)</span><input value={ruleForm.webhookUrl} onChange={(e) => setRuleForm((s) => ({ ...s, webhookUrl: e.target.value }))} className="w-full h-9 px-3 rounded border border-border bg-background" placeholder="https://seu-webhook.local/alarme" /></label>
               </div>
 
-              <div className="flex flex-wrap items-center gap-3 text-xs">
-                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={ruleForm.isEnabled} onChange={(e) => setRuleForm((s) => ({ ...s, isEnabled: e.target.checked }))} /> Habilitada</label>
-                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={ruleForm.autoResolveOnRecovery} onChange={(e) => setRuleForm((s) => ({ ...s, autoResolveOnRecovery: e.target.checked }))} /> Auto-resolver em recuperação</label>
-                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={ruleForm.notifyOnOpen} onChange={(e) => setRuleForm((s) => ({ ...s, notifyOnOpen: e.target.checked }))} /> Notificar ao abrir</label>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5 text-xs">
+                <span className="inline-flex items-center gap-2"><Switch checked={ruleForm.isEnabled} onCheckedChange={(v) => setRuleForm((s) => ({ ...s, isEnabled: v }))} /> Habilitada</span>
+                <span className="inline-flex items-center gap-2"><Switch checked={ruleForm.autoResolveOnRecovery} onCheckedChange={(v) => setRuleForm((s) => ({ ...s, autoResolveOnRecovery: v }))} /> Auto-resolver em recuperação</span>
+                <span className="inline-flex items-center gap-2"><Switch checked={ruleForm.notifyOnOpen} onCheckedChange={(v) => setRuleForm((s) => ({ ...s, notifyOnOpen: v }))} /> Notificar ao abrir</span>
               </div>
 
               <div className="flex items-center justify-end gap-2">

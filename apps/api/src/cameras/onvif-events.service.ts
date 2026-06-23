@@ -94,6 +94,8 @@ export class OnvifEventsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private wakeUpCamera(cameraId: string) {
+    if (String(process.env.AI_AUTO_START_ENABLED ?? 'true').trim().toLowerCase() === 'false') return;
+
     const cooldownMs = Number(process.env.AI_ONVIF_WAKEUP_COOLDOWN_MS ?? 30000);
     const now = Date.now();
     const lastWakeup = this.lastWakeupByCamera.get(cameraId) ?? 0;

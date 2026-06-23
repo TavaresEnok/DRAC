@@ -108,25 +108,8 @@ export function CameraTile({
             )}
           </div>
 
-          {/* Bottom gradient + info */}
-          <div className="absolute bottom-0 left-0 right-0 z-10 px-2 py-1.5 bg-gradient-to-t from-black/65 to-transparent">
-            <div className="flex items-end justify-between gap-1">
-              <div className="flex-1 min-w-0">
-                <div className={`text-white/90 font-medium truncate ${compact ? 'text-[9px]' : 'text-[11px]'}`}>
-                  {camera.name}
-                </div>
-                {!compact && (
-                  <div className="flex items-center gap-1 mt-px">
-                    <span
-                      className="w-1 h-1 rounded-full shrink-0"
-                      style={{ backgroundColor: STATUS_DOT[camera.status] ?? STATUS_DOT.offline }}
-                    />
-                    <span className="text-[9px] text-white/45 capitalize">{camera.status.replace('_', ' ')}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          {/* Bottom gradient */}
+          <div className="absolute bottom-0 left-0 right-0 z-10 h-6 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
         </>
       )}
 
@@ -138,7 +121,7 @@ export function CameraTile({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
             transition={{ duration: 0.12 }}
-            className="absolute bottom-1 left-2 z-30 flex items-center gap-0.5 rounded-md py-1.5 px-2 bg-black/75 backdrop-blur-[2px]"
+            className="absolute bottom-1 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 rounded-md py-1.5 px-2 bg-black/75 backdrop-blur-[2px]"
             onClick={e => e.stopPropagation()}
           >
             {camera.ptzCapable && (

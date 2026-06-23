@@ -1,5 +1,6 @@
 import { formatBytes, formatDateLabel, formatDuration, formatResolution, formatTime, isOnline } from '../src/utils/format';
 import { normalizeServerUrl, request } from '../src/services/api';
+import { computeDetectionRect } from '../src/utils/detection-geometry';
 import type { Camera } from '../src/types';
 
 type TestCase = { name: string; fn: () => void | Promise<void> };
@@ -67,6 +68,20 @@ test('request: transforma AbortError em mensagem amigável', async () => {
     message = error instanceof Error ? error.message : '';
   }
   assert(message === 'Tempo esgotado. Verifique a conexão.', 'AbortError deve virar timeout amigável');
+});
+
+test('computeDetectionRect: mapeia bbox respeitando o letterbox do contain', () => {
+  // Frame 1000x1000 num container 200x100 → vídeo renderizado fica 100x100,
+  // centralizado, com 50px de letterbox em cada lado horizontal.
+  const rect = computeDetectionRect([0, 0, 500, 500], 1000, 1000, 200, 100);
+  assert(Math.abs(rect.left - 50) < 0.001, `left deve considerar offset do letterbox (got ${rect.left})`);
+  assert(Math.abs(rect.top - 0) < 0.001, `top deve ser 0 (got ${rect.top})`);
+  assert(Math.abs(rect.width - 50) < 0.001, `width deve escalar pela menor dimensão (got ${rect.width})`);
+  assert(Math.abs(rect.height - 50) < 0.001, `height deve escalar pela menor dimensão (got ${rect.height})`);
+
+  // Caixa degenerada não deve sumir: largura/altura mínima de 2px.
+  const tiny = computeDetectionRect([10, 10, 10, 10], 1000, 1000, 100, 100);
+  assert(tiny.width >= 2 && tiny.height >= 2, 'caixa mínima deve ter ao menos 2px');
 });
 
 async function main() {

@@ -168,6 +168,8 @@ export default function LiveViewPage() {
   }, [cameraIds, count, cameraById]);
 
   const onlineCount = useMemo(() => cameras.filter((c) => c.isOnline).length, [cameras]);
+  const recordingCount = useMemo(() => cameras.filter((c) => c.status === 'recording').length, [cameras]);
+  const alarmCount = useMemo(() => cameras.filter((c) => c.status === 'alarm').length, [cameras]);
 
   const filteredList = useMemo(() => {
     const q = search.toLowerCase();
@@ -408,16 +410,14 @@ export default function LiveViewPage() {
   return (
     <div className="flex h-full min-h-0">
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        <div className="ops-toolbar flex items-center gap-3 px-4 py-2.5 shrink-0">
-          <div className="ops-segment flex items-center gap-0.5">
+        <div className="toolbar">
+          <div className="segment">
             {(Object.entries(GRID_CONFIGS) as [GridSize, typeof GRID_CONFIGS[GridSize]][]).map(([size, item]) => (
               <Tooltip key={size} delayDuration={0}>
                 <TooltipTrigger asChild>
                   <button
                     onClick={() => setGridSize(size)}
-                  className={`h-7 min-w-12 px-2 rounded-md flex items-center justify-center gap-1.5 text-[10px] transition-colors ${
-                      gridSize === size ? 'ops-segment-active' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'
-                    }`}
+                    className={`seg-btn ${gridSize === size ? 'active' : ''}`}
                     data-testid={`button-grid-${size}`}
                   >
                     {item.icon}
@@ -450,7 +450,7 @@ export default function LiveViewPage() {
             </Select>
             <Popover>
               <PopoverTrigger asChild>
-                <button className="ops-button w-8 flex items-center justify-center" title="Gerenciar layouts salvos">
+                <button className="btn btn-secondary btn-sm btn-icon" title="Gerenciar layouts salvos">
                   <ChevronDown className="w-3.5 h-3.5" />
                 </button>
               </PopoverTrigger>
@@ -480,7 +480,7 @@ export default function LiveViewPage() {
                 </div>
               </PopoverContent>
             </Popover>
-            <button onClick={saveCurrentLayout} className="ops-button flex items-center gap-1.5 px-3 text-xs">
+            <button onClick={saveCurrentLayout} className="btn btn-secondary btn-sm">
               <Save className="w-3.5 h-3.5" />
               Salvar
             </button>
@@ -492,7 +492,7 @@ export default function LiveViewPage() {
                 <button
                   onClick={() => void (isRecording ? stopManualRecording() : startManualRecording())}
                   disabled={recordingActionLoading !== null}
-                  className={`ops-button h-7 px-2.5 flex items-center gap-1.5 text-[10px] transition-all ${
+                  className={`btn btn-secondary btn-sm ${
                     isRecording
                       ? 'border-[hsl(var(--destructive)_/_0.7)] text-[hsl(var(--destructive))] bg-[hsl(var(--destructive)_/_0.1)]'
                       : 'border-[hsl(var(--status-online)_/_0.7)] text-[hsl(var(--status-online))] bg-[hsl(var(--status-online)_/_0.1)] hover:bg-[hsl(var(--status-online)_/_0.2)]'
@@ -510,17 +510,29 @@ export default function LiveViewPage() {
                 </button>
               </>
             ) : null}
-            <span className="ops-chip">
-              <span className="w-1.5 h-1.5 rounded-full status-online" />
+            <span className="hdr-chip">
+              <span className="hdr-chip-dot status-online" />
               {onlineCount}/{cameras.length} online
             </span>
+            {recordingCount > 0 && (
+              <span className="hdr-chip">
+                <span className="hdr-chip-dot status-recording rec-pulse" />
+                {recordingCount} REC
+              </span>
+            )}
+            {alarmCount > 0 && (
+              <span className="hdr-chip">
+                <span className="hdr-chip-dot status-alarm alarm-glow" />
+                {alarmCount} ALM
+              </span>
+            )}
           </div>
 
           <Tooltip delayDuration={0}>
             <TooltipTrigger asChild>
               <button
                 onClick={toggleWallMode}
-                className="ops-button w-8 flex items-center justify-center"
+                className="btn btn-secondary btn-sm btn-icon"
                 data-testid="button-wall-mode"
               >
                 <Maximize2 className="w-3.5 h-3.5" />
@@ -533,7 +545,7 @@ export default function LiveViewPage() {
             <TooltipTrigger asChild>
               <button
                 onClick={() => setPanelOpen(o => !o)}
-                className="ops-button w-8 flex items-center justify-center"
+                className="btn btn-secondary btn-sm btn-icon"
               >
                 {panelOpen ? <PanelRightClose className="w-3.5 h-3.5" /> : <PanelRightOpen className="w-3.5 h-3.5" />}
               </button>
@@ -543,7 +555,7 @@ export default function LiveViewPage() {
         </div>
 
         <div
-          className="camera-grid-surface flex-1 p-2 grid gap-2 min-h-0"
+          className="cam-grid-bg flex-1 p-2 grid gap-2 min-h-0"
           style={{ gridTemplateColumns: `repeat(${cfg.cols}, 1fr)`, gridTemplateRows: `repeat(${cfg.rows}, 1fr)` }}
         >
           {displayedCams.map((cam, i) => (
@@ -572,7 +584,7 @@ export default function LiveViewPage() {
                     onAction={handleCamAction}
                     streamStartDelayMs={0}
                   />
-                  <div className="absolute top-1.5 right-1.5 z-20 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100">
+                  <div className="absolute top-9 right-1.5 z-40 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100">
                     <button
                       onClick={(event) => {
                         event.stopPropagation();
@@ -598,12 +610,12 @@ export default function LiveViewPage() {
               ) : (
                 <div
                   onClick={() => selectSlotForCamera(i)}
-                  className="w-full h-full rounded-md border border-dashed border-border/80 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-[hsl(var(--primary)_/_0.4)] transition-colors bg-black/20"
+                  className="cam-empty"
                   style={{ minHeight: 80 }}
                 >
-                  <Video className="w-4 h-4 text-[hsl(var(--muted-foreground)_/_0.45)]" />
-                  <span className="text-[11px] text-[hsl(var(--muted-foreground)_/_0.55)]">
-                    {selectedSlotIndex === i ? 'Escolha uma câmera' : 'Adicionar câmera'}
+                  <Video className="w-4 h-4" />
+                  <span style={{ fontFamily: 'var(--ff-mono)', fontSize: 10 }}>
+                    {selectedSlotIndex === i ? 'Escolha uma câmera' : 'Slot vazio'}
                   </span>
                 </div>
               )}
@@ -616,7 +628,7 @@ export default function LiveViewPage() {
         {panelOpen && (
           <motion.aside
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 188, opacity: 1 }}
+            animate={{ width: 224, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 32 }}
             className="border-l border-border bg-card flex flex-col overflow-hidden shrink-0"
@@ -632,37 +644,37 @@ export default function LiveViewPage() {
                 <ShieldCheck className="w-4 h-4 text-[hsl(var(--status-online))]" />
               </div>
 
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+              <div className="input-wrap">
+                <span className="input-icon"><Search className="w-3 h-3" /></span>
                 <input
-                  type="search"
-                  placeholder="Buscar"
+                  className="input"
+                  style={{ height: 30, fontSize: 11 }}
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  className="w-full h-8 pl-8 pr-3 rounded-md border border-border bg-background/60 text-xs focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))] placeholder:text-[hsl(var(--muted-foreground)_/_0.5)]"
+                  placeholder="Buscar câmera..."
                 />
               </div>
 
-              <div className="grid grid-cols-1 gap-1.5">
-                <Select value={zoneFilter} onValueChange={setZoneFilter}>
-                  <SelectTrigger className="h-8 text-[10px]">
-                    <Filter className="w-3 h-3 mr-1.5 text-[hsl(var(--muted-foreground))]" />
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {zoneFilters.map(z => <SelectItem key={z} value={z} className="text-xs">{z === '__all__' ? 'Todas as zonas' : z}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as StatusFilter)}>
-                  <SelectTrigger className="h-8 text-[10px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {STATUS_FILTERS.map(s => (
-                      <SelectItem key={s} value={s} className="text-xs">{STATUS_FILTER_LABEL[s]}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <Select value={zoneFilter} onValueChange={setZoneFilter}>
+                <SelectTrigger className="h-8 text-[10px]">
+                  <Filter className="w-3 h-3 mr-1.5 text-[hsl(var(--muted-foreground))]" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {zoneFilters.map(z => <SelectItem key={z} value={z} className="text-xs">{z === '__all__' ? 'Todas as zonas' : z}</SelectItem>)}
+                </SelectContent>
+              </Select>
+
+              <div className="flex flex-wrap gap-1">
+                {STATUS_FILTERS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setStatusFilter(s)}
+                    className={`ops-pill ${statusFilter === s ? 'ops-pill-active' : ''}`}
+                  >
+                    {STATUS_FILTER_LABEL[s]}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -712,7 +724,7 @@ export default function LiveViewPage() {
       {!panelOpen && (
         <button
           onClick={() => setPanelOpen(true)}
-          className="absolute right-3 top-[104px] ops-button z-10 w-8 flex items-center justify-center"
+          className="btn btn-secondary btn-sm btn-icon absolute right-3 top-[104px] z-10"
         >
           <ChevronLeft className="w-3.5 h-3.5" />
         </button>

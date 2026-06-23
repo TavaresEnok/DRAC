@@ -1,15 +1,27 @@
-import { Pressable, Text, View } from 'react-native';
-import { LiveVideo } from '../components/VideoPlayers';
+import { useState } from 'react';
+import { type LayoutChangeEvent, Pressable, Text, View } from 'react-native';
+import { LiveVideo, type LiveStatus } from '../components/VideoPlayers';
+import { DetectionOverlay } from '../components/DetectionOverlay';
 import { PtzButton } from '../components/PtzButton';
 import { SvgIcon } from '../components/SvgIcon';
 import { styles } from '../styles/appStyles';
-import type { Camera, Direction } from '../types';
+import type { Camera, Direction, LiveDetection } from '../types';
 import { isOnline } from '../utils/format';
+
+const LIVE_STATUS_LABEL: Record<LiveStatus, string> = {
+  idle: 'SEM SINAL',
+  connecting: '◌ CONECTANDO',
+  live: '● AO VIVO',
+  reconnecting: '◌ RECONECTANDO',
+  offline: 'SEM SINAL',
+};
 
 interface LiveScreenProps {
   selectedCamera: Camera | null;
   streamUrl: string | null;
+  whepUrl: string | null;
   posterUrl: string | null;
+  detections: LiveDetection[];
   showPtz: boolean;
   ptzActive: Direction | null;
   ptzFeedback: string | null;
@@ -22,7 +34,9 @@ interface LiveScreenProps {
 export function LiveScreen({
   selectedCamera,
   streamUrl,
+  whepUrl,
   posterUrl,
+  detections,
   showPtz,
   ptzActive,
   ptzFeedback,
@@ -44,8 +58,16 @@ export function LiveScreen({
     );
   }
 
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>('idle');
+  const [videoSize, setVideoSize] = useState({ width: 0, height: 0 });
   const online = isOnline(selectedCamera);
   const canOpenLive = online && Boolean(streamUrl);
+  const isLive = liveStatus === 'live';
+
+  const onVideoLayout = (event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setVideoSize((current) => (current.width === width && current.height === height ? current : { width, height }));
+  };
 
   return (
     <View style={styles.page}>
@@ -66,21 +88,35 @@ export function LiveScreen({
         </View>
 
         {/* ── Player Edge-to-Edge ─────────────────────────── */}
-        <View style={styles.singleVideoCard}>
+        <View style={styles.singleVideoCard} onLayout={onVideoLayout}>
           <LiveVideo
             uri={streamUrl}
+            whepUri={whepUrl}
             posterUri={posterUrl}
             videoStyle={styles.video}
             emptyStyle={styles.videoEmpty}
             posterStyle={styles.videoPoster}
             emptyTitleStyle={styles.videoEmptyTitle}
             emptyTextStyle={styles.videoEmptyText}
+            onStatusChange={setLiveStatus}
           />
 
-          {/* Badge AO VIVO + protocolo */}
+          {isLive ? (
+            <DetectionOverlay
+              detections={detections}
+              containerWidth={videoSize.width}
+              containerHeight={videoSize.height}
+              fallbackWidth={selectedCamera.detectedWidth}
+              fallbackHeight={selectedCamera.detectedHeight}
+            />
+          ) : null}
+
+          {/* Badge de status real + protocolo */}
           <View style={styles.singleVideoTopOverlay}>
-            <Text style={styles.liveNowText}>● AO VIVO</Text>
-            <Text style={styles.videoProtocol}>{canOpenLive ? 'HLS' : 'SEM SINAL'}</Text>
+            <Text style={[styles.liveNowText, !isLive && styles.liveNowTextIdle]}>
+              {LIVE_STATUS_LABEL[liveStatus]}
+            </Text>
+            <Text style={styles.videoProtocol}>{isLive ? 'HLS' : ''}</Text>
           </View>
 
           {/* Ações flutuantes – lado direito */}

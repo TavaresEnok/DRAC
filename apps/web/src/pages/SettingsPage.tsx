@@ -203,26 +203,20 @@ export default function ConfiguracoesPage() {
   };
 
   return (
-    <div className="min-h-full bg-background">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="px-6 py-3 border-b border-border shrink-0 flex items-center justify-end">
+        <button
+          onClick={() => void handleSave()}
+          disabled={saving || loading || !settings}
+          className={`btn btn-sm ${saved ? 'border-[hsl(var(--status-online))] text-[hsl(var(--status-online))] bg-[hsl(var(--status-online)_/_0.1)]' : 'btn-primary'}`}
+          data-testid="button-save-settings"
+        >
+          {saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+          {saved ? 'Salvo' : 'Salvar alterações'}
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 md:p-6">
-        <header className="flex flex-col gap-4 rounded-lg border border-border/70 bg-card/80 p-5 shadow-sm md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-xs font-medium text-muted-foreground">Sistema</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Configurações</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Cada ajuste abaixo é persistido e aplicado de fato no servidor.</p>
-          </div>
-          <button
-            onClick={() => void handleSave()}
-            disabled={saving || loading || !settings}
-            className={`inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition disabled:opacity-60 ${
-              saved ? 'bg-[hsl(var(--status-online))] text-white shadow-sm shadow-[hsl(var(--status-online)_/_0.2)]' : 'bg-foreground text-background hover:bg-foreground/90'
-            }`}
-            data-testid="button-save-settings"
-          >
-            {saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-            {saved ? 'Salvo' : 'Salvar alterações'}
-          </button>
-        </header>
 
         <section className="grid gap-3 md:grid-cols-4">
           <MetricCard icon={Server} label="Câmeras online" value={metrics.online} detail="Dispositivos respondendo agora" />
@@ -373,6 +367,7 @@ export default function ConfiguracoesPage() {
             )}
           </main>
         </div>
+      </div>
       </div>
     </div>
   );

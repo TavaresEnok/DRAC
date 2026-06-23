@@ -39,6 +39,10 @@ webrtcAddress: :8889
 webrtcAllowOrigins: ['*']
 webrtcLocalUDPAddress: :8189
 webrtcAdditionalHosts: ['168.194.13.70']
+# Em Docker, anunciar os IPs das interfaces inclui IPs internos (172.x) inalcançáveis
+# pelos clientes na LAN — isso vira candidato ICE morto e faz o WebRTC demorar/flapar
+# (vídeo piscando/reconectando). Anunciamos apenas o host real acima.
+webrtcIPsFromInterfaces: no
 
 pathDefaults:
   rtspTransport: tcp

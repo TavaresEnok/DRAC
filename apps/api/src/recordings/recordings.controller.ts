@@ -324,7 +324,12 @@ export class RecordingsController {
     const token = await this.authService.createPlaybackToken(user.id, recordingId);
     const expiresAtMs = token.expiresAt ? new Date(token.expiresAt).getTime() : Date.now() + 5 * 60 * 1000;
     const maxAgeMs = Math.max(60_000, expiresAtMs - Date.now());
-    const secure = String(process.env.NODE_ENV ?? '').toLowerCase() === 'production';
+    // COOKIE_SECURE permite forçar o valor quando produção roda sem TLS (ex: atrás de
+    // proxy HTTP interno); sem essa variável, o cookie nunca seria salvo pelo browser
+    // e o playback quebraria silenciosamente.
+    const secure = process.env.COOKIE_SECURE !== undefined
+      ? process.env.COOKIE_SECURE.toLowerCase() === 'true'
+      : String(process.env.NODE_ENV ?? '').toLowerCase() === 'production';
     res.cookie('vms_play_token', token.playToken, {
       httpOnly: true,
       sameSite: 'lax',

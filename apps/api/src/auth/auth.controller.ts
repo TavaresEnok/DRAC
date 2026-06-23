@@ -4,7 +4,9 @@ import { Throttle } from '@nestjs/throttler';
 import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { AuthService } from './auth.service';
 import { type AuthUser } from '../common/types/auth-user.type';
 
@@ -34,6 +36,24 @@ export class AuthController {
       );
       throw error;
     }
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('forgot-password')
+  async forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
+    await this.authService.forgotPassword(dto.email);
+    await this.auditService.log(null, 'auth.password.forgot_requested', 'User', null, { email: dto.email.trim().toLowerCase() }, req);
+    return { success: true };
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('reset-password')
+  async resetPassword(@Body() dto: ResetPasswordDto, @Req() req: Request) {
+    await this.authService.resetPassword(dto.token, dto.newPassword);
+    await this.auditService.log(null, 'auth.password.reset_completed', 'User', null, undefined, req);
+    return { success: true };
   }
 
   @Get('me')

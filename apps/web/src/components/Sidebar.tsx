@@ -3,9 +3,9 @@ import { motion } from 'framer-motion';
 import {
   Monitor, PlaySquare,
   Camera, Settings,
-  Gauge, Activity, ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
-  Server, Users, Radar, Brain, FolderKey, ShieldCheck, Search, Sun, Moon,
-  Bell, ClipboardList, FileText, Archive, Crosshair, HardDrive,
+  ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
+  Server, Users, Radar, FolderKey, ShieldCheck, Search, Sun, Moon,
+  Bell, Crosshair, HardDrive, UserCircle,
   type LucideIcon,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -31,43 +31,42 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'Monitoramento',
     icon: Radar,
     items: [
-      { path: '/live', label: 'Ao Vivo', icon: Monitor },
-      { path: '/playback', label: 'Reprodução', icon: PlaySquare },
-      { path: '/events', label: 'Eventos', icon: Activity },
-      { path: '/alarms', label: 'Alertas', icon: Bell },
-      { path: '/ai', label: 'IA', icon: Brain },
-      { path: '/ptz', label: 'Controle PTZ', icon: Crosshair },
+      { path: '/live',     label: 'Ao Vivo',       icon: Monitor },
+      { path: '/playback', label: 'Reprodução',     icon: PlaySquare },
+      // Alertas requerem operador ou superior (viewers não têm acesso)
+      { path: '/alarms',   label: 'Alertas',        icon: Bell,     roles: ['admin', 'operator'] },
+      { path: '/ptz',      label: 'Controle PTZ',   icon: Crosshair },
     ],
   },
   {
     label: 'Infraestrutura',
     icon: Server,
     items: [
-      { path: '/cameras', label: 'Câmeras', icon: Camera },
-      { path: '/storage', label: 'Armazenamento', icon: HardDrive },
-      { path: '/performance', label: 'Desempenho', icon: Gauge },
+      // Câmeras e Armazenamento são exclusivos de admin/operador
+      { path: '/cameras', label: 'Câmeras',       icon: Camera,   roles: ['admin', 'operator'] },
+      { path: '/storage', label: 'Armazenamento', icon: HardDrive, roles: ['admin', 'operator'] },
     ],
   },
   {
     label: 'Administração',
     icon: Users,
     items: [
-      { path: '/users', label: 'Usuários', icon: Users, roles: ['admin', 'operator'] },
-      { path: '/groups', label: 'Grupos', icon: FolderKey, roles: ['admin', 'supervisor'] },
-      { path: '/roles', label: 'Funções', icon: ShieldCheck, roles: ['admin'] },
-      { path: '/audit', label: 'Auditoria', icon: ClipboardList, roles: ['admin', 'supervisor'] },
-      { path: '/reports', label: 'Relatórios', icon: FileText, roles: ['admin', 'supervisor'] },
-      { path: '/evidence', label: 'Evidências', icon: Archive, roles: ['admin', 'supervisor', 'operator'] },
-      { path: '/settings', label: 'Configurações', icon: Settings, roles: ['admin'] },
+      // Viewer vê "Minha conta" (perfil + gestão do próprio grupo se for group admin)
+      { path: '/profile', label: 'Minha conta', icon: UserCircle, roles: ['viewer'] },
+      { path: '/users',   label: 'Usuários',    icon: Users,       roles: ['admin', 'operator'] },
+      // Grupos: apenas admin global (Ajust Consulting gerencia grupos)
+      { path: '/groups',  label: 'Grupos',      icon: FolderKey,   roles: ['admin'] },
+      { path: '/roles',   label: 'Funções',     icon: ShieldCheck, roles: ['admin'] },
+      { path: '/settings',label: 'Configurações',icon: Settings,   roles: ['admin'] },
     ],
   },
 ];
 
 /* Role accent — no red for admin; steel blue hierarchy */
 const ROLE_COLOR: Record<string, string> = {
-  admin:      'text-[hsl(var(--primary))]',
-  supervisor: 'text-[hsl(var(--chart-2))]',
-  operator:   'text-[hsl(var(--muted-foreground))]',
+  admin:    'text-[hsl(var(--primary))]',
+  operator: 'text-[hsl(var(--chart-2))]',
+  viewer:   'text-[hsl(var(--muted-foreground))]',
 };
 
 export function Sidebar({

@@ -22,6 +22,7 @@ export interface Camera {
   ptzCapable: boolean;
   hasAudio: boolean;
   aiEnabled: boolean;
+  alarmsEnabled: boolean;
   isOnline: boolean;
   signalStrength: number;
   recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
@@ -61,7 +62,7 @@ export interface Camera {
 export interface User {
   id: string;
   name: string;
-  role: 'operator' | 'supervisor' | 'admin';
+  role: 'viewer' | 'operator' | 'admin';
   email: string;
   badge: string;
   lastLogin: string;
@@ -234,7 +235,7 @@ function api() {
 function mapRole(role: string): User['role'] {
   if (role === 'SUPER_ADMIN' || role === 'ADMIN') return 'admin';
   if (role === 'OPERATOR') return 'operator';
-  return 'supervisor';
+  return 'viewer';
 }
 
 function mapSeverity(severity: string): VMSEvent['severity'] {
@@ -350,6 +351,7 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
           ptzCapable: Boolean(camera.onvifPath || camera.onvifProfileToken),
           hasAudio: Boolean(camera.audioEnabled),
           aiEnabled: camera.aiEnabled !== false,
+          alarmsEnabled: camera.alarmsEnabled !== false,
           isOnline: camera.status === 'ONLINE',
           signalStrength: camera.status === 'ONLINE' ? 100 : 0,
           recordingMode: effectiveRecordingMode,

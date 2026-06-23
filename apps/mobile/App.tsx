@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { DEFAULT_API_URL } from './src/config';
 import { BottomTabs } from './src/components/BottomTabs';
+import { AlarmsScreen } from './src/screens/AlarmsScreen';
 import { DashboardScreen } from './src/screens/DashboardScreen';
 import { GridScreen } from './src/screens/GridScreen';
 import { LiveScreen } from './src/screens/LiveScreen';
@@ -20,6 +21,8 @@ import { ProfileScreen } from './src/screens/ProfileScreen';
 import { request, normalizeServerUrl } from './src/services/api';
 import { requestCachedStreamUrls } from './src/services/stream-urls-cache';
 import { cleanApiUrl, clearStoredSession, loadStoredSession, saveStoredSession } from './src/services/sessionStore';
+import { useAlarms } from './src/hooks/useAlarms';
+import { useLiveDetections } from './src/hooks/useLiveDetections';
 import type { ActivePlayback, Camera, Direction, MosaicArea, Recording, Session, StreamUrls, Tab, User } from './src/types';
 import { styles } from './src/styles/appStyles';
 
@@ -36,6 +39,7 @@ export default function App() {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
   const [streamUrls, setStreamUrls] = useState<Record<string, string | null>>({});
+  const [streamWhep, setStreamWhep] = useState<Record<string, string | null>>({});
   const [streamPosters, setStreamPosters] = useState<Record<string, string | null>>({});
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [activePlayback, setActivePlayback] = useState<ActivePlayback | null>(null);
@@ -49,6 +53,9 @@ export default function App() {
   const [lastSyncError, setLastSyncError] = useState<string | null>(null);
   const previewLimit = 8;
   const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) ?? cameras[0] ?? null;
+
+  const { alarms, openAlarmCount, reload: reloadAlarms, ack: ackAlarm, resolve: resolveAlarm } = useAlarms(session);
+  const liveDetections = useLiveDetections(session, tab === 'live', selectedCamera?.id ?? null);
 
   const groupedCameras = useMemo(() => {
     const map = new Map<string, Camera[]>();
@@ -147,6 +154,32 @@ export default function App() {
     }
   };
 
+  const forgotPassword = async () => {
+    const targetEmail = email.trim();
+    if (!targetEmail) {
+      Alert.alert('Esqueci minha senha', 'Informe o e-mail da sua conta no campo acima e toque novamente.');
+      return;
+    }
+    const nextApiUrl = cleanApiUrl(apiUrl);
+    if (!nextApiUrl) {
+      Alert.alert('Esqueci minha senha', 'Informe a URL do servidor antes de continuar.');
+      return;
+    }
+    try {
+      await request(nextApiUrl, '/auth/forgot-password', undefined, {
+        method: 'POST',
+        body: JSON.stringify({ email: targetEmail }),
+      });
+    } catch {
+      // O backend responde igual existindo ou não a conta (evita enumeração de e-mails);
+      // não revelamos falha ao usuário por esse motivo.
+    }
+    Alert.alert(
+      'Verifique seu e-mail',
+      `Se houver uma conta para ${targetEmail}, enviamos um link para redefinir a senha. Abra o link no navegador para concluir.`,
+    );
+  };
+
   const logout = async () => {
     await clearStoredSession();
     setSession(null);
@@ -163,13 +196,19 @@ export default function App() {
       setCameras(data);
       setLastSyncError(null);
       setSelectedCameraId((current) => current ?? data[0]?.id ?? null);
+      void reloadAlarms();
       void Promise.all(data.slice(0, previewLimit).map((camera) => loadStream(camera.id)));
     } catch (error) {
+      const status = (error as { status?: number })?.status;
       const message = error instanceof Error ? error.message : 'Não foi possível carregar câmeras.';
-      setLastSyncError(message.includes('401') ? 'Sessão expirada. Entre novamente.' : `Servidor indisponível: ${message}`);
-      if (message.includes('401')) {
+      // 401 = token ausente/expirado: derruba a sessão salva e volta ao login, em vez
+      // de ficar preso mostrando "unauthorized". Detecta pelo status HTTP (robusto) e
+      // também pelo texto, caso o status não venha.
+      const isAuthError = status === 401 || /\b401\b|unauthorized|não autorizado/i.test(message);
+      setLastSyncError(isAuthError ? 'Sessão expirada. Entre novamente.' : `Servidor indisponível: ${message}`);
+      if (isAuthError) {
         await logout();
-        Alert.alert('Sessão expirada', 'Entre novamente para continuar.');
+        Alert.alert('Sessão expirada', 'Sua sessão expirou. Entre novamente para continuar.');
       } else {
         Alert.alert('Falha ao carregar', message);
       }
@@ -184,14 +223,22 @@ export default function App() {
       // Use cached request to deduplicate concurrent requests for same camera
       const data = await requestCachedStreamUrls<StreamUrls>(session.apiUrl, cameraId, session.token);
       const hlsUrl = normalizeServerUrl(data.protocols?.hlsUrl, session.apiUrl);
+      // WHEP (WebRTC) vai DIRETO ao MediaMTX, na porta pública dele — não passa pelo
+      // /api. Aceita whepUrl pronto ou deriva de webrtcUrl + "/whep" (igual ao web).
+      const whepRaw =
+        data.protocols?.whepUrl
+        ?? (data.protocols?.webrtcUrl ? `${data.protocols.webrtcUrl.replace(/\/+$/, '')}/whep` : null);
+      const whepUrl = normalizeServerUrl(whepRaw, session.apiUrl);
       const posterBaseUrl = normalizeServerUrl(data.protocols?.posterUrl, session.apiUrl);
       const posterUrl = posterBaseUrl && data.streamToken
         ? `${posterBaseUrl}${posterBaseUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(data.streamToken)}&v=${Date.now()}`
         : null;
       setStreamUrls((current) => ({ ...current, [cameraId]: hlsUrl }));
+      setStreamWhep((current) => ({ ...current, [cameraId]: whepUrl }));
       setStreamPosters((current) => ({ ...current, [cameraId]: posterUrl }));
     } catch {
       setStreamUrls((current) => ({ ...current, [cameraId]: null }));
+      setStreamWhep((current) => ({ ...current, [cameraId]: null }));
       setStreamPosters((current) => ({ ...current, [cameraId]: null }));
     }
   };
@@ -326,6 +373,7 @@ export default function App() {
         onEmailChange={setEmail}
         onPasswordChange={setPassword}
         onSubmit={login}
+        onForgotPassword={forgotPassword}
       />
     );
   }
@@ -349,7 +397,9 @@ export default function App() {
           <LiveScreen
             selectedCamera={selectedCamera}
             streamUrl={selectedCamera ? streamUrls[selectedCamera.id] ?? null : null}
+            whepUrl={selectedCamera ? streamWhep[selectedCamera.id] ?? null : null}
             posterUrl={selectedCamera ? streamPosters[selectedCamera.id] ?? null : null}
+            detections={liveDetections}
             showPtz={showPtz}
             ptzActive={ptzActive}
             ptzFeedback={ptzFeedback}
@@ -397,12 +447,22 @@ export default function App() {
           />
         )}
 
+        {tab === 'alarms' && (
+          <AlarmsScreen
+            alarms={alarms}
+            canManage={session.user.role !== 'VIEWER'}
+            onAck={ackAlarm}
+            onResolve={resolveAlarm}
+            onOpenCamera={(cameraId) => { setSelectedCameraId(cameraId); setShowPtz(true); setTab('live'); }}
+          />
+        )}
+
         {tab === 'profile' && (
           <ProfileScreen session={session} onLogout={logout} />
         )}
       </ScrollView>
 
-      {tab !== 'live' ? <BottomTabs activeTab={tab} onChange={setTab} /> : null}
+      {tab !== 'live' ? <BottomTabs activeTab={tab} onChange={setTab} alarmCount={openAlarmCount} /> : null}
     </SafeAreaView>
   );
 }

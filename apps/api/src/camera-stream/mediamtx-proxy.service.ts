@@ -9,6 +9,12 @@ import {
   resolveLiveRtspProfile,
 } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
+import {
+  GRID_LIVE_MAX_HEIGHT,
+  GRID_LIVE_MAX_WIDTH,
+  GRID_LIVE_TARGET_FPS,
+  type LiveViewMode,
+} from './helpers/live-delivery-profile.helper';
 
 type DeliveryUrls = {
   enabled: boolean;
@@ -26,6 +32,7 @@ type EnsuredCameraPath = {
   sourceVideoCodec: string | null;
   transcodedForLive: boolean;
   liveProfile: { channel: number; subtype: number } | null;
+  deliveryMode: LiveViewMode;
 };
 
 @Injectable()
@@ -68,19 +75,33 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
     return `rtsp://${encodeURIComponent(publishUser)}:${encodeURIComponent(publishPass)}@localhost:$RTSP_PORT/${pathName}`;
   }
 
-  private pathNameFromCameraId(cameraId: string) {
-    return `cam_${cameraId.replace(/[^a-zA-Z0-9]/g, '')}`;
+  private shellQuote(value: string) {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
   }
 
-  getPathNameForCamera(cameraId: string) {
-    return this.pathNameFromCameraId(cameraId);
+  private pathNameFromCameraId(cameraId: string, deliveryMode: LiveViewMode = 'selected') {
+    const base = `cam_${cameraId.replace(/[^a-zA-Z0-9]/g, '')}`;
+    return deliveryMode === 'grid' ? `${base}_grid` : base;
+  }
+
+  getPathNameForCamera(cameraId: string, deliveryMode: LiveViewMode = 'selected') {
+    return this.pathNameFromCameraId(cameraId, deliveryMode);
+  }
+
+  private buildEnsureKey(cameraId: string, deliveryMode: LiveViewMode) {
+    return `${cameraId}:${deliveryMode}`;
   }
 
   invalidateMainCodecCache(cameraId: string) {
     for (const key of this.liveCodecCache.keys()) {
       if (key.startsWith(`${cameraId}:`)) this.liveCodecCache.delete(key);
     }
-    this.pathEnsureCache.delete(cameraId);
+    for (const key of [...this.pathEnsureCache.keys()]) {
+      if (key.startsWith(`${cameraId}:`)) this.pathEnsureCache.delete(key);
+    }
+    for (const key of [...this.pathEnsureInFlight.keys()]) {
+      if (key.startsWith(`${cameraId}:`)) this.pathEnsureInFlight.delete(key);
+    }
   }
 
   // Sonda o codec do stream via ffprobe (assíncrono, não bloqueia o event loop).
@@ -312,7 +333,10 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
         while (nextIndex < cameras.length) {
           const camera = cameras[nextIndex++];
           try {
-            await this.ensurePathForCamera(camera.id);
+            await Promise.all([
+              this.ensurePathForCamera(camera.id, 'selected'),
+              this.ensurePathForCamera(camera.id, 'grid'),
+            ]);
             warmed += 1;
           } catch {
             failed += 1;
@@ -330,30 +354,31 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
     }
   }
 
-  ensurePathForCamera(cameraId: string): Promise<EnsuredCameraPath> {
-    const cached = this.pathEnsureCache.get(cameraId);
+  ensurePathForCamera(cameraId: string, deliveryMode: LiveViewMode = 'selected'): Promise<EnsuredCameraPath> {
+    const ensureKey = this.buildEnsureKey(cameraId, deliveryMode);
+    const cached = this.pathEnsureCache.get(ensureKey);
     if (cached && Date.now() - cached.at < MediamtxProxyService.PATH_ENSURE_TTL_MS) {
       return Promise.resolve(cached.value);
     }
 
-    const existing = this.pathEnsureInFlight.get(cameraId);
+    const existing = this.pathEnsureInFlight.get(ensureKey);
     if (existing) return existing;
 
-    const request = this.configurePathForCamera(cameraId)
+    const request = this.configurePathForCamera(cameraId, deliveryMode)
       .then((value) => {
-        this.pathEnsureCache.set(cameraId, { value, at: Date.now() });
+        this.pathEnsureCache.set(ensureKey, { value, at: Date.now() });
         return value;
       })
       .finally(() => {
-        if (this.pathEnsureInFlight.get(cameraId) === request) {
-          this.pathEnsureInFlight.delete(cameraId);
+        if (this.pathEnsureInFlight.get(ensureKey) === request) {
+          this.pathEnsureInFlight.delete(ensureKey);
         }
       });
-    this.pathEnsureInFlight.set(cameraId, request);
+    this.pathEnsureInFlight.set(ensureKey, request);
     return request;
   }
 
-  private async configurePathForCamera(cameraId: string): Promise<EnsuredCameraPath> {
+  private async configurePathForCamera(cameraId: string, deliveryMode: LiveViewMode): Promise<EnsuredCameraPath> {
     if (!this.isEnabled()) {
       return {
         pathName: null as string | null,
@@ -361,13 +386,14 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
         sourceVideoCodec: null as string | null,
         transcodedForLive: false,
         liveProfile: null as { channel: number; subtype: number } | null,
+        deliveryMode,
       };
     }
 
     const camera = await this.camerasService.getCameraOrThrow(cameraId);
     const password = this.cryptoService.decrypt(camera.passwordEncrypted);
 
-    const pathName = this.pathNameFromCameraId(cameraId);
+    const pathName = this.pathNameFromCameraId(cameraId, deliveryMode);
     const encodedPath = encodeURIComponent(pathName);
     const sourceOnDemand = this.configService.get<boolean>('mediaMtxSourceOnDemand') ?? false;
     const sourceOnDemandStartTimeout = this.configService.get<string>('mediaMtxSourceOnDemandStartTimeout') ?? '6s';
@@ -381,8 +407,8 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
     const liveProfile = selectedLive.profile;
     const sourceUrl = selectedLive.sourceUrl;
     const isHevc = selectedLive.isHevc;
-    const transcodeAudioForWebrtc = Boolean(camera.audioEnabled);
-    const needsPublisher = isHevc || transcodeAudioForWebrtc;
+    const transcodeAudioForWebrtc = deliveryMode === 'selected' && Boolean(camera.audioEnabled);
+    const needsPublisher = deliveryMode === 'grid' || isHevc || transcodeAudioForWebrtc;
 
     const desiredPath: any = {
       source: sourceUrl,
@@ -400,10 +426,16 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
       // O publisher tambem normaliza H.264 quando ja precisa abrir FFmpeg para
       // o audio. Copiar um stream com fragmentos RTP perdidos repassa quadros
       // quebrados ao navegador e pode deixar a imagem verde ate o proximo IDR.
-      const videoArgs =
-        '-threads 4 -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main ' +
-        '-b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p ' +
-        '-g 30 -keyint_min 15 -sc_threshold 0 -bf 0 -refs 1';
+      const gridScaleFilter =
+        `scale=w=${GRID_LIVE_MAX_WIDTH}:h=${GRID_LIVE_MAX_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
+        `fps=${GRID_LIVE_TARGET_FPS}`;
+      const videoArgs = deliveryMode === 'grid'
+        ? '-threads 4 -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main ' +
+          '-b:v 1800k -maxrate 1800k -bufsize 3600k -pix_fmt yuv420p ' +
+          `-g 40 -keyint_min 20 -sc_threshold 0 -bf 0 -refs 1 -vf "${gridScaleFilter}"`
+        : '-threads 4 -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main ' +
+          '-b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p ' +
+          '-g 30 -keyint_min 15 -sc_threshold 0 -bf 0 -refs 1';
       const audioArgs = transcodeAudioForWebrtc
         ? '-c:a libopus -ar 48000 -ac 2 -application lowdelay -b:a 96k'
         : '-an';
@@ -412,13 +444,25 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
       // Sem este limite, libx264 cria automaticamente N threads = nº de núcleos lógicos,
       // causando 3 × 14 = 42 threads encode + 3 × 15 = 45 threads decode competindo,
       // sobrecarregando C0/C1 por efeito de scheduler clustering.
-      const publishUrl = this.buildInternalPublishRtspUrl();
-      desiredPath.runOnDemand =
-        `ffmpeg -hide_banner -loglevel warning -fflags +genpts+discardcorrupt ` +
-        `-flags low_delay -err_detect ignore_err -rtsp_transport ${rtspTransport} ` +
+      const publishUrl = this.buildInternalPublishRtspUrl(pathName);
+      const ffmpegCommand =
+        `ffmpeg -nostdin -hide_banner -loglevel warning -fflags +genpts+discardcorrupt+nobuffer ` +
+        // -analyzeduration/-probesize: o padrão do FFmpeg analisa até 5s/5MB do input
+        // antes de começar a transcodificar. Para câmeras H.264/H.265 conhecidas isso é
+        // exagero e adiciona vários segundos ao COLD START (quando o runOnDemand reabre
+        // após os 5 min de runOnDemandCloseAfter). 1s/1MB já identifica o stream com
+        // folga e corta esse atraso, deixando o retorno à câmera bem mais rápido.
+        // +nobuffer evita o buffer de entrada extra do FFmpeg (menor latência ao vivo).
+        `-analyzeduration 1000000 -probesize 1000000 ` +
+        // careful: validates bitstream integrity and drops malformed packets
+        // instead of passing corrupted NAL units downstream (which causes
+        // green frames in the browser until the next IDR keyframe arrives).
+        `-flags low_delay -err_detect careful -rtsp_transport ${rtspTransport} ` +
         `-i "${sourceUrl}" -map 0:v:0 -map 0:a:0? ${videoArgs} ${audioArgs} ` +
         `-f rtsp -rtsp_transport tcp -muxdelay 0.1 -pkt_size 1200 "${publishUrl}"`;
-      desiredPath.runOnDemandRestart = true;
+      const lockPath = `/tmp/drac-mtx-${pathName}.lock`;
+      desiredPath.runOnDemand = `flock -n ${lockPath} -c ${this.shellQuote(`exec ${ffmpegCommand}`)}`;
+      desiredPath.runOnDemandRestart = false;
       desiredPath.runOnDemandStartTimeout = '15s'; // Tempo para o ffmpeg começar a republicar.
       // Mantém o restream recente aquecido. Assim, voltar para uma câmera não
       // exige iniciar FFmpeg e aguardar um novo keyframe outra vez.
@@ -448,7 +492,14 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
       const isSamePath = hasSameSource && hasSameCameraSourceSettings && hasSamePublisherSettings;
 
       if (isSamePath) {
-        return { pathName, sourceUrl, sourceVideoCodec: isHevc ? 'h265' : 'h264', transcodedForLive: isHevc, liveProfile };
+        return {
+          pathName,
+          sourceUrl,
+          sourceVideoCodec: isHevc ? 'h265' : 'h264',
+          transcodedForLive: deliveryMode === 'grid' ? true : isHevc,
+          liveProfile,
+          deliveryMode,
+        };
       }
     } catch {
       // Se não existe, cria abaixo. Se a API falhar temporariamente, a criação vai expor o erro real.
@@ -464,7 +515,14 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
     await this.apiRequest('POST', `/v3/config/paths/add/${encodedPath}`, desiredPath);
 
     this.logger.log(`Path MediaMTX pronto ${pathName} -> ${this.sanitizeRtspUrl(sourceUrl)}`);
-    return { pathName, sourceUrl, sourceVideoCodec: isHevc ? 'h265' : 'h264', transcodedForLive: isHevc, liveProfile };
+    return {
+      pathName,
+      sourceUrl,
+      sourceVideoCodec: isHevc ? 'h265' : 'h264',
+      transcodedForLive: deliveryMode === 'grid' ? true : isHevc,
+      liveProfile,
+      deliveryMode,
+    };
   }
 
 

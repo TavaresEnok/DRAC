@@ -13,22 +13,16 @@ import { useVmsDataStore } from '../store/vmsDataStore';
 const PAGE_TITLES: Record<string, string> = {
   '/live':          'Ao Vivo',
   '/playback':      'Reprodução',
-  '/events':        'Eventos',
   '/alarms':        'Alertas',
   '/cameras':       'Câmeras',
   '/map':           'Mapa / Planta',
   '/ptz':           'Controle PTZ',
   '/investigation': 'Investigação',
-  '/evidence':      'Evidências',
   '/storage':       'Armazenamento',
-  '/performance':   'Desempenho',
   '/settings':      'Configurações',
-  '/ai':            'Inteligência Artificial',
   '/users':         'Usuários',
   '/roles':         'Funções e Permissões',
   '/groups':        'Grupos',
-  '/audit':         'Logs de Auditoria',
-  '/reports':       'Relatórios',
   '/wall':          'Modo Mural',
 };
 
@@ -103,14 +97,6 @@ export function AppLayout({ children }: AppLayoutProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setCmdOpen(true)}
-              className="flex items-center gap-2 px-3 h-7 rounded border border-border/70 text-[hsl(var(--muted-foreground))] hover:text-foreground hover:border-border hover:bg-[hsl(var(--accent))] transition-all text-[11px]"
-              data-testid="button-command-palette"
-            >
-              <span>Buscar...</span>
-              <span className="font-mono text-[9px] opacity-50">Ctrl K</span>
-            </button>
             <button
               onClick={() => setTheme(isDark ? 'light' : 'dark')}
               aria-label={isDark ? 'Alternar para modo claro' : 'Alternar para modo escuro'}

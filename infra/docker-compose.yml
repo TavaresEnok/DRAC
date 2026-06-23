@@ -220,6 +220,8 @@ services:
       - vms-net
 
   ai-service:
+    profiles:
+      - ai
     build:
       context: ../services/ai-service-python
       dockerfile: Dockerfile

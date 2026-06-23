@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AuthUser } from '../common/types/auth-user.type';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
@@ -16,19 +17,19 @@ export class UsersController {
     private readonly auditService: AuditService,
   ) {}
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.VIEWER)
   @Get()
   list(@CurrentUser() actor: AuthUser) {
     return this.usersService.list(actor);
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.VIEWER)
   @Get(':id')
   getById(@CurrentUser() actor: AuthUser, @Param('id') id: string) {
     return this.usersService.getById(id, actor);
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.VIEWER)
   @Post()
   async create(@CurrentUser() actor: AuthUser, @Body() dto: CreateUserDto, @Req() req: Request) {
     const user = await this.usersService.create(actor, dto);
@@ -36,7 +37,15 @@ export class UsersController {
     return user;
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.VIEWER)
+  @Patch('me/password')
+  async changeOwnPassword(@CurrentUser() actor: AuthUser, @Body() dto: ChangePasswordDto, @Req() req: Request) {
+    const result = await this.usersService.changeOwnPassword(actor, dto);
+    await this.auditService.log(actor.id, 'user.password.change_self', 'User', actor.id, undefined, req);
+    return result;
+  }
+
+  @Roles(UserRole.VIEWER)
   @Patch(':id')
   async update(@CurrentUser() actor: AuthUser, @Param('id') id: string, @Body() dto: UpdateUserDto, @Req() req: Request) {
     const user = await this.usersService.update(actor, id, dto);
@@ -44,7 +53,7 @@ export class UsersController {
     return user;
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.VIEWER)
   @Delete(':id')
   async softDelete(@CurrentUser() actor: AuthUser, @Param('id') id: string, @Req() req: Request) {
     const user = await this.usersService.softDelete(actor, id);

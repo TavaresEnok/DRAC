@@ -10,11 +10,19 @@ import {
   Camera,
   Circle,
   ChevronLeft,
+  ChevronDown,
   Crosshair,
   ExternalLink,
+  HardDrive,
+  KeyRound,
   LoaderCircle,
+  Network,
   Radar,
   RotateCcw,
+  SlidersHorizontal,
+  Video,
+  Volume2,
+  VolumeX,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -43,6 +51,10 @@ const RESOLUTION_PRESETS = [
   { label: 'QHD 1440p', width: 2560, height: 1440 },
   { label: '4K UHD', width: 3840, height: 2160 },
 ] as const;
+
+const GRID_LIVE_MAX_WIDTH = 1280;
+const GRID_LIVE_MAX_HEIGHT = 720;
+const GRID_LIVE_TARGET_FPS = 20;
 
 type CommandState = 'idle' | 'sending' | 'ok' | 'error';
 type LiveSourceMode = 'original' | 'economical' | 'advanced';
@@ -123,6 +135,9 @@ type CameraPipelineSummary = {
     width?: number | null;
     height?: number | null;
     fps?: number | null;
+    selectedWidth?: number | null;
+    selectedHeight?: number | null;
+    selectedFps?: number | null;
     browserProtocol?: string | null;
     browserCodec?: string | null;
     transcodeForBrowser?: boolean;
@@ -176,9 +191,9 @@ const emptyConfig: CameraConfig = {
   preferredRtspTransport: 'tcp',
   preferredLiveProtocol: 'webrtc',
   streamVideoCodec: 'original',
-  streamWidth: '1280',
-  streamHeight: '720',
-  streamFps: '',
+  streamWidth: String(GRID_LIVE_MAX_WIDTH),
+  streamHeight: String(GRID_LIVE_MAX_HEIGHT),
+  streamFps: String(GRID_LIVE_TARGET_FPS),
   streamBitrateKbps: '',
   recordingVideoCodec: 'h265',
   recordingWidth: '',
@@ -198,24 +213,46 @@ function resolveLiveSourceMode(liveSubtype: string, fallbackSubtype: string): Li
   return 'advanced';
 }
 
-function SettingsCard({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+function SettingsCard({
+  icon: Icon,
+  title,
+  description,
+  action,
+  children,
+  className,
+}: {
+  icon?: typeof Camera;
+  title: string;
+  description?: string;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
-    <section className="rounded-lg border border-border/80 bg-background/65 p-4 shadow-sm">
-      <div className="mb-4 border-b border-border/60 pb-3">
-        <h3 className="text-sm font-semibold tracking-tight text-foreground">{title}</h3>
-        {description ? <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p> : null}
-      </div>
-      <div className="grid gap-3">{children}</div>
+    <section className={cn('flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm', className)}>
+      <header className="flex items-start gap-3 border-b border-border/70 px-5 py-3.5">
+        {Icon ? (
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/60 text-muted-foreground">
+            <Icon className="h-4 w-4" />
+          </span>
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold tracking-tight text-foreground">{title}</h3>
+          {description ? <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{description}</p> : null}
+        </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
+      </header>
+      <div className="flex-1 px-5 py-4">{children}</div>
     </section>
   );
 }
 
 function SettingsField({ label, hint, children, wide = false }: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {
   return (
-    <label className={cn('grid gap-1.5', wide ? 'md:col-span-2' : '')}>
-      <span className="pl-1 text-[10px] font-bold uppercase tracking-[0.18em] text-muted-foreground">{label}</span>
+    <label className={cn('grid content-start gap-1.5', wide ? 'md:col-span-2' : '')}>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
       {children}
-      {hint ? <span className="pl-1 text-[11px] leading-relaxed text-muted-foreground">{hint}</span> : null}
+      {hint ? <span className="text-[11px] leading-relaxed text-muted-foreground/80">{hint}</span> : null}
     </label>
   );
 }
@@ -225,7 +262,7 @@ function SettingsInput(props: InputHTMLAttributes<HTMLInputElement>) {
     <input
       {...props}
       className={cn(
-        'h-11 w-full rounded-lg border border-border/80 bg-card px-4 text-sm text-foreground outline-none transition focus:border-ring focus:ring-1 focus:ring-ring/20 placeholder:text-muted-foreground/70',
+        'h-10 w-full rounded-lg border border-border bg-muted/40 px-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground/60 focus:border-primary/50 focus:bg-card focus:ring-2 focus:ring-primary/15 read-only:cursor-default read-only:bg-muted/30 read-only:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60',
         props.className,
       )}
     />
@@ -237,7 +274,7 @@ function SettingsSelect(props: SelectHTMLAttributes<HTMLSelectElement>) {
     <select
       {...props}
       className={cn(
-        'h-11 w-full rounded-lg border border-border/80 bg-card px-4 text-sm text-foreground outline-none transition focus:border-ring focus:ring-1 focus:ring-ring/20',
+        'h-10 w-full rounded-lg border border-border bg-muted/40 px-3 text-sm text-foreground outline-none transition focus:border-primary/50 focus:bg-card focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-60',
         props.className,
       )}
     />
@@ -249,17 +286,31 @@ function SettingsSwitch({ checked, onChange, label, description }: { checked: bo
     <button
       type="button"
       onClick={() => onChange(!checked)}
-      className="flex items-center justify-between gap-4 rounded-xl border border-border/80 bg-card px-4 py-4 text-left transition hover:bg-accent/50"
+      className={cn(
+        'flex w-full items-center justify-between gap-4 rounded-lg border px-4 py-3 text-left transition',
+        checked
+          ? 'border-primary/35 bg-primary/[0.06] hover:bg-primary/[0.09]'
+          : 'border-border bg-muted/30 hover:border-border hover:bg-accent/40',
+      )}
       aria-pressed={checked}
     >
-      <span>
-        <span className="block text-sm font-medium">{label}</span>
-        <span className="mt-0.5 block text-xs text-muted-foreground">{description}</span>
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-foreground">{label}</span>
+        <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">{description}</span>
       </span>
-      <span className={cn('relative h-7 w-12 shrink-0 rounded-full border transition-colors', checked ? 'border-primary bg-primary' : 'border-border bg-muted')}>
-        <span className={cn('absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform', checked ? 'translate-x-5' : 'translate-x-1')} />
+      <span className={cn('relative h-6 w-11 shrink-0 rounded-full transition-colors', checked ? 'bg-primary' : 'bg-muted-foreground/30')}>
+        <span className={cn('absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform', checked ? 'translate-x-[22px]' : 'translate-x-0.5')} />
       </span>
     </button>
+  );
+}
+
+function SettingsStat({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{label}</div>
+      <div className={cn('mt-1 truncate text-sm font-semibold text-foreground', mono && 'font-mono')}>{value}</div>
+    </div>
   );
 }
 
@@ -350,6 +401,7 @@ export default function CameraDetailPage() {
   const [lastCommand, setLastCommand] = useState('Nenhum comando PTZ enviado');
   const [lastError, setLastError] = useState<string | null>(null);
 
+  const [videoMuted, setVideoMuted] = useState(true);
   const [videoZoom, setVideoZoom] = useState(1);
   const [videoPan, setVideoPan] = useState({ x: 0, y: 0 });
   const [draggingVideo, setDraggingVideo] = useState(false);
@@ -647,9 +699,9 @@ export default function CameraDetailPage() {
       ...current,
       liveSubtype: value === 'original' ? '0' : '1',
       streamVideoCodec: 'original',
-      streamWidth: current.streamWidth || '1280',
-      streamHeight: current.streamHeight || '720',
-      streamFps: '',
+      streamWidth: current.streamWidth || String(GRID_LIVE_MAX_WIDTH),
+      streamHeight: current.streamHeight || String(GRID_LIVE_MAX_HEIGHT),
+      streamFps: String(GRID_LIVE_TARGET_FPS),
       streamBitrateKbps: '',
     }));
   };
@@ -708,16 +760,16 @@ export default function CameraDetailPage() {
           recordingMode: form.recordingMode,
           retentionDays: Number(form.retentionDays),
           preferredRtspTransport: form.preferredRtspTransport,
-          preferredLiveProtocol: form.preferredLiveProtocol,
-          streamVideoCodec: normalizeVideoCodec(form.streamVideoCodec),
-          streamWidth: clampToDetected('Live largura', form.streamWidth, detectedWidth),
-          streamHeight: clampToDetected('Live altura', form.streamHeight, detectedHeight),
-          streamFps: clampToDetected('Live FPS', form.streamFps, detectedFps),
+          preferredLiveProtocol: form.preferredLiveProtocol === 'mjpeg' ? 'webrtc' : form.preferredLiveProtocol,
+          streamVideoCodec: 'h264',
+          streamWidth: clampToDetected('Live largura', String(GRID_LIVE_MAX_WIDTH), detectedWidth),
+          streamHeight: clampToDetected('Live altura', String(GRID_LIVE_MAX_HEIGHT), detectedHeight),
+          streamFps: GRID_LIVE_TARGET_FPS,
           streamBitrateKbps: clampToDetected('Live bitrate', form.streamBitrateKbps, detectedBitrate),
           recordingVideoCodec: normalizeVideoCodec(form.recordingVideoCodec),
           recordingWidth: parseOptionalPositive(form.recordingWidth),
           recordingHeight: parseOptionalPositive(form.recordingHeight),
-          recordingFps: parseOptionalPositive(form.recordingFps),
+          recordingFps: detectedFps ?? parseOptionalPositive(form.recordingFps),
           recordingBitrateKbps: parseOptionalPositive(form.recordingBitrateKbps),
           audioEnabled: form.audioEnabled,
           alarmsEnabled: form.alarmsEnabled,
@@ -739,12 +791,12 @@ export default function CameraDetailPage() {
         .then(({ data }) => setPipelineSummary(data))
         .catch(() => undefined);
       setForm((current) => ({ ...current, password: '' }));
-      const appliedLiveResolution = form.streamWidth && form.streamHeight ? `${form.streamWidth}x${form.streamHeight}` : 'Sem redimensionamento';
+      const appliedLiveResolution = `${Math.min(GRID_LIVE_MAX_WIDTH, detectedWidth ?? GRID_LIVE_MAX_WIDTH)}x${Math.min(GRID_LIVE_MAX_HEIGHT, detectedHeight ?? GRID_LIVE_MAX_HEIGHT)}`;
       toast({
         title: 'Configuração salva',
         description: clampedFields.length
-          ? `A câmera ${cam.name} foi atualizada com ajustes automáticos: ${clampedFields.join(' | ')} | Perfil live aplicado: ${appliedLiveResolution}`
-          : `A câmera ${cam.name} foi atualizada com sucesso. Perfil live aplicado: ${appliedLiveResolution}`,
+          ? `A câmera ${cam.name} foi atualizada com ajustes automáticos: ${clampedFields.join(' | ')} | Grid: ${appliedLiveResolution} / ${GRID_LIVE_TARGET_FPS} FPS · individual: original`
+          : `A câmera ${cam.name} foi atualizada com sucesso. Grid: ${appliedLiveResolution} / ${GRID_LIVE_TARGET_FPS} FPS · individual: original`,
       });
     } catch (error) {
       toast({
@@ -843,14 +895,12 @@ export default function CameraDetailPage() {
         updateField('streamVideoCodec', normalizeVideoCodec(data.detectedStream.codec));
       }
       if (typeof data.detectedStream?.width === 'number') {
-        updateField('streamWidth', String(data.detectedStream.width));
+        updateField('streamWidth', String(Math.min(GRID_LIVE_MAX_WIDTH, data.detectedStream.width)));
       }
       if (typeof data.detectedStream?.height === 'number') {
-        updateField('streamHeight', String(data.detectedStream.height));
+        updateField('streamHeight', String(Math.min(GRID_LIVE_MAX_HEIGHT, data.detectedStream.height)));
       }
-      if (typeof data.detectedStream?.fps === 'number') {
-        updateField('streamFps', String(data.detectedStream.fps));
-      }
+      updateField('streamFps', String(GRID_LIVE_TARGET_FPS));
       if (typeof data.detectedStream?.bitrateKbps === 'number') {
         updateField('streamBitrateKbps', String(data.detectedStream.bitrateKbps));
         if (!form.recordingBitrateKbps.trim()) {
@@ -1156,9 +1206,9 @@ export default function CameraDetailPage() {
                     cameraId={cam.id}
                     cameraName={cam.name}
                     className="absolute inset-0 h-full w-full"
-                    muted
-                    showOverlay
-                    aiEnabled={cam.aiEnabled}
+                    muted={videoMuted}
+                    showOverlay={false}
+                    aiEnabled={false}
                     liveViewMode="selected"
                     onStatusChange={setLivePlayerStatus}
                   />
@@ -1170,6 +1220,16 @@ export default function CameraDetailPage() {
                 <div className={cn('h-2 w-2 rounded-full', isRecordingActive ? 'rec-pulse bg-[hsl(var(--destructive))]' : 'bg-[hsl(var(--status-online))]')} />
                 <span className="rounded bg-black/60 px-1.5 text-xs font-mono text-white/80">{cam.code}</span>
               </div>
+              {cam.isOnline && (
+                <button
+                  type="button"
+                  onClick={() => setVideoMuted((value) => !value)}
+                  className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/55 text-white/80 transition-colors hover:bg-black/70 hover:text-white"
+                  title={videoMuted ? 'Ativar áudio' : 'Mutar áudio'}
+                >
+                  {videoMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                </button>
+              )}
               <div className="absolute bottom-2 left-2 right-2 z-10 flex justify-between">
                 <span className="rounded bg-black/60 px-1.5 text-[10px] font-mono text-white/70">{cam.ipAddress}</span>
                 <LiveClock className="rounded bg-black/60 px-1.5 text-[10px] font-mono text-white/70" />
@@ -1355,309 +1415,248 @@ export default function CameraDetailPage() {
           </TabsContent>
 
           <TabsContent value="settings" className="mt-4">
-            <div className="overflow-hidden rounded-lg border border-border bg-card/80 shadow-sm">
-              <div className="border-b border-border bg-card px-5 py-4 xl:px-6">
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                  <div>
-                    <h2 className="text-base font-semibold tracking-tight text-foreground">Configurações</h2>
-                    <p className="mt-1 text-xs text-muted-foreground">Ajustes essenciais da câmera. Configurações técnicas ficam recolhidas.</p>
+            {configLoading ? (
+              <div className="rounded-xl border border-border bg-card py-16 text-center text-sm text-muted-foreground shadow-sm">
+                Carregando parâmetros da câmera...
+              </div>
+            ) : (
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveSettings();
+                }}
+                className="space-y-5 pb-2"
+              >
+                {/* Barra de ações */}
+                <div className="flex flex-col gap-4 rounded-xl border border-border bg-card px-5 py-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                  <div className="flex items-start gap-3">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <SlidersHorizontal className="h-4 w-4" />
+                    </span>
+                    <div>
+                      <h2 className="text-[15px] font-semibold tracking-tight text-foreground">Configurações da câmera</h2>
+                      <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                        Identificação, transmissão ao vivo e gravação. Detalhes técnicos ficam agrupados no final.
+                      </p>
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => void runConnectionTest()}
-                      disabled={testingConnection || configLoading}
-                      className="inline-flex h-10 items-center justify-center rounded-lg border border-border bg-background px-4 text-xs font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={testingConnection}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border bg-background px-3.5 text-xs font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
                     >
+                      {testingConnection ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Radar className="h-3.5 w-3.5" />}
                       {testingConnection ? 'Testando...' : 'Testar conexão'}
                     </button>
                     <button
                       type="button"
                       onClick={() => void discoverEndpoints()}
-                      disabled={discoveringEndpoints || configLoading}
-                      className="inline-flex h-10 items-center justify-center rounded-lg border border-border bg-background px-4 text-xs font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={discoveringEndpoints}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border bg-background px-3.5 text-xs font-semibold transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {discoveringEndpoints ? 'Descobrindo...' : 'Detectar automaticamente'}
+                      {discoveringEndpoints ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                      {discoveringEndpoints ? 'Detectando...' : 'Detectar automaticamente'}
                     </button>
                   </div>
                 </div>
-              </div>
 
-              {configLoading ? (
-                <div className="py-16 text-center text-sm text-muted-foreground">Carregando parâmetros da câmera...</div>
-              ) : (
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void saveSettings();
-                  }}
-                  className="space-y-5 px-4 py-5 md:px-5 xl:px-6"
-                >
-                  <details className="rounded-lg border border-border/70 bg-background/55 px-4 py-3">
-                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Informações detectadas da câmera</summary>
-                    <div className="mt-3 grid gap-3 border-t border-border/70 pt-3 text-xs md:grid-cols-4">
-                      <div><span className="text-muted-foreground">Codec</span><div className="mt-1 font-medium text-foreground">{originalCodec}</div></div>
-                      <div><span className="text-muted-foreground">Resolução</span><div className="mt-1 font-medium text-foreground">{originalWidth && originalHeight ? `${originalWidth}x${originalHeight}` : '--'}</div></div>
-                      <div><span className="text-muted-foreground">FPS</span><div className="mt-1 font-medium text-foreground">{originalFps ? `${originalFps} FPS` : '--'}</div></div>
-                      <div><span className="text-muted-foreground">Bitrate</span><div className="mt-1 font-medium text-foreground">{originalBitrate ? `${originalBitrate} kbps` : '--'}</div></div>
+                {/* Stream detectado da câmera */}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <SettingsStat label="Codec" value={originalCodec || '--'} />
+                  <SettingsStat label="Resolução" value={originalWidth && originalHeight ? `${originalWidth}×${originalHeight}` : '--'} />
+                  <SettingsStat label="FPS" value={originalFps ? `${originalFps}` : '--'} />
+                  <SettingsStat label="Bitrate" value={originalBitrate ? `${originalBitrate} kbps` : '--'} />
+                </div>
+
+                {/* Grid principal */}
+                <div className="grid items-start gap-5 xl:grid-cols-2">
+                  <SettingsCard icon={KeyRound} title="Identificação e acesso" description="Como o DRAC encontra e autentica nesta câmera.">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <SettingsField label="Nome da câmera" wide>
+                        <SettingsInput value={form.name} onChange={(event) => updateField('name', event.target.value)} />
+                      </SettingsField>
+                      <SettingsField label="Endereço IP">
+                        <SettingsInput value={form.ip} onChange={(event) => updateField('ip', event.target.value)} className="font-mono" />
+                      </SettingsField>
+                      <SettingsField label="Porta de vídeo">
+                        <SettingsInput type="number" min={1} value={form.rtspPort} onChange={(event) => updateField('rtspPort', event.target.value)} className="font-mono" />
+                      </SettingsField>
+                      <SettingsField label="Usuário">
+                        <SettingsInput value={form.username} onChange={(event) => updateField('username', event.target.value)} />
+                      </SettingsField>
+                      <SettingsField label="Senha" hint="Em branco mantém a senha atual.">
+                        <SettingsInput type="password" value={form.password} placeholder="••••••••" onChange={(event) => updateField('password', event.target.value)} />
+                      </SettingsField>
+                      <SettingsField label="Porta de controle" hint="ONVIF / PTZ. Em branco para detectar." wide>
+                        <SettingsInput type="number" min={1} value={form.onvifPort} onChange={(event) => updateField('onvifPort', event.target.value)} className="font-mono md:max-w-[50%]" />
+                      </SettingsField>
                     </div>
-                  </details>
+                  </SettingsCard>
 
-                  <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
-                    <div className="space-y-4">
-                      <SettingsCard title="Identificação e acesso">
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <SettingsField label="Nome da câmera">
-                            <SettingsInput value={form.name} onChange={(event) => updateField('name', event.target.value)} />
-                          </SettingsField>
-                          <SettingsField label="Endereço IP">
-                            <SettingsInput value={form.ip} onChange={(event) => updateField('ip', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <SettingsField label="Usuário">
-                            <SettingsInput value={form.username} onChange={(event) => updateField('username', event.target.value)} />
-                          </SettingsField>
-                          <SettingsField label="Senha" hint="Deixe em branco para manter a senha atual.">
-                            <SettingsInput type="password" value={form.password} onChange={(event) => updateField('password', event.target.value)} />
-                          </SettingsField>
-                          <SettingsField label="Porta de vídeo">
-                            <SettingsInput type="number" min={1} value={form.rtspPort} onChange={(event) => updateField('rtspPort', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                        </div>
-                        <details className="rounded-lg border border-border/70 bg-card/60 px-3 py-2">
-                          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Controle e descoberta</summary>
-                          <div className="mt-3 grid gap-3 border-t border-border/70 pt-3 md:grid-cols-2">
-                            <SettingsField label="Porta de controle">
-                              <SettingsInput type="number" min={1} value={form.onvifPort} onChange={(event) => updateField('onvifPort', event.target.value)} className="font-mono" />
-                            </SettingsField>
-                          </div>
-                        </details>
-                      </SettingsCard>
-
-                      <SettingsCard title="Perfis">
-                        <div className="grid gap-3 md:grid-cols-3">
-                          <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
-                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Live</div>
-                            <div className="mt-1 text-sm font-medium text-foreground">Principal · canal {pipelineSummary?.live?.channel ?? (form.liveChannel || form.channel || '1')} / subtipo {pipelineSummary?.live?.subtype ?? (form.liveSubtype || '0')}</div>
-                            <div className="mt-1 text-[11px] text-muted-foreground">
-                              {pipelineSummary?.live?.width && pipelineSummary?.live?.height ? `${pipelineSummary.live.width}x${pipelineSummary.live.height}` : 'Resolução original'} · {(pipelineSummary?.live?.browserProtocol ?? 'webrtc').toUpperCase()}
-                            </div>
-                          </div>
-                          <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
-                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Gravação</div>
-                            <div className="mt-1 text-sm font-medium text-foreground">Principal · canal {pipelineSummary?.recording?.channel ?? (form.recordingChannel || form.channel || '1')} / subtipo {pipelineSummary?.recording?.subtype ?? (form.recordingSubtype || '0')}</div>
-                            <div className="mt-1 text-[11px] text-muted-foreground">
-                              Arquivo {pipelineSummary?.recording?.targetCodec ? pipelineSummary.recording.targetCodec.toUpperCase() : 'cópia da fonte'} · {pipelineSummary?.recording?.enabled ? 'habilitada' : 'opcional'}
-                            </div>
-                          </div>
-                          <div className={cn(
-                            'rounded-lg border px-3 py-2',
-                            pipelineSummary?.analytics?.separatedFromLive === false
-                              ? 'border-[hsl(var(--status-warning)_/_0.35)] bg-[hsl(var(--status-warning)_/_0.1)]'
-                              : 'border-border/70 bg-card',
-                          )}>
-                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">IA</div>
-                            <div className="mt-1 text-sm font-medium text-foreground">Substream · canal {pipelineSummary?.analytics?.channel ?? (form.analyticsChannel || form.channel || '1')} / subtipo {pipelineSummary?.analytics?.subtype ?? (form.analyticsSubtype || '1')}</div>
-                            <div className="mt-1 text-[11px] text-muted-foreground">
-                              {pipelineSummary?.analytics?.usesMediaMtx ? 'via MediaMTX' : 'direto da câmera'} · sem áudio
-                            </div>
-                          </div>
-                        </div>
-                        <details className="rounded-lg border border-border/70 bg-card/60 px-3 py-2">
-                          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Arquitetura técnica</summary>
-                          <div className="mt-3 grid gap-2 border-t border-border/70 pt-3 text-[11px] text-muted-foreground">
-                            <div className="flex justify-between gap-3"><span>Live</span><span className="truncate font-mono">{pipelineSummary?.live?.rtspUrl ?? 'rtsp://... main'}</span></div>
-                            <div className="flex justify-between gap-3"><span>Gravação</span><span className="truncate font-mono">{pipelineSummary?.recording?.rtspUrl ?? 'rtsp://... main'}</span></div>
-                            <div className="flex justify-between gap-3"><span>IA</span><span className="truncate font-mono">{pipelineSummary?.analytics?.rtspUrl ?? 'rtsp://... substream'}</span></div>
-                            {pipelineSummary?.notes?.map((note) => (
-                              <div key={note} className="rounded border border-border/60 bg-background/50 px-2 py-1">{note}</div>
-                            ))}
-                          </div>
-                        </details>
-                      </SettingsCard>
-
-                      <SettingsCard title="Live">
-                        <div className="grid gap-3 md:grid-cols-3">
-                          <SettingsField label="Fonte da imagem" hint="Original usa o perfil principal entregue pela câmera. Econômico usa substream.">
-                            <SettingsSelect value={liveSourceMode} onChange={(event) => applyLiveSourceMode(event.target.value as LiveSourceMode)}>
-                              <option value="original">Original da câmera</option>
-                              <option value="economical">Econômico</option>
-                              {liveSourceMode === 'advanced' ? <option value="advanced">Perfil personalizado</option> : null}
-                            </SettingsSelect>
-                          </SettingsField>
-                          <SettingsField label="Resolução em live" hint="Original mantém a resolução real do perfil escolhido.">
-                            <SettingsSelect
-                              value={getResolutionPresetValue(form.streamWidth, form.streamHeight) || 'custom'}
-                              onChange={(event) => applyResolutionPreset('stream', event.target.value)}
-                            >
-                              <option value="custom" disabled>Personalizada</option>
-                              <option value="original">Original da câmera</option>
-                              {RESOLUTION_PRESETS.map((preset) => (
-                                <option key={`stream-${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
-                                  {preset.label}
-                                </option>
-                              ))}
-                            </SettingsSelect>
-                          </SettingsField>
-                          <div className="rounded-lg border border-border/70 bg-card px-3 py-2">
-                            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Live no navegador</div>
-                            <div className="mt-1 text-sm font-medium text-foreground">WebRTC</div>
-                          </div>
-                          <details className="md:col-span-3 rounded-lg border border-border/70 bg-card/60 px-3 py-2">
-                            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Codec, protocolo e rede</summary>
-                            <div className="mt-3 grid gap-3 border-t border-border/70 pt-3 md:grid-cols-2">
-                              <SettingsField label="Codec recebido">
-                                <SettingsSelect value={form.streamVideoCodec} onChange={(event) => updateField('streamVideoCodec', event.target.value as CameraConfig['streamVideoCodec'])}>
-                                  <option value="original">Detectar no perfil live</option>
-                                  <option value="h264">H.264</option>
-                                  <option value="h265">H.265</option>
-                                  <option value="mjpeg">MJPEG</option>
-                                </SettingsSelect>
-                              </SettingsField>
-                              <SettingsField label="Protocolo ao vivo">
-                                <SettingsSelect value={form.preferredLiveProtocol} onChange={(event) => updateField('preferredLiveProtocol', event.target.value as CameraConfig['preferredLiveProtocol'])}>
-                                  <option value="webrtc">WebRTC</option>
-                                  <option value="llhls">LL-HLS</option>
-                                  <option value="hls">HLS</option>
-                                  <option value="mjpeg">MJPEG</option>
-                                </SettingsSelect>
-                              </SettingsField>
-                              <SettingsField label="Transporte RTSP">
-                                <SettingsSelect value={form.preferredRtspTransport} onChange={(event) => updateField('preferredRtspTransport', event.target.value as CameraConfig['preferredRtspTransport'])}>
-                                  <option value="tcp">TCP</option>
-                                  <option value="udp">UDP</option>
-                                </SettingsSelect>
-                              </SettingsField>
-                              <SettingsField label="FPS da live">
-                                <SettingsInput type="number" min={1} value={form.streamFps} onChange={(event) => updateField('streamFps', event.target.value)} className="font-mono" />
-                              </SettingsField>
-                              <SettingsField label="Bitrate da live">
-                                <SettingsInput type="number" min={1} value={form.streamBitrateKbps} onChange={(event) => updateField('streamBitrateKbps', event.target.value)} className="font-mono" />
-                              </SettingsField>
-                            </div>
-                          </details>
-                        </div>
-                      </SettingsCard>
+                  <SettingsCard icon={Video} title="Transmissão ao vivo" description="O grid entrega no máximo 720p / 20 FPS; a câmera individual usa a resolução original do perfil.">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <SettingsField label="Fonte da imagem" hint="Original usa o perfil principal; Econômico usa o substream.">
+                        <SettingsSelect value={liveSourceMode} onChange={(event) => applyLiveSourceMode(event.target.value as LiveSourceMode)}>
+                          <option value="original">Original da câmera</option>
+                          <option value="economical">Econômico</option>
+                          {liveSourceMode === 'advanced' ? <option value="advanced">Perfil personalizado</option> : null}
+                        </SettingsSelect>
+                      </SettingsField>
+                      <SettingsField label="Resolução no grid" hint="Nunca ultrapassa 720p.">
+                        <SettingsInput
+                          value={`${form.streamWidth || GRID_LIVE_MAX_WIDTH}×${form.streamHeight || GRID_LIVE_MAX_HEIGHT}`}
+                          readOnly
+                          className="font-mono"
+                        />
+                      </SettingsField>
+                      <SettingsField label="Protocolo ao vivo">
+                        <SettingsSelect value={form.preferredLiveProtocol} onChange={(event) => updateField('preferredLiveProtocol', event.target.value as CameraConfig['preferredLiveProtocol'])}>
+                          <option value="webrtc">WebRTC</option>
+                          <option value="llhls">LL-HLS</option>
+                          <option value="hls">HLS</option>
+                        </SettingsSelect>
+                      </SettingsField>
+                      <SettingsField label="Transporte RTSP">
+                        <SettingsSelect value={form.preferredRtspTransport} onChange={(event) => updateField('preferredRtspTransport', event.target.value as CameraConfig['preferredRtspTransport'])}>
+                          <option value="tcp">TCP</option>
+                          <option value="udp">UDP</option>
+                        </SettingsSelect>
+                      </SettingsField>
+                      <SettingsField label="Codec da live">
+                        <SettingsInput value="H.264" readOnly className="font-mono" />
+                      </SettingsField>
+                      <SettingsField label="Bitrate da live" hint="kbps · em branco usa o detectado.">
+                        <SettingsInput type="number" min={1} value={form.streamBitrateKbps} onChange={(event) => updateField('streamBitrateKbps', event.target.value)} className="font-mono" />
+                      </SettingsField>
                     </div>
+                  </SettingsCard>
 
-                    <div className="space-y-4">
-                      <SettingsCard title="Operação">
-                        <SettingsSwitch
-                          checked={form.recordingEnabled}
-                          onChange={(value) => updateField('recordingEnabled', value)}
-                          label="Gravação habilitada"
-                          description="Permite que o backend grave esta câmera conforme o modo abaixo."
-                        />
-                        <SettingsSwitch
-                          checked={form.audioEnabled}
-                          onChange={(value) => updateField('audioEnabled', value)}
-                          label="Áudio habilitado"
-                          description="Usa áudio no perfil operacional quando o stream suportar."
-                        />
-                        <SettingsSwitch
-                          checked={form.alarmsEnabled}
-                          onChange={(value) => updateField('alarmsEnabled', value)}
-                          label="Alarmes habilitados"
-                          description="Quando desligado, esta câmera não abre novos alarmes (eventos continuam registrados)."
-                        />
-                      </SettingsCard>
-
-                      <SettingsCard title="Gravação">
-                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
-                          <SettingsField label="Modo">
-                            <SettingsSelect value={form.recordingMode} onChange={(event) => updateField('recordingMode', event.target.value as CameraConfig['recordingMode'])}>
-                              <option value="continuous">Contínua</option>
-                              <option value="motion">Movimento</option>
-                              <option value="schedule">Agenda</option>
-                              <option value="manual">Manual</option>
-                            </SettingsSelect>
-                          </SettingsField>
-                          <SettingsField label="Retenção">
-                            <SettingsInput type="number" min={1} value={form.retentionDays} onChange={(event) => updateField('retentionDays', event.target.value)} className="font-mono" />
-                          </SettingsField>
-                          <details className="rounded-lg border border-border/70 bg-card/60 px-3 py-2">
-                            <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Avançado</summary>
-                            <div className="mt-3 grid gap-3 border-t border-border/70 pt-3">
-                              <SettingsField label="Codec de arquivo" hint="A gravação arquiva o codec original da câmera (cópia, sem reconversão).">
-                                <SettingsSelect value="copy" disabled>
-                                  <option value="copy">Original da câmera (cópia)</option>
-                                </SettingsSelect>
-                              </SettingsField>
-                              <SettingsField label="Resolução">
-                                <SettingsSelect
-                                  value={getResolutionPresetValue(form.recordingWidth, form.recordingHeight) || 'custom'}
-                                  onChange={(event) => applyResolutionPreset('recording', event.target.value)}
-                                >
-                                  <option value="custom" disabled>Personalizada</option>
-                                  <option value="original">Original da câmera</option>
-                                  {RESOLUTION_PRESETS.map((preset) => (
-                                    <option key={`recording-${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
-                                      {preset.label}
-                                    </option>
-                                  ))}
-                                </SettingsSelect>
-                              </SettingsField>
-                              <SettingsField label="FPS">
-                                <SettingsInput type="number" min={1} value={form.recordingFps} onChange={(event) => updateField('recordingFps', event.target.value)} className="font-mono" />
-                              </SettingsField>
-                              <SettingsField label="Bitrate">
-                                <SettingsInput type="number" min={1} value={form.recordingBitrateKbps} onChange={(event) => updateField('recordingBitrateKbps', event.target.value)} className="font-mono" />
-                              </SettingsField>
-                            </div>
-                          </details>
-                        </div>
-                      </SettingsCard>
-
-                      <SettingsCard title="IA">
-                        <div className="space-y-4">
-                          <label className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="motionTrigger"
-                              value="SYSTEM"
-                              checked={form.motionTrigger === 'SYSTEM'}
-                              onChange={() => updateField('motionTrigger', 'SYSTEM')}
-                              className="h-4 w-4 accent-primary"
-                            />
-                            <div className="flex flex-col">
-                              <span className="text-sm font-medium">Análise pelo servidor</span>
-                              <span className="text-xs text-muted-foreground">Padrão recomendado para detecção visual.</span>
-                            </div>
-                          </label>
-                          <label className={`flex items-center gap-3 rounded-lg border p-3 cursor-pointer ${!form.hasEdgeAi ? 'opacity-50 grayscale' : 'hover:bg-muted/50'}`}>
-                            <input
-                              type="radio"
-                              name="motionTrigger"
-                              value="CAMERA"
-                              disabled={!form.hasEdgeAi}
-                              checked={form.motionTrigger === 'CAMERA'}
-                              onChange={() => updateField('motionTrigger', 'CAMERA')}
-                              className="h-4 w-4 accent-primary"
-                            />
-                            <div className="flex flex-col">
-                              <span className="text-sm font-medium">Usar alerta da câmera</span>
-                              <span className="text-xs text-muted-foreground">{form.hasEdgeAi ? 'A câmera avisa o sistema quando houver movimento.' : 'Esta câmera não informou suporte a esse recurso.'}</span>
-                            </div>
-                          </label>
-                        </div>
-                      </SettingsCard>
+                  <SettingsCard icon={SlidersHorizontal} title="Operação" description="Liga ou desliga recursos desta câmera.">
+                    <div className="grid gap-2.5">
+                      <SettingsSwitch
+                        checked={form.recordingEnabled}
+                        onChange={(value) => updateField('recordingEnabled', value)}
+                        label="Gravação habilitada"
+                        description="Permite que o backend grave esta câmera conforme o modo abaixo."
+                      />
+                      <SettingsSwitch
+                        checked={form.audioEnabled}
+                        onChange={(value) => updateField('audioEnabled', value)}
+                        label="Áudio habilitado"
+                        description="Usa áudio no perfil operacional quando o stream suportar."
+                      />
+                      <SettingsSwitch
+                        checked={form.alarmsEnabled}
+                        onChange={(value) => updateField('alarmsEnabled', value)}
+                        label="Alarmes habilitados"
+                        description="Quando desligado, esta câmera não abre novos alarmes (eventos continuam registrados)."
+                      />
                     </div>
+                  </SettingsCard>
+
+                  <SettingsCard icon={HardDrive} title="Gravação" description="Quando e por quanto tempo os vídeos são mantidos.">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <SettingsField label="Modo de gravação">
+                        <SettingsSelect value={form.recordingMode} onChange={(event) => updateField('recordingMode', event.target.value as CameraConfig['recordingMode'])}>
+                          <option value="continuous">Contínua</option>
+                          <option value="motion">Movimento</option>
+                          <option value="schedule">Agenda</option>
+                          <option value="manual">Manual</option>
+                        </SettingsSelect>
+                      </SettingsField>
+                      <SettingsField label="Retenção (dias)">
+                        <SettingsInput type="number" min={1} value={form.retentionDays} onChange={(event) => updateField('retentionDays', event.target.value)} className="font-mono" />
+                      </SettingsField>
+                      <SettingsField label="Codec de arquivo" hint="Arquiva o codec original (cópia, sem reconversão).">
+                        <SettingsSelect value="copy" disabled>
+                          <option value="copy">Original da câmera (cópia)</option>
+                        </SettingsSelect>
+                      </SettingsField>
+                      <SettingsField label="Resolução do arquivo">
+                        <SettingsSelect
+                          value={getResolutionPresetValue(form.recordingWidth, form.recordingHeight) || 'custom'}
+                          onChange={(event) => applyResolutionPreset('recording', event.target.value)}
+                        >
+                          <option value="custom" disabled>Personalizada</option>
+                          <option value="original">Original da câmera</option>
+                          {RESOLUTION_PRESETS.map((preset) => (
+                            <option key={`recording-${preset.width}x${preset.height}`} value={`${preset.width}x${preset.height}`}>
+                              {preset.label}
+                            </option>
+                          ))}
+                        </SettingsSelect>
+                      </SettingsField>
+                      <SettingsField label="FPS do arquivo" hint="Acompanha o FPS detectado.">
+                        <SettingsInput value={originalFps ? `${originalFps}` : 'Automático'} readOnly className="font-mono" />
+                      </SettingsField>
+                      <SettingsField label="Bitrate do arquivo" hint="kbps">
+                        <SettingsInput type="number" min={1} value={form.recordingBitrateKbps} onChange={(event) => updateField('recordingBitrateKbps', event.target.value)} className="font-mono" />
+                      </SettingsField>
+                    </div>
+                  </SettingsCard>
+                </div>
+
+                {/* Detalhes técnicos */}
+                <details className="group overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+                  <summary className="flex cursor-pointer list-none items-center gap-3 px-5 py-3.5 transition hover:bg-accent/40">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/60 text-muted-foreground">
+                      <Network className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-semibold tracking-tight text-foreground">Detalhes técnicos e arquitetura</h3>
+                      <p className="mt-0.5 text-xs text-muted-foreground">Perfis, canais e URLs RTSP em uso pelo pipeline.</p>
+                    </div>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div className="grid gap-4 border-t border-border/70 px-5 py-4 md:grid-cols-2">
+                    <div className="rounded-lg border border-border/70 bg-muted/30 px-4 py-3">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Perfil Live</div>
+                      <div className="mt-1 text-sm font-medium text-foreground">
+                        Canal {pipelineSummary?.live?.channel ?? (form.liveChannel || form.channel || '1')} · subtipo {pipelineSummary?.live?.subtype ?? (form.liveSubtype || '0')}
+                      </div>
+                      <div className="mt-1 text-[11px] text-muted-foreground">
+                        Grid até {pipelineSummary?.live?.width && pipelineSummary?.live?.height ? `${pipelineSummary.live.width}×${pipelineSummary.live.height}` : `${GRID_LIVE_MAX_WIDTH}×${GRID_LIVE_MAX_HEIGHT}`} · {pipelineSummary?.live?.fps ?? GRID_LIVE_TARGET_FPS} FPS · {(pipelineSummary?.live?.browserProtocol ?? 'webrtc').toUpperCase()}
+                      </div>
+                      <div className="mt-2 truncate font-mono text-[10px] text-muted-foreground/80">{pipelineSummary?.live?.rtspUrl ?? 'rtsp://… main'}</div>
+                    </div>
+                    <div className="rounded-lg border border-border/70 bg-muted/30 px-4 py-3">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Perfil Gravação</div>
+                      <div className="mt-1 text-sm font-medium text-foreground">
+                        Canal {pipelineSummary?.recording?.channel ?? (form.recordingChannel || form.channel || '1')} · subtipo {pipelineSummary?.recording?.subtype ?? (form.recordingSubtype || '0')}
+                      </div>
+                      <div className="mt-1 text-[11px] text-muted-foreground">
+                        Arquivo {pipelineSummary?.recording?.targetCodec ? pipelineSummary.recording.targetCodec.toUpperCase() : 'cópia da fonte'} · {pipelineSummary?.recording?.enabled ? 'habilitada' : 'opcional'}
+                      </div>
+                      <div className="mt-2 truncate font-mono text-[10px] text-muted-foreground/80">{pipelineSummary?.recording?.rtspUrl ?? 'rtsp://… main'}</div>
+                    </div>
+                    {pipelineSummary?.notes?.length ? (
+                      <div className="grid gap-2 md:col-span-2">
+                        {pipelineSummary.notes.map((note) => (
+                          <div key={note} className="rounded-lg border border-border/60 bg-background/50 px-3 py-2 text-[11px] text-muted-foreground">{note}</div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
+                </details>
 
-                  <div className="flex flex-col gap-4 border-t border-border/80 pt-6 md:flex-row md:items-center md:justify-between">
-                    <div className="text-xs text-muted-foreground">
-                      <span className="font-semibold text-foreground">Resumo:</span> live em {liveSourceLabel.toLowerCase()}, gravação {getRecordingModeCopy(form.recordingMode).label.toLowerCase()}.
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={configSaving || configLoading}
-                      className="inline-flex h-11 items-center justify-center rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {configSaving ? 'Salvando...' : 'Salvar configurações'}
-                    </button>
+                {/* Rodapé fixo de salvar */}
+                <div className="sticky bottom-0 z-10 flex flex-col gap-3 rounded-xl border border-border bg-card/95 px-5 py-3 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/80 md:flex-row md:items-center md:justify-between">
+                  <div className="text-xs leading-relaxed text-muted-foreground">
+                    <span className="font-semibold text-foreground">Resumo:</span> grid até 720p / {GRID_LIVE_TARGET_FPS} FPS · câmera individual em resolução original · gravação {getRecordingModeCopy(form.recordingMode).label.toLowerCase()}.
                   </div>
-                </form>
-              )}
-            </div>
+                  <button
+                    type="submit"
+                    disabled={configSaving}
+                    className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {configSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
+                    {configSaving ? 'Salvando...' : 'Salvar configurações'}
+                  </button>
+                </div>
+              </form>
+            )}
           </TabsContent>
         </Tabs>
       </div>

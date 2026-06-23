@@ -79,6 +79,9 @@ function getRequestErrorMessage(error: unknown, fallback: string) {
 const DEFAULT_CAMERA_CHANNEL = 1;
 const MAIN_STREAM_SUBTYPE = 0;
 const ANALYTICS_STREAM_SUBTYPE = 1;
+const GRID_LIVE_MAX_WIDTH = 1280;
+const GRID_LIVE_MAX_HEIGHT = 720;
+const GRID_LIVE_TARGET_FPS = 20;
 
 function formatLiveProtocol(protocol?: string | null) {
   switch (String(protocol ?? '').toLowerCase()) {
@@ -296,9 +299,9 @@ function WizardModal({
     preferredRtspTransport: 'tcp',
     preferredLiveProtocol: 'webrtc',
     streamVideoCodec: 'original',
-    streamWidth: '',
-    streamHeight: '',
-    streamFps: '',
+    streamWidth: String(GRID_LIVE_MAX_WIDTH),
+    streamHeight: String(GRID_LIVE_MAX_HEIGHT),
+    streamFps: String(GRID_LIVE_TARGET_FPS),
     streamBitrateKbps: '',
     recordingVideoCodec: 'h265' as VideoCodec,
     recordingWidth: '',
@@ -365,15 +368,15 @@ function WizardModal({
       };
 
       const adjusted: string[] = [];
-      const streamWidth = clampToDetected('Live largura', form.streamWidth, detectedMax?.width, adjusted);
-      const streamHeight = clampToDetected('Live altura', form.streamHeight, detectedMax?.height, adjusted);
-      const streamFps = clampToDetected('Live FPS', form.streamFps, detectedMax?.fps, adjusted);
+      const streamWidth = clampToDetected('Live largura', String(GRID_LIVE_MAX_WIDTH), detectedMax?.width, adjusted);
+      const streamHeight = clampToDetected('Live altura', String(GRID_LIVE_MAX_HEIGHT), detectedMax?.height, adjusted);
+      const streamFps = GRID_LIVE_TARGET_FPS;
       const streamBitrateKbps = form.streamBitrateKbps.trim()
         ? clampToDetected('Live bitrate', form.streamBitrateKbps, detectedMax?.bitrateKbps, adjusted)
         : undefined;
       const recordingWidth = parseOptionalPositive(form.recordingWidth);
       const recordingHeight = parseOptionalPositive(form.recordingHeight);
-      const recordingFps = parseOptionalPositive(form.recordingFps);
+      const recordingFps = detectedMax?.fps ?? parseOptionalPositive(form.recordingFps);
       const recordingBitrateKbps = parseOptionalPositive(form.recordingBitrateKbps);
 
       if (adjusted.length) {
@@ -481,7 +484,7 @@ function WizardModal({
       if (result.detectedOnvifProfileToken) updateField('onvifProfileToken', result.detectedOnvifProfileToken);
       if (showResult) {
         if (result.rtspAuthOk || result.rtspReachable || result.rtspReachableAny) {
-          toast({ title: 'Câmera detectada', description: 'O DRAC escolheu automaticamente live principal, gravação principal e substream para IA.' });
+          toast({ title: 'Câmera detectada', description: 'O DRAC configurou live principal, grid em 720p/20 FPS e gravação com o FPS original da câmera.' });
         } else {
           toast({ title: 'Vídeo não confirmado', description: 'Verifique IP, porta, usuário e senha.', variant: 'destructive' });
         }
@@ -607,14 +610,12 @@ function WizardModal({
               )}
               {detectedMax && (
                 <div className="rounded border border-[hsl(var(--status-online)_/_0.25)] bg-[hsl(var(--status-online)_/_0.1)] px-3 py-2 text-[11px] text-[hsl(var(--status-online))]">
-                  Câmera detectada. Live, gravação e IA foram configuradas automaticamente.
+                  Câmera detectada. Grid em até 720p / 20 FPS, câmera individual em resolução original e gravação com FPS da câmera.
                   <details className="mt-1 text-[hsl(var(--muted-foreground))]">
                     <summary className="cursor-pointer text-[10px]">Detalhes</summary>
                     <div className="mt-1 grid gap-1">
                       <span>Principal: {detectedMax.width && detectedMax.height ? `${detectedMax.width}x${detectedMax.height}` : 'detectado'} · {detectedMax.fps ?? '-'} FPS</span>
-                      <span>IA: subtipo {autoProfiles?.analytics?.subtype ?? ANALYTICS_STREAM_SUBTYPE} reservado</span>
                       {autoProfiles?.live?.onvifProfileToken && <span>ONVIF live: {autoProfiles.live.onvifProfileToken}</span>}
-                      {autoProfiles?.analytics?.onvifProfileToken && <span>ONVIF IA: {autoProfiles.analytics.onvifProfileToken}</span>}
                       <span>Bitrate: {detectedMax.bitrateKbps ? `${detectedMax.bitrateKbps} kbps` : '-'}</span>
                     </div>
                   </details>
@@ -716,7 +717,7 @@ function WizardModal({
                     <input value={form.retentionDays} onChange={(e) => updateField('retentionDays', e.target.value)} className="w-full h-9 px-3 rounded border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
                   </div>
                   <div className="col-span-2 rounded border border-border bg-card px-3 py-2 text-[11px] text-[hsl(var(--muted-foreground))]">
-                    A live usa a imagem principal em alta qualidade original. A gravação usa o perfil principal da câmera e arquiva o codec original (cópia, sem reconversão).
+                    O grid usa no máximo 720p em 20 FPS. Ao abrir a câmera sozinha, o DRAC mostra a resolução original do perfil live. A gravação usa o perfil principal da câmera e preserva o FPS da origem.
                   </div>
                 </div>
               </div>
@@ -777,8 +778,7 @@ function WizardModal({
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Nome</span><span>{form.name || '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Unidade</span><span>{sites.find((s) => s.id === form.siteId)?.name ?? '-'}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Área</span><span>{areas.find((a) => a.id === form.areaId)?.name ?? '-'}</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Live</span><span>Imagem principal original</span></div>
-                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">IA</span><span>Substream reservado</span></div>
+                <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Live</span><span>Grid até 720p / 20 FPS · individual original</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Gravação</span><span>{formatRecordingMode(form.recordingMode)}</span></div>
                 <div className="flex justify-between"><span className="text-[hsl(var(--muted-foreground))]">Retenção</span><span className="font-mono">{form.retentionDays || '-'} dias</span></div>
                 {detectedMax && (
@@ -826,9 +826,19 @@ export default function CamerasPage() {
   const accessToken = useAuthStore((state) => state.accessToken);
   const cameras = useVmsDataStore((state) => state.cameras);
   const loadData = useVmsDataStore((state) => state.load);
-  const [viewMode, setViewMode] = useState<'table' | 'card'>('card');
+  const [viewMode, setViewMode] = useState<'table' | 'card'>(() => {
+    try {
+      const saved = localStorage.getItem('drac:camerasViewMode');
+      return saved === 'card' || saved === 'table' ? saved : 'table';
+    } catch {
+      return 'table';
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('drac:camerasViewMode', viewMode); } catch { /* ignore */ }
+  }, [viewMode]);
   const [search, setSearch] = useState('');
-  const [zoneFilter, setZoneFilter] = useState('all');
+  const [groupFilter, setGroupFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<(typeof STATUSES)[number]>('all');
   const [showWizard, setShowWizard] = useState(false);
   const [selectedCam, setSelectedCam] = useState<Camera | null>(null);
@@ -853,7 +863,7 @@ export default function CamerasPage() {
     needsAttention?: boolean;
     alertReason?: string | null;
   }>>({});
-  const zones = useMemo(() => ['all', ...Array.from(new Set(cameras.map((camera) => camera.zone)))], [cameras]);
+  const groups = useMemo(() => ['all', ...Array.from(new Set(cameras.map((c) => c.floor).filter((f) => f && f !== '-')))], [cameras]);
   const isRecordingAutoRecovering = useCallback((camera: Camera | null | undefined) => (
     camera?.recordingStatusDetail === 'auto_reconnecting'
   ), []);
@@ -929,10 +939,10 @@ export default function CamerasPage() {
 
   const filtered = useMemo(() => cameras.filter(c => {
     if (search && !c.name.toLowerCase().includes(search.toLowerCase()) && !c.code.toLowerCase().includes(search.toLowerCase()) && !c.ipAddress.toLowerCase().includes(search.toLowerCase())) return false;
-    if (zoneFilter !== 'all' && c.zone !== zoneFilter) return false;
+    if (groupFilter !== 'all' && c.floor !== groupFilter) return false;
     if (statusFilter !== 'all' && c.status !== statusFilter) return false;
     return true;
-  }), [cameras, search, zoneFilter, statusFilter]);
+  }), [cameras, search, groupFilter, statusFilter]);
 
   const confirmDeleteCamera = async () => {
     if (!accessToken || !deleteTarget) return;
@@ -1163,31 +1173,20 @@ export default function CamerasPage() {
   return (
     <div className="flex h-full min-h-0">
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        {/* Page header */}
-        <div className="px-6 pt-5 pb-4 border-b border-border shrink-0">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h1 className="text-[18px] font-semibold tracking-tight">Câmeras</h1>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                {cameras.length} cadastradas · {onlineCount} online
-                {alarmCount > 0 && <span className="text-[hsl(var(--status-alarm))] ml-2">· {alarmCount} em alarme</span>}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-[hsl(var(--muted))] border border-border">
-                <button onClick={() => setViewMode('table')} className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${viewMode === 'table' ? 'bg-card text-foreground shadow-sm' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`} title="Tabela"><List className="w-3.5 h-3.5" /></button>
-                <button onClick={() => setViewMode('card')} className={`w-7 h-7 flex items-center justify-center rounded-md transition-colors ${viewMode === 'card' ? 'bg-card text-foreground shadow-sm' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`} title="Cards"><LayoutGrid className="w-3.5 h-3.5" /></button>
-              </div>
-              <button
-                onClick={() => setShowWizard(true)}
-                className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] text-xs font-semibold hover:opacity-90 transition-opacity"
-                data-testid="button-add-camera"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Adicionar câmera
-              </button>
-            </div>
+        {/* Page actions toolbar */}
+        <div className="px-6 py-3 border-b border-border shrink-0 flex items-center justify-end gap-2">
+          <div className="ops-segment flex items-center gap-0.5">
+            <button onClick={() => setViewMode('table')} className={`w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors ${viewMode === 'table' ? 'ops-segment-active' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`} title="Tabela"><List className="w-3.5 h-3.5" /></button>
+            <button onClick={() => setViewMode('card')} className={`w-7 h-7 flex items-center justify-center rounded-[6px] transition-colors ${viewMode === 'card' ? 'ops-segment-active' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`} title="Cards"><LayoutGrid className="w-3.5 h-3.5" /></button>
           </div>
+          <button
+            onClick={() => setShowWizard(true)}
+            className="btn btn-primary btn-sm"
+            data-testid="button-add-camera"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Adicionar câmera
+          </button>
         </div>
 
         {/* Filters */}
@@ -1195,29 +1194,25 @@ export default function CamerasPage() {
           <div className="flex items-center gap-1.5 flex-wrap">
             {STATUS_PILLS.map((s) => (
               <button key={s} onClick={() => setStatusFilter(s)}
-                className={`h-7 px-3 rounded-full text-[11px] font-medium border transition-colors ${
-                  statusFilter === s
-                    ? 'bg-[hsl(var(--primary)_/_0.1)] text-[hsl(var(--primary))] border-[hsl(var(--primary)_/_0.3)]'
-                    : 'bg-background text-muted-foreground border-border hover:text-foreground'
-                }`}>
+                className={`ops-pill ${statusFilter === s ? 'ops-pill-active' : ''}`}>
                 {STATUS_LABEL[s]}
-                <span className="ml-1.5 font-mono text-[9px] opacity-60">{countFor(s)}</span>
+                <span className="font-mono text-[9px] opacity-60">{countFor(s)}</span>
               </button>
             ))}
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <Select value={zoneFilter} onValueChange={setZoneFilter}>
+            <Select value={groupFilter} onValueChange={setGroupFilter}>
               <SelectTrigger className="w-40 h-8 text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>{zones.map(z => <SelectItem key={z} value={z} className="text-xs">{z === 'all' ? 'Todas as zonas' : z}</SelectItem>)}</SelectContent>
+              <SelectContent>{groups.map(g => <SelectItem key={g} value={g} className="text-xs">{g === 'all' ? 'Todos os grupos' : g}</SelectItem>)}</SelectContent>
             </Select>
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
+            <div className="input-wrap w-56">
+              <span className="input-icon"><Search className="w-3.5 h-3.5" /></span>
               <input
-                type="search"
+                className="input"
+                style={{ height: 32, fontSize: 12 }}
                 placeholder="Buscar câmera ou IP..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                className="h-8 pl-8 pr-3 w-56 rounded-lg border border-border bg-background text-xs focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))] placeholder:text-[hsl(var(--muted-foreground)_/_0.5)]"
               />
             </div>
           </div>
@@ -1227,11 +1222,11 @@ export default function CamerasPage() {
         <div className="flex-1 overflow-auto">
           {viewMode === 'table' ? (
             <div className="p-5">
-            <div className="bg-card border border-border rounded-xl overflow-hidden">
+            <div className="ops-card overflow-hidden">
             <table className="w-full text-xs border-collapse">
               <thead className="sticky top-0 bg-card z-10">
                 <tr className="border-b border-border">
-                  {['Câmera', 'Local', 'Status', 'Gravação', 'Ações'].map(h => (
+                  {['Câmera', 'Local', 'IP', 'Status', 'Gravação', 'Ações'].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-medium text-[hsl(var(--muted-foreground))] whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -1250,6 +1245,7 @@ export default function CamerasPage() {
                       <div className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">{cam.code}</div>
                     </td>
                     <td className="px-3 py-2.5 text-[hsl(var(--muted-foreground))]">{cam.zone}</td>
+                    <td className="px-3 py-2.5 font-mono text-[11px] text-[hsl(var(--muted-foreground))] whitespace-nowrap">{cam.ipAddress}</td>
                     <td className="px-3 py-2.5">
                       <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] ${STATUS_BADGE[cam.status] ?? STATUS_BADGE.offline}`}>
                         {formatCameraStatus(cam.status)}
@@ -1367,7 +1363,7 @@ export default function CamerasPage() {
             animate={{ width: 320, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className="ml-4 border border-border rounded-xl bg-card flex flex-col overflow-hidden shrink-0"
+            className="ml-4 ops-card flex flex-col overflow-hidden shrink-0"
           >
             <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
               <h3 className="text-sm font-semibold truncate">{liveCam.code}</h3>

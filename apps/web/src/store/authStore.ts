@@ -2,7 +2,7 @@ import axios from 'axios';
 import { create } from 'zustand';
 import { getApiBaseUrl } from '../lib/api-base';
 
-type UiRole = 'operator' | 'supervisor' | 'admin';
+type UiRole = 'viewer' | 'operator' | 'admin';
 
 export interface AuthUser {
   id: string;
@@ -39,6 +39,7 @@ interface AuthState {
   isLoading: boolean;
   isBootstrapped: boolean;
   bootstrap: () => Promise<void>;
+  revalidate: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
 }
@@ -50,7 +51,7 @@ const API_URL = getApiBaseUrl();
 function mapRole(role: LoginResponse['user']['role']): UiRole {
   if (role === 'SUPER_ADMIN' || role === 'ADMIN') return 'admin';
   if (role === 'OPERATOR') return 'operator';
-  return 'supervisor';
+  return 'viewer'; // VIEWER → acesso restrito a Ao Vivo, PTZ e Reprodução
 }
 
 function mapUser(user: LoginResponse['user'] | MeResponse): AuthUser {
@@ -138,6 +139,37 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         accessToken: null,
         isAuthenticated: false,
         isLoading: false,
+        isBootstrapped: true,
+      });
+    }
+  },
+  revalidate: async () => {
+    // Revalidação periódica da sessão (a cada poucos minutos), executada com a UI
+    // já MONTADA e visível. Diferente de `bootstrap`, este caminho NUNCA seta
+    // `isLoading: true`: o `ProtectedRoute` renderiza <AppFallback/> (tela cheia
+    // "Carregando...") sempre que isLoading é true, o que desmontaria toda a árvore
+    // de páginas — e com ela TODOS os <LiveStreamPlayer/>. Isso derrubava as
+    // conexões WebRTC de todas as câmeras ao mesmo tempo a cada ciclo, fazendo a
+    // imagem "piscar"/reiniciar em lote. Aqui só atualizamos o usuário em segundo
+    // plano e, em caso de token expirado/inválido, encerramos a sessão.
+    const accessToken = get().accessToken;
+    if (!accessToken) {
+      if (get().isAuthenticated) {
+        set({ user: null, isAuthenticated: false, isBootstrapped: true });
+      }
+      return;
+    }
+
+    try {
+      const user = await fetchMe(accessToken);
+      persistSession(accessToken, user);
+      set({ user, isAuthenticated: true, isBootstrapped: true });
+    } catch {
+      persistSession(null, null);
+      set({
+        user: null,
+        accessToken: null,
+        isAuthenticated: false,
         isBootstrapped: true,
       });
     }

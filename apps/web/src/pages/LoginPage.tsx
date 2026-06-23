@@ -1,10 +1,91 @@
 import { useState, useEffect } from 'react';
 import { useLocation } from 'wouter';
-import { motion } from 'framer-motion';
-import { Shield, Eye, EyeOff, Lock, User, AlertCircle, Camera, CheckCircle2, Server } from 'lucide-react';
-import { format } from 'date-fns';
+import { Eye, EyeOff, Lock, Mail, User, AlertCircle, ShieldCheck, X } from 'lucide-react';
 import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
+import { getApiBaseUrl } from '../lib/api-base';
+
+function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
+  const [email, setEmail] = useState('');
+  const [sending, setSending] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setSending(true);
+    try {
+      await axios.post(`${getApiBaseUrl()}/auth/forgot-password`, { email: email.trim() });
+    } catch {
+      // resposta é sempre genérica para não revelar se o e-mail existe
+    } finally {
+      setSending(false);
+      setDone(true);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-6"
+      style={{ background: 'rgba(0,0,0,.5)' }}
+      onClick={onClose}
+    >
+      <div
+        className="relative w-full"
+        style={{ maxWidth: 360, background: 'var(--surf-1)', border: '1px solid var(--bdr)', borderRadius: 16, padding: '24px 22px' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-3 top-3"
+          style={{ background: 'none', border: 'none', color: 'var(--tx-3)', cursor: 'pointer' }}
+          aria-label="Fechar"
+        >
+          <X size={15} />
+        </button>
+        <h2 className="text-[15px] font-bold mb-1" style={{ color: 'var(--tx)' }}>Esqueci minha senha</h2>
+        {done ? (
+          <p className="text-[12px] mt-3" style={{ color: 'var(--tx-3)' }}>
+            Se o e-mail informado estiver cadastrado, enviamos um link para redefinição de senha. Verifique sua caixa de entrada.
+          </p>
+        ) : (
+          <form onSubmit={submit} className="flex flex-col gap-3 mt-3">
+            <p className="text-[11px]" style={{ color: 'var(--tx-3)' }}>
+              Informe o e-mail da sua conta para receber um link de redefinição de senha.
+            </p>
+            <div className="input-wrap">
+              <span className="input-icon"><Mail size={13} /></span>
+              <input
+                className="input"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="email@exemplo.com"
+                autoFocus
+                required
+              />
+            </div>
+            <button type="submit" disabled={sending} className="btn btn-primary" style={{ height: 38, fontSize: 12, fontWeight: 700 }}>
+              {sending ? 'Enviando...' : 'Enviar link de redefinição'}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LogoDrac({ size = 30 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" style={{ color: 'var(--acc)', flexShrink: 0 }}>
+      <path d="M6 5 L6 27 L15.5 27 Q27 27 27 16 Q27 5 15.5 5 Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" fill="none" opacity="0.7" />
+      <circle cx="17.5" cy="16" r="5.5" stroke="currentColor" strokeWidth="1" opacity="0.5" />
+      <circle cx="17.5" cy="16" r="2.5" fill="currentColor" opacity="0.95" />
+      <circle cx="19.1" cy="14.4" r="0.8" fill="white" opacity="0.4" />
+    </svg>
+  );
+}
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -12,34 +93,20 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [now, setNow] = useState(new Date());
   const { login, isAuthenticated } = useAuthStore();
   const [, setLocation] = useLocation();
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
 
-  const getLoginErrorMessage = (error: unknown) => {
-    if (!axios.isAxiosError(error)) {
-      return 'Não foi possível autenticar agora. Tente novamente.';
-    }
-
-    if (!error.response) {
-      return 'Não foi possível conectar à API. Verifique a conexão ou recarregue a página.';
-    }
-
-    if (error.response.status === 401) {
-      return 'Credenciais inválidas ou usuário inativo';
-    }
-
+  const getLoginErrorMessage = (err: unknown) => {
+    if (!axios.isAxiosError(err)) return 'Não foi possível autenticar agora. Tente novamente.';
+    if (!err.response) return 'Não foi possível conectar à API. Verifique a conexão ou recarregue a página.';
+    if (err.response.status === 401) return 'Credenciais inválidas ou usuário inativo';
     return 'Falha no servidor de autenticação. Tente novamente em instantes.';
   };
 
   useEffect(() => {
     if (isAuthenticated) setLocation('/live');
   }, [isAuthenticated, setLocation]);
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,163 +117,167 @@ export default function LoginPage() {
     try {
       await login(username, password);
       setLocation('/live');
-    } catch (error) {
-      setError(getLoginErrorMessage(error));
+    } catch (err) {
+      setError(getLoginErrorMessage(err));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="relative flex min-h-screen w-full flex-col overflow-hidden bg-background">
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,hsl(var(--border)_/_0.45)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border)_/_0.35)_1px,transparent_1px)] bg-[size:42px_42px]" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,hsl(var(--primary)_/_0.13),transparent_34%),linear-gradient(180deg,hsl(var(--background)_/_0.72),hsl(var(--background))_72%)]" />
+    <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden p-6" style={{ background: 'var(--bg)' }}>
+      {/* Camadas decorativas de fundo */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          backgroundImage:
+            'linear-gradient(var(--bdr-lo) 1px, transparent 1px), linear-gradient(90deg, var(--bdr-lo) 1px, transparent 1px)',
+          backgroundSize: '44px 44px',
+          maskImage: 'radial-gradient(circle at 50% 38%, #000 0%, transparent 72%)',
+          WebkitMaskImage: 'radial-gradient(circle at 50% 38%, #000 0%, transparent 72%)',
+        }}
+      />
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            'radial-gradient(620px circle at 50% -8%, hsl(var(--primary) / 0.18), transparent 60%), radial-gradient(480px circle at 50% 108%, hsl(var(--primary) / 0.07), transparent 60%)',
+        }}
+      />
 
-      <header className="relative flex items-center justify-between border-b border-border/70 bg-card/55 px-6 py-4 backdrop-blur-md">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[hsl(var(--primary)_/_0.22)] bg-[hsl(var(--primary)_/_0.1)]">
-            <Shield className="h-4 w-4 text-[hsl(var(--primary))]" />
+      {/* Cartão */}
+      <div
+        className="relative w-full"
+        style={{
+          maxWidth: 384,
+          background: 'var(--surf-1)',
+          border: '1px solid var(--bdr)',
+          borderRadius: 18,
+          boxShadow: 'var(--shadow-lg), 0 0 0 1px hsl(var(--primary) / 0.04)',
+          padding: '38px 34px 28px',
+          animation: 'loginIn .5s cubic-bezier(.2,.7,.2,1) both',
+        }}
+      >
+        {/* Faixa de acento no topo */}
+        <div
+          style={{
+            position: 'absolute', top: 0, left: 24, right: 24, height: 2, borderRadius: 2,
+            background: 'linear-gradient(90deg, transparent, var(--acc), transparent)', opacity: 0.85,
+          }}
+        />
+
+        {/* Marca */}
+        <div className="text-center" style={{ marginBottom: 28 }}>
+          <div className="relative mx-auto" style={{ width: 60, height: 60, marginBottom: 16 }}>
+            <div style={{ position: 'absolute', inset: -6, borderRadius: 20, background: 'radial-gradient(circle, hsl(var(--primary) / 0.22), transparent 70%)', filter: 'blur(2px)' }} />
+            <div
+              className="relative flex h-full w-full items-center justify-center"
+              style={{ borderRadius: 17, background: 'linear-gradient(150deg, var(--acc-dim), transparent)', border: '1px solid var(--acc-bdr)' }}
+            >
+              <LogoDrac size={30} />
+            </div>
           </div>
+          <h1 className="text-[23px] font-bold" style={{ color: 'var(--tx)', letterSpacing: '-0.01em' }}>DRAC VMS</h1>
+          <p className="mt-1 font-mono text-[9px] uppercase" style={{ color: 'var(--tx-4)', letterSpacing: '0.22em' }}>Command Center</p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
           <div>
-            <div className="text-[13px] font-semibold leading-none">DRAC VMS</div>
-            <div className="mt-1 text-[10px] text-muted-foreground">Acesso seguro ao servidor local</div>
-          </div>
-        </div>
-        <div className="font-mono text-[11px] text-muted-foreground tabular-nums">
-          {format(now, 'dd/MM/yyyy HH:mm:ss')}
-        </div>
-      </header>
-
-      <div className="relative grid flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_420px]">
-        <section className="hidden min-h-0 flex-col justify-between border-r border-border/70 p-10 lg:flex">
-          <div className="max-w-xl">
-            <div className="mb-5 inline-flex items-center gap-2 rounded-lg border border-border bg-card/70 px-3 py-1.5 text-[11px] text-muted-foreground">
-              <Server className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
-              Instalação operacional
+            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: 'var(--tx-3)' }} htmlFor="username">Usuário</label>
+            <div className="input-wrap">
+              <span className="input-icon"><User size={13} /></span>
+              <input
+                id="username"
+                className="input"
+                type="text"
+                value={username}
+                onChange={(e) => { setUsername(e.target.value); setError(''); }}
+                placeholder="admin@local.dev"
+                autoFocus
+                data-testid="input-username"
+              />
             </div>
-            <h1 className="text-3xl font-semibold tracking-tight">Monitoramento profissional, direto no seu servidor.</h1>
-            <p className="mt-4 max-w-lg text-sm leading-6 text-muted-foreground">
-              Entre para operar câmeras, gravações, alertas e usuários com uma interface limpa e preparada para rotina real de CFTV.
-            </p>
           </div>
 
-          <div className="grid max-w-xl grid-cols-3 gap-3">
-            {[
-              { icon: Camera, label: 'Live', value: 'WebRTC' },
-              { icon: Shield, label: 'Acesso', value: 'Protegido' },
-              { icon: CheckCircle2, label: 'Status', value: 'Local' },
-            ].map(({ icon: Icon, label, value }) => (
-              <div key={label} className="rounded-lg border border-border bg-card/70 p-4">
-                <Icon className="mb-4 h-5 w-5 text-[hsl(var(--primary))]" />
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-                <div className="mt-1 text-sm font-semibold">{value}</div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <div className="flex items-center justify-center p-6">
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease: 'easeOut' }}
-          className="w-full max-w-[390px] rounded-lg border border-border bg-card/90 px-6 py-7 shadow-sm backdrop-blur-md"
-        >
-          <div className="text-center mb-7">
-            <div className="w-12 h-12 mx-auto mb-4 rounded-lg bg-[hsl(var(--primary)_/_0.08)] border border-[hsl(var(--primary)_/_0.18)] flex items-center justify-center">
-              <Shield className="w-6 h-6 text-[hsl(var(--primary))]" />
-            </div>
-            <h1 className="text-xl font-semibold tracking-tight text-foreground">DRAC VMS</h1>
-            <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1.5">
-              Identifique-se para iniciar a operação
-            </p>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] tracking-wide uppercase" htmlFor="username">
-                Usuário
-              </label>
-              <div className="relative">
-                <User className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground)_/_0.5)]" />
-                <input
-                  id="username"
-                  type="text"
-                  value={username}
-                  onChange={e => { setUsername(e.target.value); setError(''); }}
-                  placeholder="admin@local.dev"
-                  className="w-full h-10 pl-9 pr-4 rounded-md border border-border bg-card/80 text-foreground text-[12px] font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary)_/_0.6)] focus:border-[hsl(var(--primary)_/_0.5)] placeholder:text-[hsl(var(--muted-foreground)_/_0.35)] placeholder:font-sans transition-all"
-                  data-testid="input-username"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] tracking-wide uppercase" htmlFor="password">
-                Senha
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[hsl(var(--muted-foreground)_/_0.5)]" />
+          <div>
+            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: 'var(--tx-3)' }} htmlFor="password">Senha</label>
+            <div className="relative">
+              <div className="input-wrap">
+                <span className="input-icon"><Lock size={13} /></span>
                 <input
                   id="password"
+                  className="input"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
-                  onChange={e => { setPassword(e.target.value); setError(''); }}
-                  placeholder="••••••••••••"
-                  className="w-full h-10 pl-9 pr-10 rounded-md border border-border bg-card/80 text-foreground text-[12px] font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary)_/_0.6)] focus:border-[hsl(var(--primary)_/_0.5)] placeholder:text-[hsl(var(--muted-foreground)_/_0.35)] transition-all"
+                  onChange={(e) => { setPassword(e.target.value); setError(''); }}
+                  placeholder="••••••••"
+                  style={{ paddingRight: 34 }}
                   data-testid="input-password"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[hsl(var(--muted-foreground)_/_0.45)] hover:text-[hsl(var(--muted-foreground))] transition-colors"
-                >
-                  {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                </button>
               </div>
-            </div>
-
-            {error && (
-              <motion.div
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="flex items-center gap-2 text-[11px] text-[hsl(354,52%,65%)] bg-[hsl(354_52%_52%_/_0.08)] border border-[hsl(354_52%_52%_/_0.22)] rounded-md px-3 py-2"
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 flex"
+                style={{ background: 'none', border: 'none', color: 'var(--tx-3)', cursor: 'pointer' }}
+                aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
               >
-                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                {error}
-              </motion.div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full h-10 rounded-md bg-primary text-[13px] font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
-              data-testid="button-login"
-            >
-              {loading ? (
-                <>
-                  <span className="w-3.5 h-3.5 border-2 border-white/25 border-t-white rounded-full animate-spin" />
-                  Autenticando...
-                </>
-              ) : 'Entrar'}
-            </button>
-          </form>
-
-          <div className="mt-6 rounded-md border border-border/60 bg-background/55 px-4 py-3">
-            <div className="text-[11px] text-foreground/80 font-medium">Instalação local</div>
-            <div className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">
-              Autenticação e dados protegidos neste servidor.
+                {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+            </div>
+            <div className="mt-1.5 text-right">
+              <button
+                type="button"
+                onClick={() => setShowForgotPassword(true)}
+                className="text-[10.5px] font-medium"
+                style={{ background: 'none', border: 'none', color: 'var(--tx-3)', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                Esqueci minha senha
+              </button>
             </div>
           </div>
 
-          <div className="mt-4 text-center">
-            <span className="text-[10px] text-[hsl(var(--muted-foreground)_/_0.55)]">
-              DRAC VMS · Instalação Local
-            </span>
-          </div>
-        </motion.div>
+          {error && (
+            <div className="flex items-center gap-2 text-[11px]" style={{ color: '#E07878', background: 'rgba(200,72,72,.08)', border: '1px solid rgba(200,72,72,.2)', borderRadius: 8, padding: '8px 11px' }}>
+              <AlertCircle size={13} /> {error}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="btn btn-primary"
+            style={{
+              height: 44, width: '100%', fontSize: 13, fontWeight: 700, borderRadius: 11, marginTop: 6,
+              boxShadow: '0 8px 20px -6px hsl(var(--primary) / 0.45)',
+            }}
+            data-testid="button-login"
+          >
+            {loading ? (
+              <span className="flex items-center gap-2">
+                <span style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,.3)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+                Autenticando...
+              </span>
+            ) : 'Entrar no Sistema'}
+          </button>
+        </form>
+
+        {/* Rodapé */}
+        <div className="mt-7 flex items-center justify-between border-t pt-4" style={{ borderColor: 'var(--bdr-lo)' }}>
+          <span className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--tx-3)' }}>
+            <ShieldCheck size={12} style={{ color: 'var(--s-online)' }} />
+            Conexão local segura
+          </span>
+          <span className="font-mono text-[9px]" style={{ color: 'var(--tx-4)' }}>v2.4 · Local</span>
+        </div>
       </div>
-      </div>
+
+      {showForgotPassword && <ForgotPasswordModal onClose={() => setShowForgotPassword(false)} />}
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes loginIn { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
+      `}</style>
     </div>
   );
 }

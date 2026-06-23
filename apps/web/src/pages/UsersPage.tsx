@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { Users, Plus, UserX, Unlock, Edit2, FolderLock, Camera, Save, Trash2, RefreshCw } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { Plus, UserX, Unlock, Edit2, Save, Trash2, RefreshCw, Search, MoreHorizontal } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { useVmsDataStore } from '../store/vmsDataStore';
 import { useAuthStore } from '../store/authStore';
@@ -31,12 +31,6 @@ type AccessPermission = {
   user?: { id: string; name: string; email: string };
   group?: { id: string; name: string } | null;
   camera?: { id: string; name: string } | null;
-};
-
-const roleColor = (r: string) => {
-  if (r === 'admin') return 'bg-[hsl(var(--primary)_/_0.12)] text-[hsl(var(--primary))] border-[hsl(var(--primary)_/_0.25)]';
-  if (r === 'operator') return 'bg-muted text-muted-foreground border-border';
-  return 'bg-[hsl(var(--status-warning)_/_0.15)] text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning)_/_0.3)]';
 };
 
 const levelLabel: Record<PermissionLevel, string> = {
@@ -68,7 +62,6 @@ function apiClient() {
 
 export default function UsuariosPage() {
   const userList = useVmsDataStore((state) => state.users);
-  const cameras = useVmsDataStore((state) => state.cameras);
   const updateUserActive = useVmsDataStore((state) => state.updateUserActive);
   const loadData = useVmsDataStore((state) => state.load);
   const accessToken = useAuthStore((state) => state.accessToken);
@@ -77,14 +70,13 @@ export default function UsuariosPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editUser, setEditUser] = useState<(typeof userList)[number] | null>(null);
   const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'operator' | 'viewer'>('all');
   const [groups, setGroups] = useState<AccessGroup[]>([]);
   const [permissions, setPermissions] = useState<AccessPermission[]>([]);
   const [accessLoading, setAccessLoading] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState('');
   const [selectedGroupId, setSelectedGroupId] = useState('');
   const [selectedLevel, setSelectedLevel] = useState<PermissionLevel>('VIEW');
-  const [newGroupName, setNewGroupName] = useState('');
-  const [newGroupDescription, setNewGroupDescription] = useState('');
   const [userSaving, setUserSaving] = useState(false);
   const [userForm, setUserForm] = useState({
     name: '',
@@ -97,8 +89,16 @@ export default function UsuariosPage() {
   const availableRoleOptions = canManageGlobalAccess ? roleOptions : roleOptions.filter((option) => option.value !== 'ADMIN');
 
   const filtered = useMemo(() => userList.filter(u =>
-    !search || u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase())
-  ), [userList, search]);
+    (!search || u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase()))
+    && (roleFilter === 'all' || u.role === roleFilter)
+  ), [userList, search, roleFilter]);
+
+  const ROLE_FILTS: Array<{ v: typeof roleFilter; l: string }> = [
+    { v: 'all', l: 'Todos' },
+    { v: 'admin', l: 'Admins' },
+    { v: 'operator', l: 'Operadores' },
+    { v: 'viewer', l: 'Visualizadores' },
+  ];
 
   const selectedGroup = useMemo(() => groups.find((group) => group.id === selectedGroupId) ?? groups[0] ?? null, [groups, selectedGroupId]);
   const selectedUser = useMemo(() => userList.find((user) => user.id === selectedUserId) ?? userList[0] ?? null, [userList, selectedUserId]);
@@ -112,8 +112,6 @@ export default function UsuariosPage() {
     }
     return map;
   }, [permissions]);
-
-  const groupCameraIds = useMemo(() => new Set(selectedGroup?.cameras.map((camera) => camera.id) ?? []), [selectedGroup]);
 
   const loadAccess = async () => {
     if (!accessToken) return;
@@ -167,73 +165,6 @@ export default function UsuariosPage() {
 
   const toggleLock = async (id: string, active: boolean) => {
     await updateUserActive(id, active);
-  };
-
-  const createGroup = async () => {
-    const name = newGroupName.trim();
-    if (!name) return;
-    setAccessLoading(true);
-    try {
-      const { data } = await apiClient().post('/camera-groups', {
-        name,
-        description: newGroupDescription.trim() || undefined,
-      });
-      setNewGroupName('');
-      setNewGroupDescription('');
-      setSelectedGroupId(data.id);
-      await loadAccess();
-      toast({ title: 'Grupo criado', description: `${name} pronto para receber câmeras e usuários.` });
-    } catch (error) {
-      toast({
-        title: 'Falha ao criar grupo',
-        description: error instanceof Error ? error.message : 'Não foi possível criar o grupo.',
-        variant: 'destructive',
-      });
-    } finally {
-      setAccessLoading(false);
-    }
-  };
-
-  const setCameraInGroup = async (cameraId: string, shouldAdd: boolean) => {
-    if (!selectedGroup) return;
-    setAccessLoading(true);
-    try {
-      if (shouldAdd) {
-        await apiClient().post(`/camera-groups/${selectedGroup.id}/cameras/${cameraId}`);
-      } else {
-        await apiClient().delete(`/camera-groups/${selectedGroup.id}/cameras/${cameraId}`);
-      }
-      await Promise.all([loadAccess(), loadData()]);
-    } catch (error) {
-      toast({
-        title: shouldAdd ? 'Falha ao adicionar câmera' : 'Falha ao remover câmera',
-        description: error instanceof Error ? error.message : 'Não foi possível atualizar o grupo.',
-        variant: 'destructive',
-      });
-    } finally {
-      setAccessLoading(false);
-    }
-  };
-
-  const setGroupAlarms = async (enabled: boolean) => {
-    if (!selectedGroup) return;
-    setAccessLoading(true);
-    try {
-      const { data } = await apiClient().post(`/camera-groups/${selectedGroup.id}/alarms`, { enabled });
-      await loadData();
-      toast({
-        title: enabled ? 'Alarmes ligados no grupo' : 'Alarmes desligados no grupo',
-        description: `${data?.affected ?? 0} câmera(s) de ${selectedGroup.name} atualizada(s).`,
-      });
-    } catch (error) {
-      toast({
-        title: 'Falha ao atualizar alarmes do grupo',
-        description: error instanceof Error ? error.message : 'Não foi possível atualizar os alarmes.',
-        variant: 'destructive',
-      });
-    } finally {
-      setAccessLoading(false);
-    }
   };
 
   const grantGroupAccess = async () => {
@@ -326,295 +257,108 @@ export default function UsuariosPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-6 pt-5 pb-4">
-        <div className="flex items-center gap-2.5">
-          <Users className="h-4 w-4 text-primary" />
-          <div>
-            <h1 className="text-[18px] font-semibold tracking-tight">Usuários e acessos</h1>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Perfis definem ações · grupos definem quais câmeras cada pessoa vê</p>
+      <div className="px-6 py-3 border-b border-border shrink-0 flex items-center justify-end gap-2">
+          <div className="input-wrap w-44">
+            <span className="input-icon"><Search className="w-3.5 h-3.5" /></span>
+            <input className="input" style={{ height: 32, fontSize: 12 }} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar usuário..." />
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Buscar usuários..."
-            className="h-7 w-44 rounded border border-border bg-card px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-          <button
-            onClick={() => void loadAccess()}
-            disabled={accessLoading}
-            className="flex h-7 items-center gap-1.5 rounded border border-border bg-card px-3 text-xs hover:bg-accent disabled:opacity-50"
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', accessLoading && 'animate-spin')} />
-            Atualizar
+          <button onClick={() => void loadAccess()} disabled={accessLoading} className="btn btn-secondary btn-sm">
+            <RefreshCw className={cn('h-3.5 w-3.5', accessLoading && 'animate-spin')} /> Atualizar
           </button>
-          <button
-            onClick={() => setAddOpen(true)}
-            className="flex h-7 items-center gap-1.5 rounded bg-primary px-3 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Novo usuário
+          <button onClick={() => setAddOpen(true)} className="btn btn-primary btn-sm">
+            <Plus className="h-3.5 w-3.5" /> Novo usuário
           </button>
-        </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(420px,0.85fr)]">
-        <section className="overflow-hidden rounded-xl border border-border bg-card/45">
-          <div className="border-b border-border px-4 py-3">
-            <p className="text-sm font-semibold">Usuários do sistema</p>
-            <p className="text-xs text-muted-foreground">Perfis definem ações. Grupos definem quais câmeras cada pessoa vê.</p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-card/80">
-                <tr>
-                  {['Nome', 'E-mail', 'Perfil', 'Grupos', 'Status', 'Ações'].map(h => (
-                    <th key={h} className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((u, i) => {
-                  const userPermissions = permissionsByUser.get(u.id) ?? [];
-                  const groupPermissions = userPermissions.filter((permission) => permission.groupId);
-                  return (
-                    <tr
-                      key={u.id}
-                      className={cn('border-t border-border transition-colors',
-                        i % 2 === 0 ? 'bg-transparent hover:bg-accent/35' : 'bg-background/30 hover:bg-accent/35',
-                        !u.active && 'opacity-60'
-                      )}
-                    >
-                      <td className="px-4 py-3">
-                        <button className="flex items-center gap-2.5 text-left" onClick={() => setSelectedUserId(u.id)}>
-                          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary">
-                            {u.name.split(' ').map(n => n[0]).join('').slice(0, 2)}
-                          </div>
-                          <span className="font-medium">{u.name}</span>
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">{u.email}</td>
-                      <td className="px-4 py-3">
-                        <Badge variant="outline" className={cn('text-[10px]', roleColor(u.role))}>{visibleRoleLabel(u.role)}</Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        {groupPermissions.length ? (
-                          <div className="flex max-w-[260px] flex-wrap gap-1.5">
-                            {groupPermissions.map((permission) => (
-                              <Badge key={permission.id} variant="outline" className="border-border bg-background/70 text-[10px] text-muted-foreground">
-                                {permission.group?.name ?? 'Grupo'}
-                              </Badge>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">Sem grupo</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge variant="outline" className={cn('text-[10px]',
-                          u.active ? 'border-[hsl(var(--status-online)_/_0.3)] bg-[hsl(var(--status-online)_/_0.15)] text-[hsl(var(--status-online))]' : 'border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.15)] text-[hsl(var(--destructive))]'
-                        )}>{u.active ? 'Ativo' : 'Bloqueado'}</Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1">
-                          <button onClick={() => setEditUser(u)} className="flex h-6 w-6 items-center justify-center rounded border border-border bg-card hover:bg-accent">
-                            <Edit2 className="h-3 w-3" />
-                          </button>
-                          <button
-                            onClick={() => void toggleLock(u.id, !u.active)}
-                            className={cn('flex h-6 w-6 items-center justify-center rounded border transition-colors',
-                              !u.active ? 'border-[hsl(var(--status-online)_/_0.3)] bg-[hsl(var(--status-online)_/_0.1)] hover:bg-[hsl(var(--status-online)_/_0.2)]' : 'border-border bg-card hover:bg-accent'
-                            )}
-                          >
-                            {!u.active ? <Unlock className="h-3 w-3 text-[hsl(var(--status-online))]" /> : <UserX className="h-3 w-3" />}
-                          </button>
+      {/* Filtros por papel */}
+      <div className="px-5 py-2 border-b border-border shrink-0 flex gap-1">
+        {ROLE_FILTS.map((f) => (
+          <button key={f.v} onClick={() => setRoleFilter(f.v)} className={`ops-pill ${roleFilter === f.v ? 'ops-pill-active' : ''}`}>
+            {f.l}
+          </button>
+        ))}
+      </div>
+
+      {/* Tabela de usuários */}
+      <div className="flex-1 overflow-y-auto p-5">
+        <div className="ops-card overflow-hidden">
+          <table className="w-full text-xs border-collapse">
+            <thead className="sticky top-0 bg-card z-10">
+              <tr className="border-b border-border">
+                {['Usuário', 'Perfil', 'Grupos', 'Status', 'Ações'].map(h => (
+                  <th key={h} className="px-3 py-2.5 text-left font-medium text-[hsl(var(--muted-foreground))] whitespace-nowrap">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filtered.map((u) => {
+                const initials = u.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase();
+                const groupPermissions = (permissionsByUser.get(u.id) ?? []).filter((p) => p.groupId);
+                return (
+                  <tr
+                    key={u.id}
+                    className={cn('hover:bg-[hsl(var(--accent))] transition-colors cursor-pointer', !u.active && 'opacity-60')}
+                    onClick={() => { setEditUser(u); setSelectedUserId(u.id); }}
+                  >
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex items-center justify-center text-[13px] font-bold shrink-0" style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--surf-3)', border: '1px solid var(--bdr)', color: 'var(--tx-2)' }}>{initials}</div>
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">{u.name}</div>
+                          <div className="text-[10px] font-mono text-[hsl(var(--muted-foreground))] truncate">{u.email}</div>
                         </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <aside className="space-y-4">
-          <section className="rounded-xl border border-border bg-card/45 p-4">
-            <div className="mb-4 flex items-start gap-2">
-              <FolderLock className="mt-0.5 h-4 w-4 text-primary" />
-              <div>
-                <p className="text-sm font-semibold">Grupos de acesso</p>
-                <p className="text-xs text-muted-foreground">Use um grupo para cada cliente/local: mercado, academia, condominio ou filial.</p>
-              </div>
-            </div>
-
-            {canManageGlobalAccess ? (
-              <>
-                <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                  <input
-                    value={newGroupName}
-                    onChange={(event) => setNewGroupName(event.target.value)}
-                    placeholder="Ex.: Mercado São José"
-                    className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                  <button
-                    onClick={() => void createGroup()}
-                    disabled={accessLoading || !newGroupName.trim()}
-                    className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Criar
-                  </button>
-                </div>
-                <input
-                  value={newGroupDescription}
-                  onChange={(event) => setNewGroupDescription(event.target.value)}
-                  placeholder="Descrição opcional"
-                  className="mt-2 h-9 w-full rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </>
-            ) : null}
-
-            <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {groups.map((group) => (
-                <button
-                  key={group.id}
-                  onClick={() => setSelectedGroupId(group.id)}
-                  className={cn('rounded-lg border p-3 text-left transition-colors',
-                    selectedGroup?.id === group.id
-                      ? 'border-primary/40 bg-primary/10 text-foreground'
-                      : 'border-border bg-background/65 text-muted-foreground hover:bg-accent/45 hover:text-foreground'
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-xs font-semibold">{group.name}</span>
-                    <span className="rounded-full bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground">{group.cameras.length} cam.</span>
-                  </div>
-                  {group.description ? <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{group.description}</p> : null}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {canManageGlobalAccess ? (
-            <section className="rounded-xl border border-border bg-card/45 p-4">
-              <div className="mb-4 flex items-start gap-2">
-                <Camera className="mt-0.5 h-4 w-4 text-primary" />
-                <div>
-                  <p className="text-sm font-semibold">Câmeras do grupo</p>
-                  <p className="text-xs text-muted-foreground">{selectedGroup ? `Selecionado: ${selectedGroup.name}` : 'Crie ou selecione um grupo para vincular câmeras.'}</p>
-                </div>
-              </div>
-
-              {selectedGroup && (
-                <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-background/55 px-3 py-2">
-                  <span className="text-[11px] text-muted-foreground">Alarmes deste grupo:</span>
-                  <button
-                    onClick={() => void setGroupAlarms(true)}
-                    disabled={accessLoading}
-                    className="rounded border border-[hsl(var(--status-online)_/_0.4)] bg-[hsl(var(--status-online)_/_0.1)] px-2.5 py-1 text-[11px] text-[hsl(var(--status-online))] hover:bg-[hsl(var(--status-online)_/_0.2)] disabled:opacity-50"
-                  >
-                    Ligar
-                  </button>
-                  <button
-                    onClick={() => void setGroupAlarms(false)}
-                    disabled={accessLoading}
-                    className="rounded border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-50"
-                  >
-                    Desligar
-                  </button>
-                </div>
-              )}
-
-              <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
-                {cameras.map((camera) => {
-                  const checked = groupCameraIds.has(camera.id);
-                  return (
-                    <label key={camera.id} className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-background/55 px-3 py-2 text-xs hover:bg-accent/40">
-                      <div className="min-w-0">
-                        <p className="truncate font-medium">{camera.name}</p>
-                        <p className="truncate text-[11px] text-muted-foreground">{camera.zone} · {camera.resolution}</p>
                       </div>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={!selectedGroup || accessLoading}
-                        onChange={(event) => void setCameraInGroup(camera.id, event.target.checked)}
-                        className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
-                      />
-                    </label>
-                  );
-                })}
-              </div>
-            </section>
-          ) : null}
-
-          <section className="rounded-xl border border-border bg-card/45 p-4">
-            <div className="mb-4 flex items-start gap-2">
-              <Save className="mt-0.5 h-4 w-4 text-primary" />
-              <div>
-                <p className="text-sm font-semibold">Acesso por grupo</p>
-                <p className="text-xs text-muted-foreground">O usuário vê apenas as câmeras dos grupos liberados.</p>
-              </div>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-3">
-              <select
-                value={selectedUser?.id ?? ''}
-                onChange={(event) => setSelectedUserId(event.target.value)}
-                className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                {userList.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-              </select>
-              <select
-                value={selectedGroup?.id ?? ''}
-                onChange={(event) => setSelectedGroupId(event.target.value)}
-                className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-              </select>
-              <select
-                value={selectedLevel}
-                onChange={(event) => setSelectedLevel(event.target.value as PermissionLevel)}
-                className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                {(Object.keys(levelLabel) as PermissionLevel[]).map((level) => <option key={level} value={level}>{levelLabel[level]}</option>)}
-              </select>
-            </div>
-            <button
-              onClick={() => void grantGroupAccess()}
-              disabled={accessLoading || !selectedUser || !selectedGroup}
-              className="mt-3 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              <Save className="h-3.5 w-3.5" />
-              Salvar acesso ao grupo
-            </button>
-
-            <div className="mt-4 space-y-2">
-              {(selectedUser ? permissionsByUser.get(selectedUser.id) ?? [] : []).filter((permission) => permission.groupId).map((permission) => (
-                <div key={permission.id} className="flex items-center justify-between rounded-lg border border-border bg-background/55 px-3 py-2 text-xs">
-                  <div>
-                    <p className="font-medium">{permission.group?.name ?? 'Grupo removido'}</p>
-                    <p className="text-[11px] text-muted-foreground">{levelLabel[permission.level]}</p>
-                  </div>
-                  <button
-                    onClick={() => void revokeAccess(permission.id)}
-                    disabled={accessLoading}
-                    className="flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                    title="Remover acesso"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-        </aside>
+                    </td>
+                    <td className="px-3 py-2.5 text-[hsl(var(--muted-foreground))]">{visibleRoleLabel(u.role)}</td>
+                    <td className="px-3 py-2.5">
+                      {groupPermissions.length > 0 ? (
+                        <span className="text-[hsl(var(--muted-foreground))] truncate block max-w-[200px]" title={groupPermissions.map((p) => p.group?.name).filter(Boolean).join(', ')}>
+                          {groupPermissions.map((p) => p.group?.name).filter(Boolean).join(', ')}
+                        </span>
+                      ) : (
+                        <span className="text-[hsl(var(--muted-foreground))] opacity-50">-</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: u.active ? 'var(--s-online)' : 'var(--s-offline)' }} />
+                        <span className="text-[10px]" style={{ color: 'var(--tx-3)' }}>{u.active ? 'Ativo' : 'Bloqueado'}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                        <button onClick={() => { setEditUser(u); setSelectedUserId(u.id); }} className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--chart-2))] hover:bg-[hsl(var(--accent))] transition-colors" title="Editar">
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => void toggleLock(u.id, !u.active)}
+                          className={cn("w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] transition-colors", u.active ? "hover:text-[hsl(var(--destructive))]" : "hover:text-[hsl(var(--status-online))]")}
+                          title={u.active ? 'Bloquear usuário' : 'Desbloquear usuário'}
+                        >
+                          {u.active ? <UserX className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!filtered.length && (
+                <tr>
+                  <td colSpan={5} className="py-16 text-center">
+                    <div className="flex flex-col items-center justify-center gap-2" style={{ color: 'var(--tx-4)' }}>
+                      <MoreHorizontal className="w-8 h-8 opacity-40" />
+                      <span className="text-xs">Nenhum usuário encontrado</span>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <Dialog open={addOpen || !!editUser} onOpenChange={(o) => { if (!o) { setAddOpen(false); setEditUser(null); } }}>
-        <DialogContent className="max-w-md border-border bg-card">
+        <DialogContent className="max-w-md border-border bg-card max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editUser ? `Editar usuário - ${editUser.name}` : 'Novo usuário'}</DialogTitle>
           </DialogHeader>
@@ -658,16 +402,66 @@ export default function UsuariosPage() {
               />
             </div>
             {editUser ? (
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+                <span className="text-xs font-medium">Usuário ativo</span>
+                <Switch
                   checked={userForm.isActive}
-                  onChange={(event) => setUserForm((current) => ({ ...current, isActive: event.target.checked }))}
-                  className="rounded"
+                  onCheckedChange={(value) => setUserForm((current) => ({ ...current, isActive: value }))}
                 />
-                <span className="text-xs text-muted-foreground">Usuário ativo</span>
-              </label>
+              </div>
             ) : null}
+
+            {editUser && canManageGlobalAccess ? (
+              <div className="pt-3 mt-1 border-t border-border">
+                <p className="text-xs font-semibold">Acesso por grupo</p>
+                <p className="mb-2 text-[11px] text-muted-foreground">O usuário vê apenas as câmeras dos grupos liberados.</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={selectedGroupId}
+                    onChange={(event) => setSelectedGroupId(event.target.value)}
+                    className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                  </select>
+                  <select
+                    value={selectedLevel}
+                    onChange={(event) => setSelectedLevel(event.target.value as PermissionLevel)}
+                    className="h-9 rounded-lg border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {(Object.keys(levelLabel) as PermissionLevel[]).map((lvl) => <option key={lvl} value={lvl}>{levelLabel[lvl]}</option>)}
+                  </select>
+                </div>
+                <button
+                  onClick={() => void grantGroupAccess()}
+                  disabled={accessLoading || !selectedGroup}
+                  className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-border bg-card text-xs hover:bg-accent disabled:opacity-50"
+                >
+                  <Save className="h-3.5 w-3.5" /> Liberar acesso a grupo
+                </button>
+                <div className="mt-3 space-y-2 max-h-40 overflow-y-auto">
+                  {(permissionsByUser.get(editUser.id) ?? []).filter((p) => p.groupId).map((permission) => (
+                    <div key={permission.id} className="flex items-center justify-between rounded-lg border border-border bg-background/55 px-3 py-2 text-xs">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{permission.group?.name ?? 'Grupo'}</p>
+                        <p className="text-[11px] text-muted-foreground">{levelLabel[permission.level]}</p>
+                      </div>
+                      <button
+                        onClick={() => void revokeAccess(permission.id)}
+                        disabled={accessLoading}
+                        className="flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                        title="Remover acesso"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  {!(permissionsByUser.get(editUser.id) ?? []).some((p) => p.groupId) && (
+                    <p className="text-[11px] text-muted-foreground">Nenhum grupo liberado ainda.</p>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
             <div className="flex justify-end gap-2 pt-2">
               <button onClick={() => { setAddOpen(false); setEditUser(null); }} className="h-8 rounded border border-border px-4 text-xs hover:bg-accent">Cancelar</button>
               <button

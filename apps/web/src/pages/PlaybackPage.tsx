@@ -923,10 +923,10 @@ export default function PlaybackPage() {
   }, [accessToken, clipDownload, clipDownloadReason]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 p-4">
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card/70 px-4 py-3 shadow-sm">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="toolbar">
         <Select value={selectedCamId} onValueChange={setSelectedCamId}>
-          <SelectTrigger className="h-10 w-[min(100%,320px)] text-xs">
+          <SelectTrigger className="h-9 w-[min(100%,300px)] text-xs">
             <SelectValue placeholder="Selecione uma câmera" />
           </SelectTrigger>
           <SelectContent className="max-h-64">
@@ -942,41 +942,31 @@ export default function PlaybackPage() {
           type="date"
           value={selectedDate}
           onChange={(event) => setSelectedDate(event.target.value)}
-          className="h-10 rounded-xl border border-border bg-card px-3 text-xs focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
+          className="input"
+          style={{ width: 170, height: 34, fontSize: 12 }}
         />
-        <input
-          value={jumpTime}
-          onChange={(event) => setJumpTime(event.target.value)}
-          className="h-10 w-28 rounded-xl border border-border bg-card px-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]"
-          placeholder="HH:mm:ss"
-        />
-        <button
-          type="button"
-          onClick={jumpToExactTime}
-          className="h-10 rounded-xl border border-border px-3 text-xs hover:bg-[hsl(var(--accent))]"
-        >
-          Ir para hora
-        </button>
 
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setCompareEnabled((value) => !value)}
-            className={`mr-2 h-9 rounded-xl px-3 text-xs transition-colors ${compareEnabled ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'border border-border text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-foreground'}`}
-          >
-            Multi-câmera
-          </button>
-          <span className="text-xs text-[hsl(var(--muted-foreground))]">Janela:</span>
+        <div style={{ flex: 1 }} />
+
+        {/* Janela de zoom da timeline (24h/12h/6h) */}
+        <div className="segment">
           {[1, 2, 4].map((value) => (
             <button
               key={value}
               type="button"
               onClick={() => setZoom(value)}
-              className={`rounded px-2.5 py-1.5 text-xs transition-colors ${zoom === value ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'border border-border text-[hsl(var(--muted-foreground))] hover:text-foreground'}`}
+              className={`seg-btn ${zoom === value ? 'active' : ''}`}
             >
               {value === 1 ? '24h' : value === 2 ? '12h' : '6h'}
             </button>
           ))}
+        </div>
+
+        {/* Recursos avançados ocultos para espelhar o mock (funcionalidade preservada) */}
+        <div className="hidden">
+          <input value={jumpTime} onChange={(event) => setJumpTime(event.target.value)} placeholder="HH:mm:ss" />
+          <button type="button" onClick={jumpToExactTime}>Ir para hora</button>
+          <button type="button" onClick={() => setCompareEnabled((value) => !value)}>Multi-câmera</button>
         </div>
       </div>
 
@@ -1041,7 +1031,7 @@ export default function PlaybackPage() {
         </div>
       )}
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="hidden">
         <div className="rounded-lg border border-border bg-card px-3 py-2">
           <div className="text-[10px] uppercase tracking-[0.16em] text-[hsl(var(--muted-foreground))]">Segmentos</div>
           <div className="mt-1 text-lg font-semibold">{selectedHealth?.total ?? recordings.length}</div>
@@ -1067,9 +1057,9 @@ export default function PlaybackPage() {
       </div>
 
 
-      <div className="flex flex-1 gap-4 min-h-0">
+      <div className="flex flex-1 gap-4 min-h-0 p-4">
         <div ref={playerColumnRef} className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="relative min-h-[62vh] flex-1 overflow-hidden rounded-[20px] border border-border bg-[hsl(210,18%,7%)]">
+          <div className="relative min-h-[62vh] flex-1 overflow-hidden rounded-xl border border-border bg-[hsl(210,18%,7%)]">
             <div className="camera-scanline absolute inset-0 overflow-hidden pointer-events-none" />
 
             <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
@@ -1196,45 +1186,8 @@ export default function PlaybackPage() {
             </div>
           </div>
 
-          <div className="rounded-[18px] border border-border bg-card p-3">
-            <div className="relative mb-2 h-4 cursor-pointer overflow-hidden rounded bg-[hsl(var(--muted))]" onClick={(event) => onTimelineClick(event.clientX, event.currentTarget.getBoundingClientRect())}>
-              {timelineSegments.map((segment, index) => (
-                <div
-                  key={`${segment.type}-${segment.start}-${index}`}
-                  className="absolute top-0 h-full opacity-70"
-                  onClick={(event) => {
-                    if ((segment.type !== 'recorded' && segment.type !== 'recorded_broken') || !segment.recordingId) return;
-                    const rec = recordingById.get(segment.recordingId);
-                    if (segment.type === 'recorded_broken' || !(rec?.fileUsable ?? rec?.fileExists)) {
-                      toast({
-                        title: 'Segmento indisponível',
-                        description: 'Este trecho está ausente, incompleto ou corrompido no disco.',
-                        variant: 'destructive',
-                      });
-                      return;
-                    }
-                    const recDiag = diagnosticsByRecordingId[segment.recordingId];
-                    if (recDiag?.compatibleRecommended) {
-                      setCompatMode(true);
-                    }
-                    event.stopPropagation();
-                    setSelectedRecordingId(segment.recordingId);
-                    setPendingSeekSeconds(0);
-                    setPlayheadFromMinute(segment.start);
-                  }}
-                  style={{
-                    left: `${(segment.start / TOTAL_MINS) * 100}%`,
-                    width: `${((segment.end - segment.start) / TOTAL_MINS) * 100}%`,
-                    background: getSegmentColor(segment.type),
-                    cursor: segment.type === 'recorded' || segment.type === 'recorded_broken' ? 'pointer' : 'default',
-                  }}
-                />
-              ))}
-              <div className="pointer-events-none absolute top-0 h-full border-2 border-[hsl(var(--primary))] bg-[hsl(var(--primary)_/_0.1)]" style={{ left: `${(viewStart / TOTAL_MINS) * 100}%`, width: `${((viewEnd - viewStart) / TOTAL_MINS) * 100}%` }} />
-              <div className="pointer-events-none absolute top-0 bottom-0 w-0.5 bg-white" style={{ left: `${(playhead / TOTAL_MINS) * 100}%` }} />
-            </div>
-
-            <div className="relative mb-2 h-12 cursor-pointer overflow-hidden rounded bg-[hsl(var(--muted))]" onClick={(event) => onTimelineClick(event.clientX, event.currentTarget.getBoundingClientRect())}>
+          <div className="rounded-xl border border-border bg-card p-3">
+            <div className="relative mb-2 h-9 cursor-pointer overflow-hidden rounded bg-[hsl(var(--muted))]" onClick={(event) => onTimelineClick(event.clientX, event.currentTarget.getBoundingClientRect())}>
               {timelineSegments.filter((segment) => segment.end >= viewStart && segment.start <= viewEnd).map((segment, index) => {
                 const segStart = Math.max(segment.start, viewStart);
                 const segEnd = Math.min(segment.end, viewEnd);
@@ -1273,7 +1226,7 @@ export default function PlaybackPage() {
                 );
               })}
               <div className="pointer-events-none absolute top-0 bottom-0 w-0.5 bg-white shadow-lg" style={{ left: `${((playhead - viewStart) / (viewEnd - viewStart)) * 100}%` }}>
-                <div className="absolute -top-1 left-1/2 h-0 w-0 -translate-x-1/2 border-l-[4px] border-r-[4px] border-t-[6px] border-transparent border-t-white" />
+                <div className="absolute top-0 left-1/2 h-0 w-0 -translate-x-1/2 border-l-[4px] border-r-[4px] border-t-[6px] border-transparent border-t-white" />
               </div>
               {[0, 0.25, 0.5, 0.75, 1].map((pct) => {
                 const minute = viewStart + pct * (viewEnd - viewStart);
@@ -1313,7 +1266,7 @@ export default function PlaybackPage() {
               )}
             </div>
 
-            <details className="mb-3 rounded-xl border border-border bg-background/55 p-3">
+            <details className="hidden mb-3 rounded-lg border border-border bg-background/55 p-3">
               <summary className="cursor-pointer text-xs font-semibold">
                 <span className="inline-flex items-center gap-2">
                   <Scissors className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
@@ -1359,7 +1312,7 @@ export default function PlaybackPage() {
                 </button>
               </div>
               {lastExportedClip && (
-                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card/60 px-3 py-2 text-xs">
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-2 text-xs">
                   <span className="font-medium">Clipe pronto:</span>
                   <span className="font-mono text-[hsl(var(--muted-foreground))]">{lastExportedClip.id.slice(0, 8)}</span>
                   <button type="button" onClick={() => { setClipDownloadReason(''); setClipDownload({ url: lastExportedClip.downloadUrl, clipId: lastExportedClip.id }); }} className="rounded border border-border px-2.5 py-1 hover:bg-[hsl(var(--accent))]">Baixar clipe</button>
@@ -1427,10 +1380,10 @@ export default function PlaybackPage() {
               </div>
 
               {/* Velocidade */}
-              <div className="flex items-center gap-0.5 rounded-lg border border-border px-1 py-0.5">
-                <FastForward className="h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
+              <div className="ops-segment flex items-center gap-0.5">
+                <FastForward className="ml-1 h-3.5 w-3.5 text-[hsl(var(--muted-foreground))]" />
                 {SPEEDS.map((item) => (
-                  <button key={item} type="button" onClick={() => setSpeed(item)} className={`rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors ${speed === item ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-foreground'}`}>
+                  <button key={item} type="button" onClick={() => setSpeed(item)} className={`rounded-md px-1.5 py-0.5 font-mono text-[10px] transition-colors ${speed === item ? 'ops-segment-active' : 'text-[hsl(var(--muted-foreground))] hover:text-foreground'}`}>
                     {item}
                   </button>
                 ))}
@@ -1444,7 +1397,7 @@ export default function PlaybackPage() {
           </div>
         </div>
 
-        <div className="hidden xl:flex w-80 shrink-0 flex-col overflow-hidden rounded-[18px] border border-border bg-card">
+        <div className="hidden xl:flex w-80 shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
           <div className="border-b border-border px-3 py-2.5">
             <span className="text-xs font-semibold">Gravações do dia</span>
           </div>

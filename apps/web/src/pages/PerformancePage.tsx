@@ -50,19 +50,19 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
 function Trend({ now, prev }: { now: number; prev: number }) {
   const d = now - prev;
   if (Math.abs(d) < 1) return <span className="inline-flex items-center text-muted-foreground"><Minus className="h-3 w-3" /></span>;
-  if (d > 0) return <span className="inline-flex items-center gap-0.5 text-[hsl(38_58%_58%)]"><ArrowUp className="h-3 w-3" />{Math.abs(d)}%</span>;
-  return <span className="inline-flex items-center gap-0.5 text-[hsl(152_46%_55%)]"><ArrowDown className="h-3 w-3" />{Math.abs(d)}%</span>;
+  if (d > 0) return <span className="inline-flex items-center gap-0.5 text-[hsl(var(--status-warning))]"><ArrowUp className="h-3 w-3" />{Math.abs(d)}%</span>;
+  return <span className="inline-flex items-center gap-0.5 text-[hsl(var(--status-online))]"><ArrowDown className="h-3 w-3" />{Math.abs(d)}%</span>;
 }
 
 function toneFor(pct: number) {
-  if (pct >= 85) return 'hsl(354,52%,52%)';
-  if (pct >= 65) return 'hsl(38,58%,54%)';
+  if (pct >= 85) return 'hsl(var(--status-alarm))';
+  if (pct >= 65) return 'hsl(var(--status-warning))';
   return 'hsl(var(--primary))';
 }
 
 function severityTone(s: 'info' | 'warning' | 'critical') {
   if (s === 'critical') return 'border-[hsl(var(--destructive)_/_0.35)] bg-[hsl(var(--destructive)_/_0.08)] text-[hsl(var(--destructive))]';
-  if (s === 'warning') return 'border-[hsl(38_58%_54%_/_0.35)] bg-[hsl(38_58%_54%_/_0.10)] text-[hsl(38_58%_58%)]';
+  if (s === 'warning') return 'border-[hsl(var(--status-warning)_/_0.35)] bg-[hsl(var(--status-warning)_/_0.10)] text-[hsl(var(--status-warning))]';
   return 'border-border bg-[hsl(var(--muted)_/_0.4)] text-muted-foreground';
 }
 
@@ -306,7 +306,7 @@ export default function PerformancePage() {
               {cameras.map((cam) => {
                 const proc = processors[cam.id];
                 const procState = !cam.aiEnabled ? '—' : proc?.running ? 'ativo' : 'parado';
-                const procTone = procState === 'ativo' ? 'text-[hsl(152_46%_55%)]' : procState === 'parado' ? 'text-[hsl(38_58%_60%)]' : 'text-muted-foreground';
+                const procTone = procState === 'ativo' ? 'text-[hsl(var(--status-online))]' : procState === 'parado' ? 'text-[hsl(var(--status-warning))]' : 'text-muted-foreground';
                 return (
                   <tr key={cam.id} className="border-b border-border/60 last:border-0 hover:bg-accent/40 transition-colors">
                     <td className="px-5 py-3">
@@ -316,7 +316,7 @@ export default function PerformancePage() {
                     <td className="px-5 py-3 text-[11px] text-muted-foreground">{cam.zone}</td>
                     <td className="px-5 py-3">
                       <span className="inline-flex items-center gap-1.5 text-[11px]">
-                        <span className={`h-1.5 w-1.5 rounded-full ${cam.isOnline ? 'bg-[hsl(152_46%_44%)]' : 'bg-muted-foreground/40'}`} />
+                        <span className={`h-1.5 w-1.5 rounded-full ${cam.isOnline ? 'bg-[hsl(var(--status-online))]' : 'bg-muted-foreground/40'}`} />
                         {cam.isOnline ? 'Online' : 'Offline'}
                       </span>
                     </td>

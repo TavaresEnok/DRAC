@@ -127,8 +127,8 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
           ...(form.password.trim() ? { password: form.password } : {}),
           rtspPath: form.rtspPath.trim(),
           preferredRtspTransport: form.preferredRtspTransport,
-          preferredLiveProtocol: form.preferredLiveProtocol,
-          streamVideoCodec: normalizeVideoCodec(form.streamVideoCodec),
+          preferredLiveProtocol: form.preferredLiveProtocol === 'mjpeg' ? 'webrtc' : form.preferredLiveProtocol,
+          streamVideoCodec: 'h264',
           recordingVideoCodec: normalizeVideoCodec(form.recordingVideoCodec),
           recordingMode: form.recordingMode,
           retentionDays: Number(form.retentionDays),
@@ -185,11 +185,10 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
           <>
             <div className="flex-1 overflow-y-auto">
               <Tabs defaultValue="geral" className="flex flex-col">
-                <TabsList className="mx-4 mt-4 grid h-10 shrink-0 grid-cols-4 gap-1 rounded-lg border border-border bg-muted/45 p-1">
+                <TabsList className="mx-4 mt-4 grid h-10 shrink-0 grid-cols-3 gap-1 rounded-lg border border-border bg-muted/45 p-1">
                   <TabsTrigger value="geral" className="rounded-md text-xs text-muted-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm">Geral</TabsTrigger>
                   <TabsTrigger value="stream" className="rounded-md text-xs text-muted-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm">Stream</TabsTrigger>
                   <TabsTrigger value="gravacao" className="rounded-md text-xs text-muted-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm">Gravação</TabsTrigger>
-                  <TabsTrigger value="ia" className="rounded-md text-xs text-muted-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm">IA</TabsTrigger>
                 </TabsList>
 
                 {/* GERAL */}
@@ -221,19 +220,14 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
                 {/* STREAM */}
                 <TabsContent value="stream" className="px-5 py-4 space-y-4 mt-0">
                   <div className="grid grid-cols-2 gap-3">
-                    <FormField label="Codec de vídeo">
-                      <Select value={form.streamVideoCodec} onValueChange={(v) => upd('streamVideoCodec', v)}>
-                        <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {CODECS.map((c) => <SelectItem key={c} value={c} className="text-sm uppercase">{c}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
+                    <FormField label="Codec da live">
+                      <Input value="H.264" readOnly className="text-sm font-mono text-muted-foreground" />
                     </FormField>
                     <FormField label="Protocolo ao vivo">
                       <Select value={form.preferredLiveProtocol} onValueChange={(v) => upd('preferredLiveProtocol', v)}>
                         <SelectTrigger className="text-sm"><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          {LIVE_PROTOCOLS.map((p) => <SelectItem key={p} value={p} className="text-sm uppercase">{p}</SelectItem>)}
+                          {LIVE_PROTOCOLS.filter((p) => p !== 'mjpeg').map((p) => <SelectItem key={p} value={p} className="text-sm uppercase">{p}</SelectItem>)}
                         </SelectContent>
                       </Select>
                     </FormField>
@@ -246,6 +240,9 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
                         </SelectContent>
                       </Select>
                     </FormField>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background/70 px-3 py-2 text-[11px] text-muted-foreground">
+                    Grid padronizado em até 720p / 20 FPS. Ao abrir a câmera sozinha, o DRAC usa a resolução original do perfil live.
                   </div>
                   <Separator />
                   <ToggleRow label="Áudio" desc="Captura de áudio da câmera" value={form.audioEnabled} onChange={(v) => upd('audioEnabled', v)} />
@@ -286,12 +283,6 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
                   </div>
                 </TabsContent>
 
-                {/* IA */}
-                <TabsContent value="ia" className="px-5 py-4 space-y-4 mt-0">
-                  <ToggleRow label="Análise por IA" desc="Detecção de objetos no substream" value={form.aiEnabled} onChange={(v) => upd('aiEnabled', v)} />
-                  <Separator />
-                  <ToggleRow label="Alarmes" desc="Gerar alarmes para esta câmera" value={form.alarmsEnabled} onChange={(v) => upd('alarmsEnabled', v)} />
-                </TabsContent>
               </Tabs>
 
               {/* Avançado + Danger zone */}

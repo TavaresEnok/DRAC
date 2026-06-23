@@ -8,6 +8,7 @@ import { CAMERA_HEALTH_CHECK_QUEUE } from '../queues/camera-health-check.queue';
 import { CamerasService } from '../../cameras/cameras.service';
 import { RecordingProcessManagerService } from '../../recordings/recording-process-manager.service';
 import { FfmpegMjpegService } from '../../camera-stream/ffmpeg-mjpeg.service';
+import { GRID_LIVE_TARGET_FPS } from '../../camera-stream/helpers/live-delivery-profile.helper';
 
 @Processor(CAMERA_HEALTH_CHECK_QUEUE)
 @Injectable()
@@ -398,6 +399,10 @@ export class CameraHealthCheckProcessor extends WorkerHost {
         if (fpsDriftEnabled) {
           const configuredFps = Number(status.configuredFps ?? camera.streamFps ?? 0);
           const detectedFps = Number(status.detectedFps ?? 0);
+          const usesIntentionalGridCap = configuredFps === GRID_LIVE_TARGET_FPS && Number(camera.streamFps ?? 0) === GRID_LIVE_TARGET_FPS;
+          if (usesIntentionalGridCap) {
+            continue;
+          }
           const hasComparableFps = configuredFps > 0 && detectedFps > 0;
           if (hasComparableFps) {
             const absDiff = Math.abs(configuredFps - detectedFps);

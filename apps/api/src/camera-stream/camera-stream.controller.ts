@@ -16,6 +16,12 @@ import { StreamResourceAdvisorService } from './stream-resource-advisor.service'
 import { assessLiveReadiness } from './helpers/live-readiness.helper';
 import { CamerasService } from '../cameras/cameras.service';
 import {
+  GRID_LIVE_MAX_HEIGHT,
+  GRID_LIVE_MAX_WIDTH,
+  GRID_LIVE_TARGET_FPS,
+  normalizeLiveViewMode,
+} from './helpers/live-delivery-profile.helper';
+import {
   isHevcCodec,
   resolveDeliveryRtspProfile,
   resolveDeliveryVideoCodec,
@@ -158,12 +164,14 @@ export class CameraStreamController {
   async getDeliveryUrls(
     @CurrentUser() user: AuthUser,
     @Param('cameraId') cameraId: string,
+    @Query('viewMode') rawViewMode: string | undefined,
     @Req() req: Request,
   ) {
     await this.accessControlService.assertCanViewCamera(user, cameraId);
     await this.commercialPolicy.assertFeature('localLive', user);
     const token = await this.authService.createStreamToken(user.id, cameraId);
     const camera = await this.camerasService.getCameraOrThrow(cameraId);
+    const viewMode = normalizeLiveViewMode(rawViewMode);
 
     // Atualiza metadados em segundo plano. Abrir uma live nunca deve esperar
     // uma sonda RTSP/ffprobe, que pode levar vários segundos em câmera instável.
@@ -177,7 +185,7 @@ export class CameraStreamController {
     let effectiveDeliveryProfile = resolveDeliveryRtspProfile(camera);
     if (this.mediamtxProxyService.isEnabled()) {
       try {
-        const ensured = await this.mediamtxProxyService.ensurePathForCamera(cameraId);
+        const ensured = await this.mediamtxProxyService.ensurePathForCamera(cameraId, viewMode);
         mediaBridge = this.mediamtxProxyService.buildPublicUrls(req, ensured.pathName, ensured.sourceUrl);
         measuredLiveCodec = ensured.sourceVideoCodec;
         liveTranscodedForBrowser = ensured.transcodedForLive;
@@ -251,6 +259,19 @@ export class CameraStreamController {
       liveProfile,
       originalProfile,
       deliveryProfile,
+      deliveryMode: viewMode,
+      deliveryTarget: viewMode === 'grid'
+        ? {
+            maxWidth: GRID_LIVE_MAX_WIDTH,
+            maxHeight: GRID_LIVE_MAX_HEIGHT,
+            targetFps: GRID_LIVE_TARGET_FPS,
+            browserCodec: 'h264',
+          }
+        : {
+            originalResolution: true,
+            originalFps: true,
+            browserCodec: 'h264',
+          },
       smartLive: {
         enabled: smartOriginalEnabled,
         supportsOriginalOnClient,
@@ -280,6 +301,7 @@ export class CameraStreamController {
         liveTranscodedForBrowser,
         liveProfile,
         deliveryProfile,
+        deliveryMode: viewMode,
         preferredProtocol: configuredPreferred,
         protocolOrder,
         readiness: liveReadiness,

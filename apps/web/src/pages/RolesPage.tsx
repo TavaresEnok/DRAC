@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { Shield, Check, X, Edit2, LoaderCircle } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
+import { Shield, Check, Edit2, LoaderCircle } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { cn } from '@/lib/utils';
+import { Switch } from '@/components/ui/switch';
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
 import { toast } from '../hooks/use-toast';
@@ -31,11 +30,11 @@ const ROLE_LABELS: Record<string, string> = {
   VIEWER: 'Visualizador',
 };
 
-const roleColor = (role: string) => {
-  if (role === 'SUPER_ADMIN') return 'bg-[hsl(var(--chart-5)_/_0.15)] text-[hsl(var(--chart-5))] border-[hsl(var(--chart-5)_/_0.3)]';
-  if (role === 'ADMIN') return 'bg-[hsl(var(--primary)_/_0.15)] text-[hsl(var(--primary))] border-[hsl(var(--primary)_/_0.3)]';
-  if (role === 'OPERATOR') return 'bg-[hsl(var(--status-warning)_/_0.15)] text-[hsl(var(--status-warning))] border-[hsl(var(--status-warning)_/_0.3)]';
-  return 'bg-muted text-muted-foreground border-border';
+const ROLE_DESC: Record<string, string> = {
+  SUPER_ADMIN: 'Acesso total: todos os grupos, configurações globais e logs.',
+  ADMIN: 'Gerencia usuários, câmeras e alarmes.',
+  OPERATOR: 'Ao vivo, reprodução e alarmes das câmeras permitidas.',
+  VIEWER: 'Apenas visualização das câmeras permitidas.',
 };
 
 type Matrix = Record<string, Record<string, boolean>>;
@@ -74,6 +73,8 @@ export default function PerfisPage() {
   }, [load]);
 
   const roles = useMemo(() => Object.keys(matrix), [matrix]);
+  const [selRole, setSelRole] = useState<string>('');
+  const activeRole = selRole || roles[0] || '';
 
   const openEdit = (role: string) => {
     setEditRole(role);
@@ -105,67 +106,75 @@ export default function PerfisPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border shrink-0">
-        <div className="flex items-center gap-2.5">
-          <Shield className="h-4 w-4 text-primary" />
-          <div>
-            <h1 className="text-[18px] font-semibold tracking-tight">Perfis e Permissões</h1>
-            <p className="text-[11px] text-muted-foreground mt-0.5">Permissões aplicadas no servidor · o Super Admin nunca é bloqueado</p>
-          </div>
+      {loading && (
+        <div className="px-6 py-3 border-b border-border shrink-0 flex items-center justify-end">
+          <LoaderCircle className="h-4 w-4 animate-spin" style={{ color: 'var(--tx-4)' }} />
         </div>
-        {loading ? <LoaderCircle className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
-      </div>
+      )}
 
-      <div className="flex-1 overflow-auto p-6">
-        <p className="mb-4 text-xs text-muted-foreground">
-          As permissões abaixo são aplicadas de verdade no servidor (ex.: configuração de câmeras e logs de auditoria).
-          O Super Admin nunca é bloqueado.
-        </p>
-        <div className="overflow-x-auto rounded-lg border border-border bg-card/60">
-          <table className="w-full text-sm">
-            <thead className="border-b border-border bg-background/65">
-              <tr>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-foreground w-52">Permissão</th>
-                {roles.map((role) => (
-                  <th key={role} className="px-4 py-3 text-center">
-                    <div className="flex flex-col items-center gap-1">
-                      <Badge variant="outline" className={cn('text-[11px] font-semibold', roleColor(role))}>{ROLE_LABELS[role] ?? role}</Badge>
-                      <button
-                        onClick={() => openEdit(role)}
-                        disabled={role === 'SUPER_ADMIN'}
-                        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-55 disabled:hover:text-muted-foreground"
-                        title={role === 'SUPER_ADMIN' ? 'Super Admin tem acesso total e não pode ser limitado' : 'Editar permissões'}
-                      >
-                        <Edit2 className="h-2.5 w-2.5" />Editar
-                      </button>
-                    </div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {keys.map((key, i) => (
-                <tr key={key} className={cn('border-b border-border/75 transition-colors hover:bg-accent/35', i % 2 === 0 ? 'bg-transparent' : 'bg-background/35')}>
-                  <td className="px-4 py-3">
-                    <p className="text-[13px] font-semibold text-foreground">{PERMISSION_LABELS[key]?.label ?? key}</p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">{PERMISSION_LABELS[key]?.desc ?? ''}</p>
-                  </td>
-                  {roles.map((role) => {
-                    const allowed = matrix[role]?.[key];
-                    return (
-                      <td key={role} className="px-4 py-3 text-center">
-                        <div className="flex items-center justify-center">
-                          <div className={cn('h-6 w-6 rounded-full border flex items-center justify-center', allowed ? 'bg-[hsl(var(--status-online)_/_0.18)] border-[hsl(var(--status-online)_/_0.45)]' : 'bg-muted/70 border-border')}>
-                            {allowed ? <Check className="h-3.5 w-3.5 text-[hsl(var(--status-online))]" /> : <X className="h-3.5 w-3.5 text-muted-foreground/65" />}
-                          </div>
-                        </div>
-                      </td>
-                    );
-                  })}
+      <div className="flex-1 overflow-y-auto p-[22px] flex flex-col gap-[22px]">
+        {/* Cards de papéis */}
+        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(248px, 1fr))' }}>
+          {roles.map((role) => {
+            const sel = activeRole === role;
+            const allowed = keys.filter((k) => matrix[role]?.[k]).length;
+            return (
+              <div
+                key={role}
+                onClick={() => setSelRole(role)}
+                className="cursor-pointer transition-colors"
+                style={{ background: 'var(--surf-1)', borderRadius: 12, padding: '16px 18px', border: `1px solid ${sel ? 'var(--acc-bdr)' : 'var(--bdr)'}` }}
+              >
+                <div className="flex items-center mb-2.5">
+                  <div className="text-[13px] font-semibold" style={{ color: sel ? 'var(--tx)' : 'var(--tx-2)' }}>{ROLE_LABELS[role] ?? role}</div>
+                  <span className="ml-auto font-mono text-[10px]" style={{ color: 'var(--tx-4)' }}>{allowed}/{keys.length}</span>
+                </div>
+                <div className="text-[11px] leading-relaxed" style={{ color: 'var(--tx-3)' }}>{ROLE_DESC[role] ?? ''}</div>
+                {role !== 'SUPER_ADMIN' && (
+                  <button onClick={(e) => { e.stopPropagation(); openEdit(role); }} className="btn btn-secondary btn-xs mt-3">
+                    <Edit2 className="h-2.5 w-2.5" /> Editar
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Matriz de permissões */}
+        <div>
+          <div className="font-mono uppercase mb-3" style={{ fontSize: 10, letterSpacing: '.12em', color: 'var(--tx-4)' }}>Matriz de permissões</div>
+          <div style={{ background: 'var(--surf-1)', border: '1px solid var(--bdr)', borderRadius: 12, overflow: 'hidden' }}>
+            <table className="w-full" style={{ borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ padding: '11px 16px', textAlign: 'left', fontSize: 10, color: 'var(--tx-4)', textTransform: 'uppercase', letterSpacing: '.08em', borderBottom: '1px solid var(--bdr)', minWidth: 160 }}>Permissão</th>
+                  {roles.map((role) => (
+                    <th key={role} onClick={() => setSelRole(role)} style={{ padding: '11px 14px', textAlign: 'center', fontSize: 11, fontWeight: 600, borderBottom: '1px solid var(--bdr)', whiteSpace: 'nowrap', cursor: 'pointer', color: activeRole === role ? 'var(--acc)' : 'var(--tx-3)' }}>
+                      {ROLE_LABELS[role] ?? role}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {keys.map((key) => (
+                  <tr key={key}>
+                    <td style={{ padding: '10px 16px', fontSize: 12, color: 'var(--tx-2)', borderBottom: '1px solid var(--bdr-lo)' }}>{PERMISSION_LABELS[key]?.label ?? key}</td>
+                    {roles.map((role) => {
+                      const on = matrix[role]?.[key];
+                      const isSel = activeRole === role;
+                      return (
+                        <td key={role} style={{ padding: '10px 14px', textAlign: 'center', borderBottom: '1px solid var(--bdr-lo)', background: isSel ? 'var(--surf-2)' : 'transparent' }}>
+                          {on
+                            ? <Check size={14} style={{ color: isSel ? 'var(--acc)' : 'var(--tx-2)', display: 'inline' }} />
+                            : <span className="font-mono" style={{ color: 'var(--tx-4)', fontSize: 13 }}>–</span>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -179,18 +188,23 @@ export default function PerfisPage() {
           </SheetHeader>
           <div className="mt-4 space-y-2">
             {keys.map((key) => (
-              <label key={key} className="flex items-center justify-between p-2 rounded hover:bg-accent/40 cursor-pointer">
+              <div
+                key={key}
+                role="button"
+                tabIndex={0}
+                onClick={() => setEditPerms((prev) => ({ ...prev, [key]: !prev[key] }))}
+                className="flex cursor-pointer items-center justify-between gap-3 rounded-lg p-2 hover:bg-accent/40"
+              >
                 <div>
                   <p className="text-xs font-medium">{PERMISSION_LABELS[key]?.label ?? key}</p>
                   <p className="text-[10px] text-muted-foreground">{PERMISSION_LABELS[key]?.desc ?? ''}</p>
                 </div>
-                <input
-                  type="checkbox"
+                <Switch
                   checked={!!editPerms[key]}
-                  onChange={(e) => setEditPerms((prev) => ({ ...prev, [key]: e.target.checked }))}
-                  className="rounded"
+                  onCheckedChange={(value) => setEditPerms((prev) => ({ ...prev, [key]: value }))}
+                  onClick={(e) => e.stopPropagation()}
                 />
-              </label>
+              </div>
             ))}
             <div className="flex justify-end gap-2 pt-4">
               <button onClick={() => setEditRole(null)} className="h-8 px-4 rounded border border-border text-xs hover:bg-accent">Cancelar</button>

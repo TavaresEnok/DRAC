@@ -17,7 +17,11 @@ export async function request<T>(apiUrl: string, path: string, token?: string, i
     const text = await response.text();
     const data = text ? JSON.parse(text) : null;
     if (!response.ok) {
-      throw new Error(data?.message ?? `HTTP ${response.status}`);
+      // Anexa o status HTTP ao erro para que quem chama possa tratar 401 (sessão
+      // expirada) de forma robusta, sem depender do texto da mensagem.
+      const error = new Error(data?.message ?? `HTTP ${response.status}`) as Error & { status?: number };
+      error.status = response.status;
+      throw error;
     }
     return data as T;
   } catch (error) {

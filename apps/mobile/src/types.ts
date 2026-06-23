@@ -1,5 +1,23 @@
 export type Direction = 'Up' | 'Down' | 'Left' | 'Right' | 'ZoomIn' | 'ZoomOut';
-export type Tab = 'dashboard' | 'live' | 'grid' | 'playback' | 'profile';
+export type Tab = 'dashboard' | 'live' | 'grid' | 'alarms' | 'playback' | 'profile';
+
+export type AlarmStatus = 'OPEN' | 'ACKED' | 'RESOLVED';
+
+export type Alarm = {
+  id: string;
+  cameraId: string | null;
+  cameraName: string | null;
+  type: string;
+  title: string | null;
+  message: string | null;
+  severity: string;
+  priority: string;
+  status: AlarmStatus | string;
+  occurredAt: string;
+  acknowledgedByUserName?: string | null;
+  occurrenceCount?: number | null;
+  isSnoozed?: boolean;
+};
 export type IconName = 'home' | 'grid' | 'user' | 'settings' | 'camera' | 'mic' | 'video' | 'chevronLeft' | 'plus' | 'bell' | 'move' | 'play' | 'download' | 'calendar';
 
 export type MosaicArea = {
@@ -52,9 +70,20 @@ export type StreamUrls = {
   protocols?: {
     hlsUrl?: string | null;
     webrtcUrl?: string | null;
+    whepUrl?: string | null;
     flvUrl?: string | null;
     posterUrl?: string | null;
   };
+};
+
+export type LiveDetection = {
+  id: string;
+  type: string;
+  label: string;
+  confidence: number | null;
+  bbox: [number, number, number, number];
+  frameWidth: number | null;
+  frameHeight: number | null;
 };
 
 export type RelayDiscovery = {

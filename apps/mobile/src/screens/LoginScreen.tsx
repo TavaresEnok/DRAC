@@ -11,6 +11,7 @@ interface LoginScreenProps {
   onEmailChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
   onSubmit: () => void;
+  onForgotPassword: () => void;
 }
 
 export function LoginScreen({
@@ -22,6 +23,7 @@ export function LoginScreen({
   onEmailChange,
   onPasswordChange,
   onSubmit,
+  onForgotPassword,
 }: LoginScreenProps) {
   return (
     <LinearGradient colors={['#f8fafc', '#eef2ff', '#ffffff']} style={styles.screen}>
@@ -46,6 +48,9 @@ export function LoginScreen({
           <Pressable disabled={loading} onPress={onSubmit} style={styles.primaryButton}>
             {loading ? <ActivityIndicator color="#f7f3ea" /> : <Text style={styles.primaryButtonText}>Entrar com segurança</Text>}
           </Pressable>
+          <Pressable onPress={onForgotPassword} style={styles.forgotLink} hitSlop={8}>
+            <Text style={styles.forgotLinkText}>Esqueci minha senha</Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     </LinearGradient>
@@ -66,4 +71,6 @@ const styles = StyleSheet.create({
   input: { height: 54, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#f9fafb', borderRadius: 19, paddingHorizontal: 15, color: '#111827', fontSize: 14 },
   primaryButton: { height: 56, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2563eb', marginTop: 10, shadowColor: '#2563eb', shadowOpacity: 0.24, shadowRadius: 20, elevation: 8 },
   primaryButtonText: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
+  forgotLink: { alignItems: 'center', paddingVertical: 10, marginTop: 2 },
+  forgotLinkText: { color: '#2563eb', fontSize: 13, fontWeight: '700' },
 });

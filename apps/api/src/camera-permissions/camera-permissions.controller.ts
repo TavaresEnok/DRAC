@@ -16,13 +16,13 @@ export class CameraPermissionsController {
     private readonly auditService: AuditService,
   ) {}
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.VIEWER)
   @Get()
   list(@CurrentUser() user: AuthUser, @Query('userId') userId?: string) {
     return this.cameraPermissionsService.list(user, userId);
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.VIEWER)
   @Post()
   async grant(@CurrentUser() user: AuthUser, @Body() dto: GrantCameraPermissionDto, @Req() req: Request) {
     const result = await this.cameraPermissionsService.grant(user, dto);
@@ -37,7 +37,7 @@ export class CameraPermissionsController {
     return result;
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.VIEWER)
   @Patch(':id')
   async update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: UpdateCameraPermissionDto, @Req() req: Request) {
     const result = await this.cameraPermissionsService.update(user, id, dto);
@@ -45,7 +45,7 @@ export class CameraPermissionsController {
     return result;
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.VIEWER)
   @Delete(':id')
   async remove(@CurrentUser() user: AuthUser, @Param('id') id: string, @Req() req: Request) {
     const result = await this.cameraPermissionsService.remove(user, id);
