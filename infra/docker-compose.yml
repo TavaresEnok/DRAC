@@ -327,6 +327,10 @@ services:
     image: bluenviron/mediamtx:1-ffmpeg
     container_name: vms-mediamtx
     restart: unless-stopped
+    # init: roda o tini como PID 1, que COLHE processos zumbis. Sem isto o MediaMTX
+    # (PID 1) não faz reaping e cada ffmpeg de restream órfão vira zumbi que acumula
+    # para sempre (já observado: centenas). Em escala isso esgota a tabela de PIDs.
+    init: true
     logging: *default-logging
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro

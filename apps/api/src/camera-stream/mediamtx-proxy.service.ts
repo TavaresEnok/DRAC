@@ -1,4 +1,4 @@
-import { Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { spawn } from 'child_process';
 import { type Request } from 'express';
@@ -9,6 +9,7 @@ import {
   resolveLiveRtspProfile,
 } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
+import { SettingsService } from '../settings/settings.service';
 import {
   GRID_LIVE_MAX_HEIGHT,
   GRID_LIVE_MAX_WIDTH,
@@ -36,7 +37,7 @@ type EnsuredCameraPath = {
 };
 
 @Injectable()
-export class MediamtxProxyService implements OnApplicationBootstrap {
+export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(MediamtxProxyService.name);
   private readonly liveCodecCache = new Map<string, { isHevc: boolean; at: number }>();
   private readonly pathEnsureInFlight = new Map<string, Promise<EnsuredCameraPath>>();
@@ -44,18 +45,132 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
   private static readonly LIVE_CODEC_TTL_MS = 30 * 60 * 1000;
   private static readonly PATH_ENSURE_TTL_MS = 30 * 1000;
 
+  // Watchdog de stream: vigia paths de câmera com espectador mas SEM progresso de
+  // vídeo (fonte congelada/ausente) e força reset. 3ª camada de segurança, além do
+  // prekill no runOnDemand e do reaper de zumbis (tini). Conservador: só age após
+  // ~60s de estagnação (bem além do cold start de ~15s), para nunca tocar em stream
+  // saudável nem em cold start normal.
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly watchdogState = new Map<string, { lastBytes: number; badTicks: number }>();
+  private static readonly WATCHDOG_INTERVAL_MS = 20_000;
+  private static readonly WATCHDOG_BAD_TICKS = 3; // 3 × 20s = ~60s antes de agir
+  private recovering = false;
+
   constructor(
     private readonly configService: ConfigService,
     private readonly camerasService: CamerasService,
     private readonly cryptoService: CryptoService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   onApplicationBootstrap() {
-    if (!this.isEnabled() || this.configService.get<boolean>('mediaMtxWarmPathsOnBoot') === false) {
-      return;
+    if (!this.isEnabled()) return;
+
+    if (this.configService.get<boolean>('mediaMtxWarmPathsOnBoot') !== false) {
+      void this.warmCameraPaths();
     }
 
-    void this.warmCameraPaths();
+    // O watchdog é independente do warm-on-boot: queremos a vigilância sempre que
+    // o MediaMTX está habilitado.
+    if (this.configService.get<boolean>('mediaMtxWatchdogEnabled') !== false) {
+      this.watchdogTimer = setInterval(() => {
+        void this.streamWatchdogTick();
+      }, MediamtxProxyService.WATCHDOG_INTERVAL_MS);
+      // unref: o timer não deve impedir o processo de encerrar.
+      this.watchdogTimer.unref?.();
+      this.logger.log('Watchdog de stream ativo (intervalo 20s, reset após ~60s de estagnação).');
+    }
+  }
+
+  onModuleDestroy() {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+  }
+
+  /**
+   * Um ciclo do watchdog: lê o estado em runtime de todos os paths e, para cada
+   * path de câmera COM espectador mas sem progresso de bytes (fonte congelada) ou
+   * sem fonte pronta, conta "ticks ruins". Após WATCHDOG_BAD_TICKS seguidos, força
+   * o reset daquele path (DELETE + recriação), que sobe um restream novo e limpo.
+   */
+  private async streamWatchdogTick() {
+    let items: any[] = [];
+    try {
+      const text = await this.apiRequest('GET', '/v3/paths/list?itemsPerPage=1000');
+      const data = JSON.parse(text);
+      items = Array.isArray(data?.items) ? data.items : [];
+    } catch {
+      return; // MediaMTX indisponível neste tick; tenta no próximo.
+    }
+
+    const seen = new Set<string>();
+    for (const item of items) {
+      const name: string = item?.name ?? '';
+      if (!name.startsWith('cam_')) continue;
+      seen.add(name);
+
+      const ready = Boolean(item?.ready);
+      const readers = Array.isArray(item?.readers) ? item.readers.length : Number(item?.readers ?? 0);
+      const bytes = Number(item?.bytesReceived ?? 0);
+
+      // Sem espectador → nada a vigiar (cold close é normal).
+      if (readers <= 0) {
+        this.watchdogState.delete(name);
+        continue;
+      }
+
+      const prev = this.watchdogState.get(name) ?? { lastBytes: -1, badTicks: 0 };
+      // "Ruim" = sem fonte pronta, OU pronto porém sem bytes novos desde o último
+      // tick (fonte congelada). A primeira observação nunca conta como ruim.
+      const noProgress = prev.lastBytes < 0 ? false : ready ? bytes <= prev.lastBytes : true;
+      const badTicks = noProgress ? prev.badTicks + 1 : 0;
+      this.watchdogState.set(name, { lastBytes: bytes, badTicks });
+
+      if (badTicks >= MediamtxProxyService.WATCHDOG_BAD_TICKS) {
+        this.watchdogState.delete(name);
+        await this.recoverStuckPath(name, ready, readers);
+      }
+    }
+
+    // Limpa estado de paths que não existem mais.
+    for (const key of [...this.watchdogState.keys()]) {
+      if (!seen.has(key)) this.watchdogState.delete(key);
+    }
+  }
+
+  private async recoverStuckPath(pathName: string, ready: boolean, readers: number) {
+    const parsed = this.cameraIdFromPathName(pathName);
+    if (!parsed) return;
+    // Serializa recuperações para não disparar várias reconfigurações ao mesmo tempo.
+    if (this.recovering) return;
+    this.recovering = true;
+    this.logger.warn(
+      `Watchdog: path travado ${pathName} (ready=${ready}, readers=${readers}, sem progresso) — forçando reset.`,
+    );
+    try {
+      this.invalidateMainCodecCache(parsed.cameraId);
+      const encoded = encodeURIComponent(pathName);
+      await this.apiRequest('DELETE', `/v3/config/paths/delete/${encoded}`).catch(() => undefined);
+      await this.ensurePathForCamera(parsed.cameraId, parsed.deliveryMode);
+      this.logger.log(`Watchdog: path ${pathName} reconfigurado com sucesso.`);
+    } catch (error) {
+      this.logger.error(
+        `Watchdog: falha ao recuperar ${pathName}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      this.recovering = false;
+    }
+  }
+
+  /** Inverte pathNameFromCameraId: `cam_<32hex>[_grid]` → { cameraId(UUID), mode }. */
+  private cameraIdFromPathName(pathName: string): { cameraId: string; deliveryMode: LiveViewMode } | null {
+    const match = pathName.match(/^cam_([0-9a-fA-F]{32})(_grid)?$/);
+    if (!match) return null;
+    const h = match[1];
+    const cameraId = `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+    return { cameraId, deliveryMode: match[2] ? 'grid' : 'selected' };
   }
 
   isEnabled() {
@@ -409,6 +524,7 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
     const isHevc = selectedLive.isHevc;
     const transcodeAudioForWebrtc = deliveryMode === 'selected' && Boolean(camera.audioEnabled);
     const needsPublisher = deliveryMode === 'grid' || isHevc || transcodeAudioForWebrtc;
+    const gpuAccel = needsPublisher && (await this.settingsService.isGpuAccelerationEnabled());
 
     const desiredPath: any = {
       source: sourceUrl,
@@ -429,13 +545,27 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
       const gridScaleFilter =
         `scale=w=${GRID_LIVE_MAX_WIDTH}:h=${GRID_LIVE_MAX_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,` +
         `fps=${GRID_LIVE_TARGET_FPS}`;
-      const videoArgs = deliveryMode === 'grid'
-        ? '-threads 4 -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main ' +
-          '-b:v 1800k -maxrate 1800k -bufsize 3600k -pix_fmt yuv420p ' +
-          `-g 40 -keyint_min 20 -sc_threshold 0 -bf 0 -refs 1 -vf "${gridScaleFilter}"`
-        : '-threads 4 -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main ' +
-          '-b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p ' +
-          '-g 30 -keyint_min 15 -sc_threshold 0 -bf 0 -refs 1';
+      // Aceleração por GPU (NVENC): quando o admin liga o módulo de GPU em
+      // Configurações, o encode H.264 sai da CPU (libx264) e vai para a placa
+      // (h264_nvenc), mantendo o mesmo bitrate/GOP. O decode/scale segue na CPU
+      // (compatível com qualquer driver); o ganho está no encode, que é a parte
+      // mais cara quando há muitas câmeras. Exige imagem do MediaMTX com NVENC.
+      const useNvenc = gpuAccel;
+      const videoArgs = useNvenc
+        ? (deliveryMode === 'grid'
+          ? '-c:v h264_nvenc -preset p4 -tune ll -profile:v main -rc cbr ' +
+            '-b:v 1800k -maxrate 1800k -bufsize 3600k -pix_fmt yuv420p ' +
+            `-g 40 -bf 0 -vf "${gridScaleFilter}"`
+          : '-c:v h264_nvenc -preset p4 -tune ll -profile:v main -rc cbr ' +
+            '-b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p ' +
+            '-g 30 -bf 0')
+        : (deliveryMode === 'grid'
+          ? '-threads 4 -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main ' +
+            '-b:v 1800k -maxrate 1800k -bufsize 3600k -pix_fmt yuv420p ' +
+            `-g 40 -keyint_min 20 -sc_threshold 0 -bf 0 -refs 1 -vf "${gridScaleFilter}"`
+          : '-threads 4 -c:v libx264 -preset ultrafast -tune zerolatency -profile:v main ' +
+            '-b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p ' +
+            '-g 30 -keyint_min 15 -sc_threshold 0 -bf 0 -refs 1');
       const audioArgs = transcodeAudioForWebrtc
         ? '-c:a libopus -ar 48000 -ac 2 -application lowdelay -b:a 96k'
         : '-an';
@@ -460,8 +590,24 @@ export class MediamtxProxyService implements OnApplicationBootstrap {
         `-flags low_delay -err_detect careful -rtsp_transport ${rtspTransport} ` +
         `-i "${sourceUrl}" -map 0:v:0 -map 0:a:0? ${videoArgs} ${audioArgs} ` +
         `-f rtsp -rtsp_transport tcp -muxdelay 0.1 -pkt_size 1200 "${publishUrl}"`;
-      const lockPath = `/tmp/drac-mtx-${pathName}.lock`;
-      desiredPath.runOnDemand = `flock -n ${lockPath} -c ${this.shellQuote(`exec ${ffmpegCommand}`)}`;
+      // AUTO-RECUPERAÇÃO (anti-travamento). Antes de iniciar o restream, mata
+      // qualquer ffmpeg ENCRAVADO deste MESMO path. Um ffmpeg que parou de publicar
+      // mas continuou vivo segurava o antigo lock `flock -n` e fazia todo runOnDemand
+      // seguinte falhar em silêncio → loop infinito "Nenhum protocolo iniciou". Aqui
+      // não há lock para travar: cada start limpa o que ficou e sobe um processo novo.
+      //
+      // Segurança: só elimina processos cujo comm é exatamente `ffmpeg` E cuja linha
+      // de comando publica NESTE path (`/<pathName> ` — o publishUrl é o último arg,
+      // então é seguido pelo NUL final que vira espaço; o sufixo `_grid` distingue
+      // grid de selected, evitando matar o path irmão). O runOnDemand só roda quando
+      // o path está SEM fonte, então o publisher ativo nunca é alvo.
+      const prekill =
+        `for d in /proc/[0-9]*; do ` +
+        `c=$(cat "$d/comm" 2>/dev/null); [ "$c" = ffmpeg ] || continue; ` +
+        `tr "\\0" " " < "$d/cmdline" 2>/dev/null | grep -qF "/${pathName} " ` +
+        `&& kill -9 "$(basename "$d")" 2>/dev/null; ` +
+        `done`;
+      desiredPath.runOnDemand = `sh -c ${this.shellQuote(`${prekill}; exec ${ffmpegCommand}`)}`;
       desiredPath.runOnDemandRestart = false;
       desiredPath.runOnDemandStartTimeout = '15s'; // Tempo para o ffmpeg começar a republicar.
       // Mantém o restream recente aquecido. Assim, voltar para uma câmera não
