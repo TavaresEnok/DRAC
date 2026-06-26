@@ -71,6 +71,20 @@ export function resolveAnalyticsRtspProfile(camera: CameraRtspProfileInput) {
   };
 }
 
+/**
+ * Perfil para a GRADE (mosaico): preferimos o SUB-stream (2º canal, subtype 1) —
+ * baixa resolução/bitrate, GOP curto e, na maioria das câmeras, já em H.264.
+ * Isso deixa os tiles abrirem quase instantâneos e sem transcodificar. Se a câmera
+ * não tiver sub-stream, o chamador faz fallback para o main. Mantém o mesmo canal
+ * do live (liveChannel/channel), trocando só o subtype para 1.
+ */
+export function resolveGridRtspProfile(camera: CameraRtspProfileInput) {
+  return {
+    channel: normalizeChannel(camera.liveChannel, normalizeChannel(camera.channel, 1)),
+    subtype: 1,
+  };
+}
+
 export function sanitizeRtspUrl(url: string) {
   return url.replace(/(rtsp:\/\/)([^:@/]+):([^@/]+)@/i, '$1$2:<redacted>@');
 }

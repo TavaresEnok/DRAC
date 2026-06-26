@@ -6,6 +6,7 @@ import { CamerasService } from '../cameras/cameras.service';
 import {
   buildRtspUrl,
   isHevcCodec,
+  resolveGridRtspProfile,
   resolveLiveRtspProfile,
 } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
@@ -40,6 +41,9 @@ type EnsuredCameraPath = {
 export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(MediamtxProxyService.name);
   private readonly liveCodecCache = new Map<string, { isHevc: boolean; at: number }>();
+  // Cache da decisão da fonte da GRADE por câmera: codec do sub-stream (ou null se
+  // não houver sub). Evita um ffprobe a cada (re)configuração do path de grid.
+  private readonly gridSourceCache = new Map<string, { codec: string | null; at: number }>();
   private readonly pathEnsureInFlight = new Map<string, Promise<EnsuredCameraPath>>();
   private readonly pathEnsureCache = new Map<string, { value: EnsuredCameraPath; at: number }>();
   private static readonly LIVE_CODEC_TTL_MS = 30 * 60 * 1000;
@@ -211,6 +215,9 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
     for (const key of this.liveCodecCache.keys()) {
       if (key.startsWith(`${cameraId}:`)) this.liveCodecCache.delete(key);
     }
+    for (const key of [...this.gridSourceCache.keys()]) {
+      if (key.startsWith(`grid:${cameraId}:`)) this.gridSourceCache.delete(key);
+    }
     for (const key of [...this.pathEnsureCache.keys()]) {
       if (key.startsWith(`${cameraId}:`)) this.pathEnsureCache.delete(key);
     }
@@ -304,6 +311,48 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
     // A fonte Live e uma escolha operacional explicita. HEVC e convertido
     // para o navegador, mas nunca trocado silenciosamente por outro subtype.
     return { profile: configuredProfile, sourceUrl, isHevc };
+  }
+
+  /**
+   * Escolhe a fonte para a GRADE (mosaico) com a "inteligência" de sub-stream:
+   *  1) Tenta o SUB-stream (subtype 1). Se o ffprobe lê o codec:
+   *       - H.264 → usa direto (o chamador faz PASSTHROUGH, sem transcodificar);
+   *       - H.265 → usa o sub, mas o chamador transcodifica (do 480p, bem mais leve).
+   *  2) Se a câmera NÃO tem sub-stream (probe falha) → cai para o MAIN (comportamento
+   *     antigo: passthrough se H.264, transcode se H.265).
+   * O resultado do probe é cacheado por câmera para não sondar a cada configuração.
+   */
+  private async chooseGridSource(cameraId: string, camera: any, password: string, transport: string) {
+    const subProfile = resolveGridRtspProfile(camera);
+    const subUrl = buildRtspUrl({
+      username: camera.username,
+      password,
+      ip: camera.ip,
+      rtspPort: camera.rtspPort,
+      rtspPath: camera.rtspPath,
+      channel: subProfile.channel,
+      subtype: subProfile.subtype,
+    });
+    const updatedAt = camera.updatedAt instanceof Date ? camera.updatedAt.toISOString() : String(camera.updatedAt ?? '');
+    const cacheKey = `grid:${cameraId}:${subProfile.channel}:${subProfile.subtype}:${updatedAt}`;
+
+    let codec: string | null;
+    const cached = this.gridSourceCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < MediamtxProxyService.LIVE_CODEC_TTL_MS) {
+      codec = cached.codec;
+    } else {
+      codec = await this.probeStreamVideoCodec(subUrl, transport);
+      this.gridSourceCache.set(cacheKey, { codec, at: Date.now() });
+    }
+
+    if (codec) {
+      return { profile: subProfile, sourceUrl: subUrl, isHevc: isHevcCodec(codec), usedSubStream: true };
+    }
+
+    // Sem sub-stream utilizável → usa a fonte principal (mesma do live).
+    const main = await this.chooseLiveSource(cameraId, camera, password, transport);
+    this.logger.log(`Grade sem sub-stream para ${cameraId}; usando o stream principal.`);
+    return { profile: main.profile, sourceUrl: main.sourceUrl, isHevc: main.isHevc, usedSubStream: false };
   }
 
   private durationToMilliseconds(value: string | undefined | null) {
@@ -516,14 +565,20 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
     const runOnDemandCloseAfter = this.configService.get<string>('mediaMtxRunOnDemandCloseAfter') ?? '5m';
     const rtspTransport = camera.preferredRtspTransport ?? this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp';
 
-    // A Live respeita exatamente o perfil configurado. Se ele for HEVC,
-    // somente o codec de entrega ao navegador e convertido para H.264.
-    const selectedLive = await this.chooseLiveSource(cameraId, camera, password, rtspTransport);
-    const liveProfile = selectedLive.profile;
-    const sourceUrl = selectedLive.sourceUrl;
-    const isHevc = selectedLive.isHevc;
+    // Live (tela cheia) respeita o perfil principal configurado. A GRADE usa o
+    // sub-stream quando existe (mais leve e rápido); ver chooseGridSource.
+    const selected = deliveryMode === 'grid'
+      ? await this.chooseGridSource(cameraId, camera, password, rtspTransport)
+      : await this.chooseLiveSource(cameraId, camera, password, rtspTransport);
+    const liveProfile = selected.profile;
+    const sourceUrl = selected.sourceUrl;
+    const isHevc = selected.isHevc;
     const transcodeAudioForWebrtc = deliveryMode === 'selected' && Boolean(camera.audioEnabled);
-    const needsPublisher = deliveryMode === 'grid' || isHevc || transcodeAudioForWebrtc;
+    // A grade só precisa de publisher (transcode) quando a fonte é H.265. Fonte
+    // H.264 — sub-stream OU principal — é entregue ao navegador via PASSTHROUGH
+    // (sem ffmpeg, sem CPU), abrindo praticamente instantâneo. Antes a grade
+    // SEMPRE transcodificava (era a causa principal da lentidão ao abrir o mosaico).
+    const needsPublisher = isHevc || transcodeAudioForWebrtc;
     const gpuAccel = needsPublisher && (await this.settingsService.isGpuAccelerationEnabled());
 
     const desiredPath: any = {
@@ -642,7 +697,7 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
           pathName,
           sourceUrl,
           sourceVideoCodec: isHevc ? 'h265' : 'h264',
-          transcodedForLive: deliveryMode === 'grid' ? true : isHevc,
+          transcodedForLive: needsPublisher,
           liveProfile,
           deliveryMode,
         };
@@ -665,7 +720,7 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
       pathName,
       sourceUrl,
       sourceVideoCodec: isHevc ? 'h265' : 'h264',
-      transcodedForLive: deliveryMode === 'grid' ? true : isHevc,
+      transcodedForLive: needsPublisher,
       liveProfile,
       deliveryMode,
     };
