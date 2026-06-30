@@ -3,15 +3,19 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import {
   Check,
+  Cpu,
   Database,
   HardDrive,
   LoaderCircle,
   Lock,
   Moon,
+  Palette,
   Save,
   Server,
   Shield,
   Sun,
+  Trash2,
+  Upload,
   Users,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -21,13 +25,16 @@ import { useVmsDataStore } from '../store/vmsDataStore';
 import { useAuthStore } from '../store/authStore';
 import { getApiBaseUrl } from '../lib/api-base';
 import { toast } from '../hooks/use-toast';
+import { GpuAccelerationPanel } from '../components/GpuAccelerationPanel';
 
 const API_URL = getApiBaseUrl();
 
 const SECTIONS = [
   { id: 'general', label: 'Geral', description: 'Identidade e tema', icon: Shield },
+  { id: 'branding', label: 'Aparência', description: 'Logo e cores do app móvel', icon: Palette },
   { id: 'users', label: 'Usuários', description: 'Contas e acesso', icon: Users },
   { id: 'storage', label: 'Retenção', description: 'Retenção e disco', icon: Database },
+  { id: 'gpu', label: 'GPU / Aceleração', description: 'Placa de vídeo', icon: Cpu },
   { id: 'security', label: 'Segurança', description: 'Sessão e senha', icon: Lock },
 ] as const;
 
@@ -41,7 +48,13 @@ type SystemSettings = {
   maxLoginAttempts: number;
   requireStrongPassword: boolean;
   alarmAudioEnabled: boolean;
+  brandLogoDataUrl: string;
+  brandPrimaryColor: string;
+  brandBackgroundColor: string;
 };
+
+// ~400 KB de imagem (base64 fica ~33% maior). Acima disso o upload é recusado.
+const MAX_LOGO_BYTES = 400 * 1024;
 
 function formatBytes(value?: number | null) {
   if (!value || value <= 0) return '-';
@@ -120,6 +133,35 @@ function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   );
 }
 
+function ColorField({ value, onChange, fallback }: { value: string; onChange: (value: string) => void; fallback: string }) {
+  const isSet = /^#[0-9a-fA-F]{6}$/.test(value);
+  const swatch = isSet ? value : fallback;
+  return (
+    <div className="flex items-center gap-2 md:justify-end">
+      <label className="relative h-10 w-10 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-border" style={{ background: swatch }}>
+        <input
+          type="color"
+          value={swatch}
+          onChange={(e) => onChange(e.target.value)}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        />
+      </label>
+      <input
+        type="text"
+        value={value}
+        placeholder={`${fallback} (padrão)`}
+        onChange={(e) => onChange(e.target.value.trim())}
+        className="h-10 w-32 rounded-xl border border-border bg-background/70 px-3 font-mono text-sm uppercase outline-none transition focus:border-[hsl(var(--primary)_/_0.6)]"
+      />
+      {isSet ? (
+        <button type="button" onClick={() => onChange('')} className="text-xs text-muted-foreground hover:text-foreground" title="Usar padrão do tema">
+          ✕
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'danger' | 'success' | 'warning' }) {
   const toneClass = {
     neutral: 'border-border bg-background text-muted-foreground',
@@ -168,6 +210,42 @@ export default function ConfiguracoesPage() {
 
   const update = <K extends keyof SystemSettings>(key: K, value: SystemSettings[K]) => {
     setSettings((current) => (current ? { ...current, [key]: value } : current));
+  };
+
+  const handleLogoFile = (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast({ title: 'Arquivo inválido', description: 'Selecione uma imagem (PNG, JPG ou SVG).', variant: 'destructive' });
+      return;
+    }
+    if (file.size > MAX_LOGO_BYTES) {
+      toast({ title: 'Imagem muito grande', description: 'O logo deve ter no máximo 400 KB.', variant: 'destructive' });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') return;
+      // Converte o logo para PNG real via canvas. O build do APK (AAPT) recusa
+      // JPEG/WebP com extensão .png; padronizando em PNG, qualquer upload funciona.
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || 256;
+        canvas.height = img.naturalHeight || 256;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { update('brandLogoDataUrl', reader.result as string); return; }
+        ctx.drawImage(img, 0, 0);
+        try {
+          update('brandLogoDataUrl', canvas.toDataURL('image/png'));
+        } catch {
+          update('brandLogoDataUrl', reader.result as string);
+        }
+      };
+      img.onerror = () => update('brandLogoDataUrl', reader.result as string);
+      img.src = reader.result;
+    };
+    reader.onerror = () => toast({ title: 'Falha ao ler a imagem', variant: 'destructive' });
+    reader.readAsDataURL(file);
   };
 
   const metrics = useMemo(() => {
@@ -291,6 +369,54 @@ export default function ConfiguracoesPage() {
                   </>
                 )}
 
+                {activeSection === 'branding' && (
+                  <>
+                    <SectionTitle eyebrow="Aparência" title="Aparência do aplicativo móvel" description="Logo e cores aplicados NO APP MÓVEL dos clientes (puxados em tempo real pelo aplicativo). NÃO altera a aparência deste sistema web." />
+                    <Card className="overflow-hidden">
+                      <SettingRow label="Logo" description="PNG, JPG ou SVG até 400 KB. Aparece na tela de login e no topo do menu. Vazio = logo padrão DRAC.">
+                        <div className="flex items-center gap-3 md:justify-end">
+                          <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-background/70">
+                            {settings.brandLogoDataUrl ? (
+                              <img src={settings.brandLogoDataUrl} alt="Logo" className="h-full w-full object-contain p-1" />
+                            ) : (
+                              <Shield className="h-5 w-5 text-muted-foreground" />
+                            )}
+                          </div>
+                          <div className="flex flex-col gap-1.5">
+                            <label className="btn btn-sm btn-primary cursor-pointer">
+                              <Upload className="h-3.5 w-3.5" /> Enviar
+                              <input
+                                type="file"
+                                accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                                className="hidden"
+                                onChange={(e) => { handleLogoFile(e.target.files?.[0]); e.target.value = ''; }}
+                              />
+                            </label>
+                            {settings.brandLogoDataUrl ? (
+                              <button
+                                type="button"
+                                onClick={() => update('brandLogoDataUrl', '')}
+                                className="btn btn-sm inline-flex items-center gap-1.5 text-[hsl(var(--destructive))]"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" /> Remover
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      </SettingRow>
+                      <SettingRow label="Cor principal do app" description="Botões, links e destaques no aplicativo móvel.">
+                        <ColorField value={settings.brandPrimaryColor} onChange={(v) => update('brandPrimaryColor', v)} fallback="#0b6bd6" />
+                      </SettingRow>
+                      <SettingRow label="Cor de fundo do app" description="Fundo das telas no aplicativo móvel.">
+                        <ColorField value={settings.brandBackgroundColor} onChange={(v) => update('brandBackgroundColor', v)} fallback="#14161b" />
+                      </SettingRow>
+                    </Card>
+                    <p className="px-1 text-xs text-muted-foreground">
+                      Estas configurações valem só para o <strong>aplicativo móvel</strong> dos clientes — o app lê o logo e as cores em tempo real ao abrir. A aparência deste sistema web não muda.
+                    </p>
+                  </>
+                )}
+
                 {activeSection === 'users' && (
                   <>
                     <SectionTitle eyebrow="Acesso" title="Usuários" description="Visão somente leitura. Gestão completa na página de Usuários; perfis em Perfis e Permissões." />
@@ -338,6 +464,13 @@ export default function ConfiguracoesPage() {
                         </div>
                       </SettingRow>
                     </Card>
+                  </>
+                )}
+
+                {activeSection === 'gpu' && (
+                  <>
+                    <SectionTitle eyebrow="Aceleração" title="GPU / Placa de vídeo" description="Detecta a GPU, ativa o transcode acelerado (NVENC), roda um auto-teste e mostra o uso ao vivo. O transcode em CPU continua sendo o padrão até você ativar." />
+                    <GpuAccelerationPanel />
                   </>
                 )}
 

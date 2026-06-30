@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  body{margin:0}
+  .frm::-webkit-scrollbar{display:none}
+  .frm{scrollbar-width:none}
+  .gname{background:transparent;border:none;outline:none;font-family:Manrope,system-ui,sans-serif}
+  .gname::placeholder{color:var(--tm,#6b7484)}
+</style>
+</helmet>
+<div style="min-height:100vh;width:100%;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:40px 20px;background:radial-gradient(120% 80% at 50% 0%,#eef1f6,#dfe3ea);font-family:Manrope,system-ui,sans-serif">
+  <div style="display:flex;align-items:center;gap:9px">
+    <div style="width:26px;height:26px;border-radius:8px;background:linear-gradient(150deg,#3b82f6,#2563eb);display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.4"></circle><path d="M3 8.2V6.5A1.5 1.5 0 0 1 4.5 5h2.2l1.4-2h7.8l1.4 2h2.2A1.5 1.5 0 0 1 21 6.5v11A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5"></path></svg></div>
+    <div style="font-size:14px;font-weight:800;color:#3a4150;letter-spacing:-.01em">DRAC · protótipo interativo</div>
+  </div>
+
+  <div style="width:390px;height:844px;border-radius:46px;overflow:hidden;box-shadow:0 40px 80px -28px rgba(20,24,40,.55),0 12px 28px rgba(20,24,40,.14);position:relative;flex:none">
+    <div style="{{ frameStyle }}">
+
+      <!-- STATUS BAR -->
+      <div style="position:relative;z-index:3;height:50px;flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:0 28px 7px;color:var(--tx,#f4f6fa)">
+        <div style="font-size:15.5px;font-weight:700">9:41</div>
+        <div style="display:flex;align-items:center;gap:7px">
+          <svg width="18" height="12" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="8" width="3" height="4" rx="1"></rect><rect x="5" y="5" width="3" height="7" rx="1"></rect><rect x="10" y="2.5" width="3" height="9.5" rx="1"></rect><rect x="15" y="0" width="3" height="12" rx="1"></rect></svg>
+          <svg width="17" height="12" viewBox="0 0 17 12" fill="currentColor"><path d="M8.5 2C5.6 2 3 3.1 1.1 4.9l1.5 1.5C4.2 4.9 6.3 4 8.5 4s4.3.9 5.9 2.4l1.5-1.5C14 3.1 11.4 2 8.5 2z"></path><path d="M8.5 6.2c-1.5 0-2.9.6-3.9 1.5l1.5 1.5c.6-.6 1.5-1 2.4-1s1.8.4 2.4 1l1.5-1.5c-1-.9-2.4-1.5-3.9-1.5z"></path><circle cx="8.5" cy="10.3" r="1.4"></circle></svg>
+          <svg width="26" height="13" viewBox="0 0 26 13" fill="none"><rect x="1" y="1" width="21" height="11" rx="3.2" stroke="currentColor" stroke-opacity=".4" stroke-width="1.1"></rect><rect x="3" y="3" width="15.5" height="7" rx="1.6" fill="currentColor"></rect><rect x="23.6" y="4.2" width="1.9" height="4.6" rx="1" fill="currentColor" fill-opacity=".4"></rect></svg>
+        </div>
+      </div>
+
+      <div class="frm" style="flex:1;overflow:auto;position:relative">
+
+        <!-- ===== LOGIN ===== -->
+        <sc-if value="{{ isLogin }}" hint-placeholder-val="{{ true }}">
+        <div style="position:absolute;inset:0;display:flex;flex-direction:column;padding:0 30px">
+          <div style="position:absolute;inset:0;background:radial-gradient(120% 60% at 80% 0%,var(--acbg,rgba(59,130,246,.16)),transparent 60%);pointer-events:none"></div>
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:18px;position:relative">
+            <div style="width:78px;height:78px;border-radius:23px;background:linear-gradient(150deg,var(--ac,#3b82f6),var(--ac2,#2563eb));display:flex;align-items:center;justify-content:center;box-shadow:0 18px 40px -10px var(--ac,#3b82f6)"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.4"></circle><path d="M3 8.2V6.5A1.5 1.5 0 0 1 4.5 5h2.2l1.4-2h7.8l1.4 2h2.2A1.5 1.5 0 0 1 21 6.5v11A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5"></path></svg></div>
+            <div style="text-align:center"><div style="font-size:28px;font-weight:800;color:var(--tx,#f4f6fa);letter-spacing:-.02em">DRAC</div><div style="font-size:14px;color:var(--ts,#9aa3af);font-weight:500;margin-top:3px">Monitoramento inteligente</div></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:13px;padding-bottom:40px;position:relative">
+            <div style="background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:15px;padding:14px 16px;display:flex;align-items:center;gap:12px"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--tm,#6b7484)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"></rect><path d="m3.5 7 8.5 6 8.5-6"></path></svg><div style="flex:1"><div style="font-size:10px;color:var(--tm,#6b7484);font-weight:700;letter-spacing:.04em;text-transform:uppercase">E-mail</div><div style="font-size:15px;color:var(--tx,#f4f6fa);font-weight:600;margin-top:2px"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="482d262723082c3a292b662127">[email&#160;protected]</a></div></div></div>
+            <div style="background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:15px;padding:14px 16px;display:flex;align-items:center;gap:12px"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--tm,#6b7484)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="3"></rect><path d="M8 10V7.5a4 4 0 0 1 8 0V10"></path></svg><div style="flex:1"><div style="font-size:10px;color:var(--tm,#6b7484);font-weight:700;letter-spacing:.04em;text-transform:uppercase">Senha</div><div style="font-size:17px;color:var(--tx,#f4f6fa);font-weight:700;letter-spacing:.18em;margin-top:3px">••••••••</div></div><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--tm,#6b7484)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"></path><circle cx="12" cy="12" r="2.6"></circle></svg></div>
+            <div style="text-align:right;font-size:12.5px;color:var(--ac,#3b82f6);font-weight:700">Esqueci minha senha</div>
+            <div onClick="{{ goApp }}" style="cursor:pointer;margin-top:6px;background:linear-gradient(120deg,var(--ac,#3b82f6),var(--ac2,#2563eb));border-radius:15px;padding:16px;text-align:center;color:#fff;font-size:16px;font-weight:800;box-shadow:0 14px 30px -10px var(--ac,#3b82f6)">Entrar</div>
+            <div style="display:flex;align-items:center;justify-content:center;gap:7px;margin-top:6px"><span style="width:6px;height:6px;border-radius:50%;background:var(--ok,#22c55e)"></span><span style="font-size:11.5px;color:var(--ts,#9aa3af);font-weight:600">Servidor conectado · drac.local</span></div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== CENTRAL ===== -->
+        <sc-if value="{{ isCentral }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:6px 22px 28px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 18px">
+            <div><div style="font-size:13px;color:var(--ts,#9aa3af);font-weight:600">Bom dia,</div><div style="font-size:27px;font-weight:800;color:var(--tx,#f4f6fa);letter-spacing:-.02em;margin-top:1px">Central</div></div>
+            <div style="display:flex;gap:10px;align-items:center">
+              <div onClick="{{ tabAlarmes }}" style="cursor:pointer;width:42px;height:42px;border-radius:14px;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));display:flex;align-items:center;justify-content:center;position:relative"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--tx,#f4f6fa)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5a6 6 0 0 1 12 0c0 5.5 2 7 2 7H4s2-1.5 2-7"></path><path d="M10 20a2 2 0 0 0 4 0"></path></svg><span style="position:absolute;top:9px;right:10px;width:8px;height:8px;border-radius:50%;background:var(--dg,#ef4444);border:1.5px solid var(--sf,#15181f)"></span></div>
+              <div style="width:42px;height:42px;border-radius:14px;background:linear-gradient(145deg,var(--ac,#3b82f6),var(--ac2,#2563eb));display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:15px">EN</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:11px;margin-bottom:14px">
+            <div style="flex:1;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:18px;padding:15px 14px"><div style="display:flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:var(--ok,#22c55e)"></span><span style="font-size:11px;color:var(--ts,#9aa3af);font-weight:700">Online</span></div><div style="font-size:28px;font-weight:800;color:var(--tx,#f4f6fa);margin-top:6px;letter-spacing:-.02em">{{ nOnline }}</div></div>
+            <div style="flex:1;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:18px;padding:15px 14px"><div style="display:flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:var(--dg,#ef4444)"></span><span style="font-size:11px;color:var(--ts,#9aa3af);font-weight:700">Offline</span></div><div style="font-size:28px;font-weight:800;color:var(--tx,#f4f6fa);margin-top:6px;letter-spacing:-.02em">{{ nOffline }}</div></div>
+            <div style="flex:1;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:18px;padding:15px 14px"><div style="display:flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:var(--dg,#ef4444)"></span><span style="font-size:11px;color:var(--ts,#9aa3af);font-weight:700">Gravando</span></div><div style="font-size:28px;font-weight:800;color:var(--tx,#f4f6fa);margin-top:6px;letter-spacing:-.02em">{{ nRec }}</div></div>
+          </div>
+          <sc-if value="{{ showAlerts }}" hint-placeholder-val="{{ true }}">
+          <div style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.28);border-radius:18px;padding:14px 15px;display:flex;gap:12px;align-items:flex-start;margin-bottom:18px"><div style="width:30px;height:30px;border-radius:10px;background:rgba(245,158,11,.18);display:flex;align-items:center;justify-content:center;flex:none"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--wn,#f59e0b)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 21 19H3z"></path><path d="M12 10v4M12 17h.01"></path></svg></div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:var(--tx,#f4f6fa)">Atenção operacional</div><div style="font-size:12.5px;color:var(--ts,#9aa3af);line-height:1.45;margin-top:2px;font-weight:500">2 câmeras offline na área Estoque. Verifique a conexão de rede.</div></div></div>
+          </sc-if>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><div style="display:flex;align-items:center;gap:7px"><svg width="16" height="16" viewBox="0 0 24 24" fill="#fbbf24" stroke="#fbbf24" stroke-width="1.6" stroke-linejoin="round"><path d="M12 3.2l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.4 9.3l5.8-.8z"></path></svg><span style="font-size:16px;font-weight:800;color:var(--tx,#f4f6fa);letter-spacing:-.01em">Favoritas</span></div><div onClick="{{ openFavsSheet }}" style="cursor:pointer;display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--ac,#3b82f6);font-weight:700"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>Gerenciar</div></div>
+
+          <sc-if value="{{ favHasAny }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:13px">
+            <sc-for list="{{ favGrid }}" as="cam" hint-placeholder-count="4">
+              <div onClick="{{ cam.open }}" style="cursor:pointer;border-radius:18px;overflow:hidden;position:relative;height:142px;background:{{ cam.bg }};border:1px solid var(--bd,rgba(255,255,255,.08))">
+                <div style="position:absolute;inset:0;background:radial-gradient(80% 60% at 30% 20%,rgba(96,165,250,.16),transparent 60%),repeating-linear-gradient(115deg,rgba(255,255,255,.022) 0 2px,transparent 2px 9px)"></div>
+                <sc-if value="{{ cam.online }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;top:9px;left:9px;display:flex;gap:5px;align-items:center;background:rgba(239,68,68,.92);padding:3px 7px;border-radius:7px"><span style="width:5px;height:5px;border-radius:50%;background:#fff"></span><span style="color:#fff;font-size:8.5px;font-weight:800;letter-spacing:.05em">AO VIVO</span></div></sc-if>
+                <sc-if value="{{ cam.offline }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:10px;left:10px;width:7px;height:7px;border-radius:50%;background:var(--dg,#ef4444)"></div></sc-if>
+                <div onClick="{{ cam.toggleFav }}" style="cursor:pointer;position:absolute;top:6px;right:6px;width:28px;height:28px;border-radius:50%;background:rgba(0,0,0,.4);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="{{ cam.starFill }}" stroke="{{ cam.starStroke }}" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.4 9.3l5.8-.8z"></path></svg></div>
+                <div style="position:absolute;left:11px;bottom:10px;right:11px"><div style="color:#fff;font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ cam.name }}</div><div style="color:rgba(255,255,255,.65);font-size:10px;font-weight:600;margin-top:1px">{{ cam.area }}</div></div>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+          <sc-if value="{{ favEmpty }}" hint-placeholder-val="{{ false }}">
+          <div style="border:1px dashed var(--bd,rgba(255,255,255,.14));border-radius:20px;padding:30px 22px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px">
+            <div style="width:50px;height:50px;border-radius:16px;background:var(--sf,#15181f);display:flex;align-items:center;justify-content:center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.4 9.3l5.8-.8z"></path></svg></div>
+            <div><div style="font-size:14.5px;font-weight:800;color:var(--tx,#f4f6fa)">Nenhuma câmera favorita</div><div style="font-size:12.5px;color:var(--ts,#9aa3af);font-weight:500;margin-top:3px;line-height:1.45">Toque na estrela de uma câmera para fixá-la aqui.</div></div>
+            <div onClick="{{ openFavsSheet }}" style="cursor:pointer;background:linear-gradient(120deg,var(--ac,#3b82f6),var(--ac2,#2563eb));border-radius:12px;padding:11px 20px;color:#fff;font-size:13px;font-weight:800">Escolher favoritas</div>
+          </div>
+          </sc-if>
+        </div>
+        </sc-if>
+
+        <!-- ===== MOSAICO ===== -->
+        <sc-if value="{{ isMosaico }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:6px 22px 28px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 16px"><div style="font-size:27px;font-weight:800;color:var(--tx,#f4f6fa);letter-spacing:-.02em">Mosaico</div><div onClick="{{ openNewGroup }}" style="cursor:pointer;display:flex;align-items:center;gap:6px;height:40px;padding:0 14px;border-radius:13px;background:var(--ac,#3b82f6);color:#fff;font-size:12.5px;font-weight:800"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>Grupo</div></div>
+
+          <div class="frm" style="display:flex;gap:8px;margin-bottom:14px;overflow-x:auto">
+            <sc-for list="{{ chips }}" as="chip" hint-placeholder-count="5">
+              <div onClick="{{ chip.select }}" style="cursor:pointer;flex:none;padding:9px 16px;border-radius:11px;font-size:12.5px;font-weight:700;background:{{ chip.bg }};color:{{ chip.color }};border:1px solid {{ chip.bd }}">{{ chip.label }}</div>
+            </sc-for>
+            <div onClick="{{ openNewGroup }}" style="cursor:pointer;flex:none;display:flex;align-items:center;gap:5px;padding:9px 15px;border-radius:11px;font-size:12.5px;font-weight:700;background:transparent;color:var(--ac,#3b82f6);border:1px dashed var(--bd,rgba(255,255,255,.22))"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>Novo</div>
+          </div>
+
+          <sc-if value="{{ groupSelected }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:13px;padding:0 2px"><div style="font-size:12px;color:var(--ts,#9aa3af);font-weight:600">{{ groupCountLabel }}</div><div onClick="{{ openEditGroup }}" style="cursor:pointer;display:flex;align-items:center;gap:5px;font-size:12px;color:var(--ac,#3b82f6);font-weight:700"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>Editar grupo</div></div>
+          </sc-if>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px">
+            <sc-for list="{{ filteredCams }}" as="cam" hint-placeholder-count="6">
+              <div onClick="{{ cam.open }}" style="cursor:pointer;border-radius:16px;overflow:hidden;position:relative;height:138px;background:{{ cam.bg }};border:1px solid var(--bd,rgba(255,255,255,.08))">
+                <div style="position:absolute;inset:0;background:repeating-linear-gradient(115deg,rgba(255,255,255,.022) 0 2px,transparent 2px 9px)"></div>
+                <sc-if value="{{ cam.online }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;top:9px;left:9px;display:flex;gap:5px;align-items:center;background:rgba(239,68,68,.92);padding:3px 7px;border-radius:7px"><span style="width:5px;height:5px;border-radius:50%;background:#fff"></span><span style="color:#fff;font-size:8.5px;font-weight:800;letter-spacing:.05em">AO VIVO</span></div></sc-if>
+                <sc-if value="{{ cam.offline }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:10px;left:10px;width:7px;height:7px;border-radius:50%;background:var(--dg,#ef4444)"></div></sc-if>
+                <sc-if value="{{ cam.nosignal }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l20 20"></path><path d="M6.7 6.7C4.6 7.6 3 9 3 9v9.5A1.5 1.5 0 0 0 4.5 20h13"></path><path d="M9.5 5h6l1.4 2H19.5A1.5 1.5 0 0 1 21 8.5v8"></path></svg><div style="color:#5b6573;font-size:9.5px;font-weight:700;margin-top:3px">Sem sinal</div></div></sc-if>
+                <div onClick="{{ cam.toggleFav }}" style="cursor:pointer;position:absolute;top:6px;right:6px;width:27px;height:27px;border-radius:50%;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 24 24" fill="{{ cam.starFill }}" stroke="{{ cam.starStroke }}" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.4 9.3l5.8-.8z"></path></svg></div>
+                <div style="position:absolute;left:10px;bottom:9px;color:{{ cam.nameColor }};font-size:12px;font-weight:700">{{ cam.name }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== LIVE + PTZ ===== -->
+        <sc-if value="{{ isLive }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;inset:0;display:flex;flex-direction:column">
+          <div style="position:absolute;inset:0;background:linear-gradient(165deg,#27313f 0%,#121922 45%,#0a0f15 100%)"></div>
+          <div style="position:absolute;inset:0;background:radial-gradient(90% 55% at 35% 22%,rgba(96,165,250,.22),transparent 55%),repeating-linear-gradient(115deg,rgba(255,255,255,.022) 0 2px,transparent 2px 10px)"></div>
+          <div style="position:relative;padding:8px 20px 0;display:flex;align-items:center;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:11px"><div onClick="{{ closeLive }}" style="cursor:pointer;width:38px;height:38px;border-radius:12px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.18)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"></path></svg></div><div><div style="font-size:16px;font-weight:800;color:#fff">{{ cameraName }}</div><div style="font-size:11.5px;color:rgba(255,255,255,.65);font-weight:600">{{ cameraMeta }}</div></div></div>
+            <div style="display:flex;align-items:center;gap:9px"><div onClick="{{ toggleLiveFav }}" style="cursor:pointer;width:38px;height:38px;border-radius:12px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.18)"><svg width="19" height="19" viewBox="0 0 24 24" fill="{{ liveStarFill }}" stroke="{{ liveStarStroke }}" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.4 9.3l5.8-.8z"></path></svg></div><div style="display:flex;gap:6px;align-items:center;background:rgba(239,68,68,.92);padding:5px 10px;border-radius:9px"><span style="width:6px;height:6px;border-radius:50%;background:#fff"></span><span style="font-size:10px;font-weight:800;letter-spacing:.06em;color:#fff">AO VIVO</span></div></div>
+          </div>
+          <div style="position:relative;flex:1">
+            <div style="position:absolute;left:54px;top:84px;width:118px;height:148px;border:2px solid #34d399;border-radius:8px"><div style="position:absolute;top:-22px;left:-2px;background:#34d399;color:#06281d;font-size:10px;font-weight:800;padding:2px 7px;border-radius:5px">Pessoa · 98%</div></div>
+            <div style="position:absolute;right:40px;bottom:40px;width:88px;height:64px;border:2px solid #3b82f6;border-radius:8px"><div style="position:absolute;top:-21px;left:-2px;background:#3b82f6;color:#fff;font-size:10px;font-weight:800;padding:2px 7px;border-radius:5px">Veículo · 91%</div></div>
+            <div style="position:absolute;right:20px;top:6px;color:rgba(255,255,255,.85);font-size:12px;font-weight:700;background:rgba(0,0,0,.35);padding:4px 9px;border-radius:8px">14:32:08</div>
+          </div>
+          <div style="position:relative;padding:0 18px 26px">
+            <div style="background:rgba(20,24,31,.72);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);border:1px solid rgba(255,255,255,.1);border-radius:26px;padding:16px 16px 18px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+                <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:54px;height:54px;border-radius:50%;background:rgba(239,68,68,.16);border:1.5px solid rgba(239,68,68,.4);display:flex;align-items:center;justify-content:center"><span style="width:18px;height:18px;border-radius:50%;background:#ef4444"></span></div><span style="font-size:10px;color:rgba(255,255,255,.7);font-weight:700">Gravar</span></div>
+                <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:54px;height:54px;border-radius:50%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="3"></rect><circle cx="12" cy="12.5" r="3.4"></circle><path d="M8 6l1.3-2h5.4L16 6"></path></svg></div><span style="font-size:10px;color:rgba(255,255,255,.7);font-weight:700">Foto</span></div>
+                <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:54px;height:54px;border-radius:50%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg></div><span style="font-size:10px;color:rgba(255,255,255,.7);font-weight:700">Áudio</span></div>
+                <div style="display:flex;flex-direction:column;align-items:center;gap:6px"><div style="width:54px;height:54px;border-radius:50%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path></svg></div><span style="font-size:10px;color:rgba(255,255,255,.7);font-weight:700">Tela</span></div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:14px">
+                <div style="position:relative;width:124px;height:124px;border-radius:50%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);flex:none">
+                  <div style="position:absolute;top:9px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.8)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6 11l6-6 6 6"></path></svg></div>
+                  <div style="position:absolute;bottom:9px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.8)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v13M6 13l6 6 6-6"></path></svg></div>
+                  <div style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,.8)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H6M11 6l-6 6 6 6"></path></svg></div>
+                  <div style="position:absolute;right:9px;top:50%;transform:translateY(-50%);color:rgba(255,255,255,.8)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"></path></svg></div>
+                  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:46px;height:46px;border-radius:50%;background:linear-gradient(145deg,var(--ac,#3b82f6),var(--ac2,#2563eb));display:flex;align-items:center;justify-content:center;box-shadow:0 6px 16px -4px var(--ac,#3b82f6)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 3v3M12 18v3M3 12h3M18 12h3"></path></svg></div>
+                </div>
+                <div style="flex:1;display:flex;flex-direction:column;gap:9px">
+                  <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:11px 14px"><span style="font-size:13px;font-weight:700;color:#fff">Zoom</span><div style="display:flex;gap:8px;align-items:center"><div style="width:30px;height:30px;border-radius:9px;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"></path></svg></div><span style="font-size:13px;font-weight:800;color:#fff;width:34px;text-align:center">2.0×</span><div style="width:30px;height:30px;border-radius:9px;background:rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></div></div></div>
+                  <div style="display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:11px 14px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v3M12 19v3M4.4 4.4l1.7 1.7M17.9 17.9l1.7 1.7M2 12h3M19 12h3M4.4 19.6l1.7-1.7M17.9 6.1l1.7-1.7"></path><circle cx="12" cy="12" r="3"></circle></svg><span style="font-size:12.5px;font-weight:700;color:#fff">Presets PTZ</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== PLAYBACK ===== -->
+        <sc-if value="{{ isPlayback }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:6px 22px 28px">
+          <div style="font-size:27px;font-weight:800;color:var(--tx,#f4f6fa);letter-spacing:-.02em;margin:10px 0 14px">Reprodução</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:14px;padding:12px 15px;margin-bottom:14px"><div style="display:flex;align-items:center;gap:10px"><span style="width:8px;height:8px;border-radius:50%;background:var(--ok,#22c55e)"></span><span style="font-size:14px;font-weight:700;color:var(--tx,#f4f6fa)">Entrada Principal</span></div><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ts,#9aa3af)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></div>
+          <div onClick="{{ openEntrada }}" style="cursor:pointer;border-radius:18px;overflow:hidden;position:relative;height:200px;background:linear-gradient(160deg,#1f2937,#0b1018);border:1px solid var(--bd,rgba(255,255,255,.08));margin-bottom:14px"><div style="position:absolute;inset:0;background:radial-gradient(80% 60% at 40% 30%,rgba(96,165,250,.16),transparent 60%),repeating-linear-gradient(115deg,rgba(255,255,255,.022) 0 2px,transparent 2px 9px)"></div><div style="position:absolute;top:12px;left:12px;background:rgba(0,0,0,.45);color:#fff;font-size:11px;font-weight:700;padding:4px 9px;border-radius:8px">14 fev · 14:12:30</div><div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:58px;height:58px;border-radius:50%;background:rgba(255,255,255,.16);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center"><svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.2c0-.8.9-1.3 1.6-.9l9.2 6.3c.6.4.6 1.4 0 1.8l-9.2 6.3c-.7.4-1.6 0-1.6-.9z"></path></svg></div><div style="position:absolute;left:12px;right:12px;bottom:12px"><div style="height:4px;border-radius:3px;background:rgba(255,255,255,.25);position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:42%;border-radius:3px;background:var(--ac,#3b82f6)"></div><div style="position:absolute;left:42%;top:50%;transform:translate(-50%,-50%);width:11px;height:11px;border-radius:50%;background:#fff"></div></div></div></div>
+          <div style="display:flex;gap:7px;margin-bottom:14px"><div style="flex:none;width:44px;border-radius:13px;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));display:flex;align-items:center;justify-content:center;color:var(--ts,#9aa3af)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"></path></svg></div><div style="flex:1;display:flex;justify-content:space-between;gap:6px"><div style="flex:1;text-align:center;padding:9px 0;border-radius:13px;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08))"><div style="font-size:10px;color:var(--ts,#9aa3af);font-weight:700">QUI</div><div style="font-size:15px;color:var(--tx,#f4f6fa);font-weight:800;margin-top:1px">12</div></div><div style="flex:1;text-align:center;padding:9px 0;border-radius:13px;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08))"><div style="font-size:10px;color:var(--ts,#9aa3af);font-weight:700">SEX</div><div style="font-size:15px;color:var(--tx,#f4f6fa);font-weight:800;margin-top:1px">13</div></div><div style="flex:1;text-align:center;padding:9px 0;border-radius:13px;background:linear-gradient(145deg,var(--ac,#3b82f6),var(--ac2,#2563eb))"><div style="font-size:10px;color:rgba(255,255,255,.85);font-weight:700">SÁB</div><div style="font-size:15px;color:#fff;font-weight:800;margin-top:1px">14</div></div><div style="flex:1;text-align:center;padding:9px 0;border-radius:13px;background:var(--sf2,#1b1f28);border:1px solid var(--bd,rgba(255,255,255,.08));opacity:.5"><div style="font-size:10px;color:var(--tm,#6b7484);font-weight:700">DOM</div><div style="font-size:15px;color:var(--tm,#6b7484);font-weight:800;margin-top:1px">15</div></div></div><div style="flex:none;width:44px;border-radius:13px;background:var(--sf2,#1b1f28);border:1px solid var(--bd,rgba(255,255,255,.08));display:flex;align-items:center;justify-content:center;color:var(--tm,#6b7484);opacity:.5"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"></path></svg></div></div>
+          <div style="background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:16px;padding:14px 15px 16px;margin-bottom:18px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:13px">
+              <div style="display:flex;align-items:center;gap:7px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--ts,#9aa3af)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7.5V12l3 2"></path></svg><span style="font-size:13px;font-weight:800;color:var(--tx,#f4f6fa)">Linha do tempo</span></div>
+              <div style="display:flex;align-items:center;gap:12px">
+                <div style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:3px;background:#60a5fa"></span><span style="font-size:10.5px;color:var(--ts,#9aa3af);font-weight:700">Contínua</span></div>
+                <div style="display:flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:3px;background:#fb923c"></span><span style="font-size:10.5px;color:var(--ts,#9aa3af);font-weight:700">Movimento</span></div>
+              </div>
+            </div>
+            <div style="position:relative;height:46px">
+              <!-- current time bubble -->
+              <div style="position:absolute;left:59%;top:0;transform:translateX(-50%);background:var(--dg,#ef4444);color:#fff;font-size:9.5px;font-weight:800;padding:2px 6px;border-radius:5px;white-space:nowrap">14:12</div>
+              <!-- track -->
+              <div style="position:absolute;left:0;right:0;top:20px;height:14px;border-radius:7px;background:var(--sf2,#1b1f28);overflow:hidden">
+                <div style="position:absolute;left:8%;width:22%;top:0;bottom:0;background:linear-gradient(90deg,#3b82f6,#60a5fa);border-radius:7px"></div>
+                <div style="position:absolute;left:34%;width:6%;top:0;bottom:0;background:#fb923c;border-radius:7px"></div>
+                <div style="position:absolute;left:48%;width:18%;top:0;bottom:0;background:linear-gradient(90deg,#3b82f6,#60a5fa);border-radius:7px"></div>
+                <div style="position:absolute;left:70%;width:4%;top:0;bottom:0;background:#fb923c;border-radius:7px"></div>
+              </div>
+              <!-- playhead -->
+              <div style="position:absolute;left:59%;top:15px;bottom:7px;width:2.5px;border-radius:2px;background:var(--dg,#ef4444);transform:translateX(-50%);box-shadow:0 0 0 3px rgba(239,68,68,.18)"></div>
+              <div style="position:absolute;left:59%;top:16px;width:11px;height:11px;border-radius:50%;background:var(--dg,#ef4444);transform:translateX(-50%);border:2px solid var(--sf,#15181f)"></div>
+              <!-- hour ticks -->
+              <div style="position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between"><span style="font-size:9.5px;color:var(--tm,#6b7484);font-weight:700">00h</span><span style="font-size:9.5px;color:var(--tm,#6b7484);font-weight:700">06h</span><span style="font-size:9.5px;color:var(--tm,#6b7484);font-weight:700">12h</span><span style="font-size:9.5px;color:var(--tm,#6b7484);font-weight:700">18h</span><span style="font-size:9.5px;color:var(--tm,#6b7484);font-weight:700">24h</span></div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px">
+            <div style="font-size:14px;font-weight:800;color:var(--tx,#f4f6fa)">Gravações · 14 fev</div>
+            <div onClick="{{ toggleSelectMode }}" style="cursor:pointer;display:flex;align-items:center;gap:5px;font-size:12.5px;font-weight:700;color:{{ selectModeColor }}">{{ selectModeLabel }}</div>
+          </div>
+          <sc-if value="{{ recSelectActive }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ toggleSelectAll }}" style="cursor:pointer;display:flex;align-items:center;gap:9px;margin-bottom:10px;padding:0 2px"><div style="width:22px;height:22px;border-radius:7px;background:{{ allSelBg }};border:2px solid {{ allSelBd }};display:flex;align-items:center;justify-content:center"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="opacity:{{ allSelOpacity }}"><path d="M20 6L9 17l-5-5"></path></svg></div><span style="font-size:12.5px;font-weight:700;color:var(--ts,#9aa3af)">Selecionar todas</span></div>
+          </sc-if>
+          <div style="display:flex;flex-direction:column;gap:9px">
+            <sc-for list="{{ recList }}" as="rec" hint-placeholder-count="4">
+              <div onClick="{{ rec.onTap }}" style="cursor:pointer;display:flex;align-items:center;gap:12px;background:{{ rec.rowBg }};border:1px solid {{ rec.rowBd }};border-radius:14px;padding:11px 13px">
+                <sc-if value="{{ recSelectActive }}" hint-placeholder-val="{{ false }}">
+                <div style="width:24px;height:24px;border-radius:7px;flex:none;background:{{ rec.boxBg }};border:2px solid {{ rec.boxBd }};display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="opacity:{{ rec.checkOpacity }}"><path d="M20 6L9 17l-5-5"></path></svg></div>
+                </sc-if>
+                <div style="width:44px;height:44px;border-radius:11px;background:{{ rec.bg }};flex:none"></div>
+                <div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:var(--tx,#f4f6fa)">{{ rec.range }}</div><div style="display:flex;gap:8px;align-items:center;margin-top:3px"><span style="font-size:11px;color:var(--ts,#9aa3af);font-weight:600">{{ rec.duration }}</span><span style="font-size:9.5px;font-weight:800;color:{{ rec.tagColor }};background:{{ rec.tagBg }};padding:2px 7px;border-radius:6px">{{ rec.kind }}</span><span style="font-size:11px;color:var(--tm,#6b7484);font-weight:600">{{ rec.size }}</span></div></div>
+                <sc-if value="{{ recBrowseActive }}" hint-placeholder-val="{{ true }}">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--ac,#3b82f6)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M5 20h14"></path></svg>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== ALARMES ===== -->
+        <sc-if value="{{ isAlarmes }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:6px 22px 28px">
+          <div style="margin:10px 0 16px"><div style="font-size:27px;font-weight:800;color:var(--tx,#f4f6fa);letter-spacing:-.02em">Alarmes</div><div style="font-size:13px;color:var(--ts,#9aa3af);font-weight:600;margin-top:1px">3 eventos em aberto</div></div>
+          <div style="display:flex;gap:7px;background:var(--sf2,#1b1f28);border-radius:13px;padding:4px;margin-bottom:16px"><div style="flex:1;text-align:center;padding:9px 0;border-radius:10px;background:var(--sf,#15181f);font-size:12.5px;font-weight:800;color:var(--tx,#f4f6fa)">Abertos</div><div style="flex:1;text-align:center;padding:9px 0;border-radius:10px;font-size:12.5px;font-weight:700;color:var(--ts,#9aa3af)">Reconhecidos</div><div style="flex:1;text-align:center;padding:9px 0;border-radius:10px;font-size:12.5px;font-weight:700;color:var(--ts,#9aa3af)">Todos</div></div>
+          <div style="display:flex;flex-direction:column;gap:11px">
+            <div style="background:var(--sf,#15181f);border:1px solid rgba(239,68,68,.3);border-radius:18px;overflow:hidden"><div style="height:3px;background:var(--dg,#ef4444)"></div><div style="padding:13px 14px"><div style="display:flex;gap:12px"><div onClick="{{ openEntrada }}" style="cursor:pointer;width:54px;height:54px;border-radius:12px;background:linear-gradient(160deg,#1f2937,#0f172a);flex:none;position:relative"><span style="position:absolute;top:6px;left:6px;width:6px;height:6px;border-radius:50%;background:var(--dg,#ef4444)"></span></div><div style="flex:1"><div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:14px;font-weight:800;color:var(--tx,#f4f6fa)">Linha cruzada</span><span style="font-size:11px;color:var(--tm,#6b7484);font-weight:600">há 2 min</span></div><div style="font-size:12.5px;color:var(--ts,#9aa3af);font-weight:600;margin-top:2px">Entrada Principal · Recepção</div></div></div><div style="display:flex;gap:8px;margin-top:12px"><div style="flex:1;text-align:center;padding:9px 0;border-radius:11px;background:var(--sf2,#1b1f28);border:1px solid var(--bd,rgba(255,255,255,.08));font-size:12px;font-weight:700;color:var(--tx,#f4f6fa)">Reconhecer</div><div style="flex:1;text-align:center;padding:9px 0;border-radius:11px;background:linear-gradient(145deg,var(--ac,#3b82f6),var(--ac2,#2563eb));font-size:12px;font-weight:800;color:#fff">Resolver</div></div></div></div>
+            <div style="background:var(--sf,#15181f);border:1px solid rgba(245,158,11,.28);border-radius:18px;overflow:hidden"><div style="height:3px;background:var(--wn,#f59e0b)"></div><div style="padding:13px 14px"><div style="display:flex;gap:12px"><div onClick="{{ openEstacionamento }}" style="cursor:pointer;width:54px;height:54px;border-radius:12px;background:linear-gradient(160deg,#243044,#101826);flex:none;position:relative"><span style="position:absolute;top:6px;left:6px;width:6px;height:6px;border-radius:50%;background:var(--wn,#f59e0b)"></span></div><div style="flex:1"><div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:14px;font-weight:800;color:var(--tx,#f4f6fa)">Movimento detectado</span><span style="font-size:11px;color:var(--tm,#6b7484);font-weight:600">há 14 min</span></div><div style="font-size:12.5px;color:var(--ts,#9aa3af);font-weight:600;margin-top:2px">Estacionamento · Externa</div></div></div><div style="display:flex;gap:8px;margin-top:12px"><div style="flex:1;text-align:center;padding:9px 0;border-radius:11px;background:var(--sf2,#1b1f28);border:1px solid var(--bd,rgba(255,255,255,.08));font-size:12px;font-weight:700;color:var(--tx,#f4f6fa)">Reconhecer</div><div style="flex:1;text-align:center;padding:9px 0;border-radius:11px;background:linear-gradient(145deg,var(--ac,#3b82f6),var(--ac2,#2563eb));font-size:12px;font-weight:800;color:#fff">Resolver</div></div></div></div>
+            <div style="background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:18px;padding:13px 14px;opacity:.62"><div style="display:flex;gap:12px;align-items:center"><div style="width:46px;height:46px;border-radius:12px;background:rgba(34,197,94,.14);flex:none;display:flex;align-items:center;justify-content:center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--ok,#22c55e)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg></div><div style="flex:1"><div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:13.5px;font-weight:700;color:var(--tx,#f4f6fa)">Pessoa identificada</span><span style="font-size:11px;color:var(--tm,#6b7484);font-weight:600">há 1 h</span></div><div style="font-size:12px;color:var(--ts,#9aa3af);font-weight:600;margin-top:2px">Corredor B · Resolvido por Enok</div></div></div></div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== AJUSTES ===== -->
+        <sc-if value="{{ isAjustes }}" hint-placeholder-val="{{ false }}">
+        <div style="padding:6px 22px 28px">
+          <div style="font-size:27px;font-weight:800;color:var(--tx,#f4f6fa);letter-spacing:-.02em;margin:10px 0 16px">Ajustes</div>
+          <div style="display:flex;align-items:center;gap:14px;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:20px;padding:16px;margin-bottom:18px"><div style="width:56px;height:56px;border-radius:18px;background:linear-gradient(145deg,var(--ac,#3b82f6),var(--ac2,#2563eb));display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:800;flex:none">EN</div><div style="flex:1"><div style="font-size:16px;font-weight:800;color:var(--tx,#f4f6fa)">Enok Tavares</div><div style="font-size:12.5px;color:var(--ts,#9aa3af);font-weight:600;margin-top:1px"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="debbb0b1b59ebaacbfbdf0b7b1">[email&#160;protected]</a></div></div><div style="font-size:10px;font-weight:800;color:var(--ac,#3b82f6);background:var(--acbg,rgba(59,130,246,.16));padding:5px 10px;border-radius:8px;letter-spacing:.04em">ADMIN</div></div>
+          <div style="font-size:11px;font-weight:800;color:var(--tm,#6b7484);letter-spacing:.06em;text-transform:uppercase;margin:0 4px 8px">Aparência</div>
+          <div style="background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:16px;padding:14px;margin-bottom:18px"><div style="font-size:13.5px;font-weight:700;color:var(--tx,#f4f6fa);margin-bottom:11px">Tema do aplicativo</div><div style="display:flex;gap:9px"><div onClick="{{ setThemeDark }}" style="flex:1;border-radius:13px;padding:13px 10px;cursor:pointer;border:2px solid {{ darkBorder }};background:#0b0d12;display:flex;flex-direction:column;align-items:center;gap:8px"><span style="width:26px;height:18px;border-radius:5px;background:#15181f;border:1px solid rgba(255,255,255,.12)"></span><div style="display:flex;align-items:center;gap:6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ darkText }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path></svg><span style="font-size:12.5px;font-weight:800;color:{{ darkText }}">Escuro</span></div></div><div onClick="{{ setThemeLight }}" style="flex:1;border-radius:13px;padding:13px 10px;cursor:pointer;border:2px solid {{ lightBorder }};background:#eef0f4;display:flex;flex-direction:column;align-items:center;gap:8px"><span style="width:26px;height:18px;border-radius:5px;background:#fff;border:1px solid rgba(0,0,0,.1)"></span><div style="display:flex;align-items:center;gap:6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ lightText }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.5"></circle><path d="M12 1.5v2.5M12 20v2.5M3.5 12H1M23 12h-2.5M5 5l1.8 1.8M17.2 17.2 19 19M5 19l1.8-1.8M17.2 6.8 19 5"></path></svg><span style="font-size:12.5px;font-weight:800;color:{{ lightText }}">Claro</span></div></div></div></div>
+          <div style="font-size:11px;font-weight:800;color:var(--tm,#6b7484);letter-spacing:.06em;text-transform:uppercase;margin:0 4px 8px">Servidor</div>
+          <div style="background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:16px;overflow:hidden;margin-bottom:18px"><div style="display:flex;align-items:center;gap:13px;padding:14px 15px;border-bottom:1px solid var(--bd,rgba(255,255,255,.07))"><div style="width:34px;height:34px;border-radius:10px;background:var(--acbg,rgba(59,130,246,.16));display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ac,#3b82f6)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"></rect><rect x="3" y="13" width="18" height="7" rx="2"></rect><path d="M7 7.5h.01M7 16.5h.01"></path></svg></div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:var(--tx,#f4f6fa)">URL da API</div><div style="font-size:11.5px;color:var(--ts,#9aa3af);font-weight:600;margin-top:1px">https://drac.local/api</div></div></div><div style="display:flex;align-items:center;gap:13px;padding:14px 15px"><div style="width:34px;height:34px;border-radius:10px;background:rgba(34,197,94,.14);display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ok,#22c55e)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 10 17l9-10"></path></svg></div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:var(--tx,#f4f6fa)">Conexão</div><div style="font-size:11.5px;color:var(--ok,#22c55e);font-weight:700;margin-top:1px">Conectado · 18 ms</div></div></div></div>
+          <div style="font-size:11px;font-weight:800;color:var(--tm,#6b7484);letter-spacing:.06em;text-transform:uppercase;margin:0 4px 8px">Preferências</div>
+          <div style="background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:16px;overflow:hidden;margin-bottom:18px"><div style="display:flex;align-items:center;gap:13px;padding:14px 15px;border-bottom:1px solid var(--bd,rgba(255,255,255,.07))"><div style="width:34px;height:34px;border-radius:10px;background:var(--sf2,#1b1f28);display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ts,#9aa3af)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5a6 6 0 0 1 12 0c0 5.5 2 7 2 7H4s2-1.5 2-7"></path><path d="M10 20a2 2 0 0 0 4 0"></path></svg></div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:var(--tx,#f4f6fa)">Notificações push</div></div><div style="width:46px;height:27px;border-radius:14px;background:var(--ac,#3b82f6);position:relative"><span style="position:absolute;top:2.5px;right:2.5px;width:22px;height:22px;border-radius:50%;background:#fff"></span></div></div><div style="display:flex;align-items:center;gap:13px;padding:14px 15px"><div style="width:34px;height:34px;border-radius:10px;background:var(--sf2,#1b1f28);display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ts,#9aa3af)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="3"></rect><circle cx="12" cy="12.5" r="3.2"></circle></svg></div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:var(--tx,#f4f6fa)">Qualidade de vídeo</div></div><div style="display:flex;align-items:center;gap:6px"><span style="font-size:12.5px;color:var(--ts,#9aa3af);font-weight:700">Auto</span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--tm,#6b7484)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"></path></svg></div></div></div>
+          <div onClick="{{ logout }}" style="cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.28);border-radius:16px;padding:15px;margin-bottom:14px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--dg,#ef4444)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"></path></svg><span style="font-size:14px;font-weight:800;color:var(--dg,#ef4444)">Sair da conta</span></div>
+          <div style="text-align:center;font-size:11.5px;color:var(--tm,#6b7484);font-weight:600">DRAC VMS · versão 2.0.0</div>
+        </div>
+        </sc-if>
+
+      </div>
+
+      <!-- DOWNLOAD BAR (acima da tab bar) -->
+      <sc-if value="{{ showDownloadBar }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;left:0;right:0;bottom:92px;z-index:6;padding:16px 22px;background:linear-gradient(180deg,transparent,var(--bg,#0b0d12) 38%)">
+        <div onClick="{{ downloadSelected }}" style="cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;border-radius:15px;padding:15px;background:linear-gradient(120deg,var(--ac,#3b82f6),var(--ac2,#2563eb));box-shadow:0 14px 30px -10px var(--ac,#3b82f6);opacity:{{ downloadOpacity }}"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 11l5 5 5-5M5 20h14"></path></svg><span style="color:#fff;font-size:15px;font-weight:800">{{ downloadLabel }}</span></div>
+      </div>
+      </sc-if>
+
+      <!-- TAB BAR -->
+      <sc-if value="{{ showTabs }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-around;align-items:flex-start;height:92px;padding:11px 12px 0;background:var(--sf,#15181f);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-top:1px solid var(--bd,rgba(255,255,255,.08))">
+        <div onClick="{{ tabCentral }}" style="cursor:pointer;flex:1;display:flex;flex-direction:column;align-items:center;gap:5px"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="{{ cCentral }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.6 12 3.2l9 7.4"></path><path d="M5.2 9.3V20.4h13.6V9.3"></path></svg><span style="font-size:9.5px;font-weight:700;color:{{ cCentral }}">Central</span></div>
+        <div onClick="{{ tabMosaico }}" style="cursor:pointer;flex:1;display:flex;flex-direction:column;align-items:center;gap:5px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="{{ cMosaico }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.3" height="7.3" rx="2"></rect><rect x="13.7" y="3" width="7.3" height="7.3" rx="2"></rect><rect x="3" y="13.7" width="7.3" height="7.3" rx="2"></rect><rect x="13.7" y="13.7" width="7.3" height="7.3" rx="2"></rect></svg><span style="font-size:9.5px;font-weight:700;color:{{ cMosaico }}">Mosaico</span></div>
+        <div onClick="{{ tabPlayback }}" style="cursor:pointer;flex:1;display:flex;flex-direction:column;align-items:center;gap:5px"><svg width="22" height="22" viewBox="0 0 24 24" fill="{{ cPlayback }}"><path d="M8 5.2c0-.8.9-1.3 1.6-.9l9.2 6.3c.6.4.6 1.4 0 1.8l-9.2 6.3c-.7.4-1.6 0-1.6-.9z"></path></svg><span style="font-size:9.5px;font-weight:700;color:{{ cPlayback }}">Reprodução</span></div>
+        <div onClick="{{ tabAlarmes }}" style="cursor:pointer;flex:1;display:flex;flex-direction:column;align-items:center;gap:5px"><div style="position:relative;height:24px;display:flex;align-items:center;justify-content:center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="{{ cAlarmes }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5a6 6 0 0 1 12 0c0 5.5 2 7 2 7H4s2-1.5 2-7"></path><path d="M10 20a2 2 0 0 0 4 0"></path></svg><div style="position:absolute;top:-5px;right:-9px;min-width:16px;height:16px;border-radius:8px;background:var(--dg,#ef4444);color:#fff;font:800 9px Manrope;display:flex;align-items:center;justify-content:center;padding:0 4px;border:1.5px solid var(--sf,#15181f)">3</div></div><span style="font-size:9.5px;font-weight:700;color:{{ cAlarmes }}">Alarmes</span></div>
+        <div onClick="{{ tabAjustes }}" style="cursor:pointer;flex:1;display:flex;flex-direction:column;align-items:center;gap:5px"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="{{ cAjustes }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"></circle><path d="M12 2.5v2.4M12 19.1v2.4M4.4 4.4l1.7 1.7M17.9 17.9l1.7 1.7M2.5 12h2.4M19.1 12h2.4M4.4 19.6l1.7-1.7M17.9 6.1l1.7-1.7"></path></svg><span style="font-size:9.5px;font-weight:700;color:{{ cAjustes }}">Ajustes</span></div>
+      </div>
+      </sc-if>
+
+      <!-- ===== SHEET: GERENCIAR FAVORITAS ===== -->
+      <sc-if value="{{ sheetFavs }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;inset:0;z-index:30;display:flex;flex-direction:column;justify-content:flex-end">
+        <div onClick="{{ closeSheet }}" style="position:absolute;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(2px)"></div>
+        <div style="position:relative;background:var(--bg,#0b0d12);border-top-left-radius:28px;border-top-right-radius:28px;border:1px solid var(--bd,rgba(255,255,255,.08));border-bottom:none;max-height:78%;display:flex;flex-direction:column;padding:8px 0 26px">
+          <div style="width:40px;height:5px;border-radius:3px;background:var(--bd,rgba(255,255,255,.18));margin:6px auto 12px"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:0 22px 14px"><div style="display:flex;align-items:center;gap:8px"><svg width="18" height="18" viewBox="0 0 24 24" fill="#fbbf24" stroke="#fbbf24" stroke-width="1.6" stroke-linejoin="round"><path d="M12 3.2l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.4 9.3l5.8-.8z"></path></svg><span style="font-size:18px;font-weight:800;color:var(--tx,#f4f6fa)">Favoritas</span></div><div onClick="{{ closeSheet }}" style="cursor:pointer;width:32px;height:32px;border-radius:10px;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));display:flex;align-items:center;justify-content:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ts,#9aa3af)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></div></div>
+          <div style="font-size:12.5px;color:var(--ts,#9aa3af);font-weight:500;padding:0 22px 12px">Toque na estrela para fixar a câmera na Central.</div>
+          <div class="frm" style="overflow:auto;padding:0 22px;display:flex;flex-direction:column;gap:8px">
+            <sc-for list="{{ favCamList }}" as="row" hint-placeholder-count="6">
+              <div style="display:flex;align-items:center;gap:12px;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:14px;padding:10px 12px"><div style="width:42px;height:42px;border-radius:11px;background:{{ row.bg }};flex:none;position:relative"><span style="position:absolute;top:6px;left:6px;width:6px;height:6px;border-radius:50%;background:{{ row.dot }}"></span></div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:var(--tx,#f4f6fa)">{{ row.name }}</div><div style="font-size:11.5px;color:var(--ts,#9aa3af);font-weight:600;margin-top:1px">{{ row.area }}</div></div><div onClick="{{ row.toggle }}" style="cursor:pointer;width:38px;height:38px;border-radius:11px;background:{{ row.btnBg }};border:1px solid {{ row.btnBd }};display:flex;align-items:center;justify-content:center"><svg width="18" height="18" viewBox="0 0 24 24" fill="{{ row.starFill }}" stroke="{{ row.starStroke }}" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.2l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.4 9.3l5.8-.8z"></path></svg></div></div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ===== SHEET: GRUPO (criar/editar) ===== -->
+      <sc-if value="{{ sheetGroup }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;inset:0;z-index:30;display:flex;flex-direction:column;justify-content:flex-end">
+        <div onClick="{{ closeSheet }}" style="position:absolute;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(2px)"></div>
+        <div style="position:relative;background:var(--bg,#0b0d12);border-top-left-radius:28px;border-top-right-radius:28px;border:1px solid var(--bd,rgba(255,255,255,.08));border-bottom:none;max-height:84%;display:flex;flex-direction:column;padding:8px 0 22px">
+          <div style="width:40px;height:5px;border-radius:3px;background:var(--bd,rgba(255,255,255,.18));margin:6px auto 12px"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:0 22px 14px"><span style="font-size:18px;font-weight:800;color:var(--tx,#f4f6fa)">{{ sheetTitle }}</span><div onClick="{{ closeSheet }}" style="cursor:pointer;width:32px;height:32px;border-radius:10px;background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));display:flex;align-items:center;justify-content:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ts,#9aa3af)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></div></div>
+          <div style="padding:0 22px 14px"><div style="font-size:10.5px;font-weight:800;color:var(--tm,#6b7484);letter-spacing:.05em;text-transform:uppercase;margin-bottom:7px">Nome do grupo</div><div style="background:var(--sf,#15181f);border:1px solid var(--bd,rgba(255,255,255,.08));border-radius:13px;padding:13px 15px"><input class="gname" value="{{ groupName }}" onInput="{{ setGroupName }}" placeholder="Ex.: 1º andar" style="width:100%;font-size:15px;font-weight:700;color:var(--tx,#f4f6fa)"></div></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:0 22px 9px"><span style="font-size:10.5px;font-weight:800;color:var(--tm,#6b7484);letter-spacing:.05em;text-transform:uppercase">Câmeras</span><span style="font-size:11.5px;font-weight:700;color:var(--ac,#3b82f6)">{{ draftCountLabel }}</span></div>
+          <div class="frm" style="overflow:auto;padding:0 22px;display:flex;flex-direction:column;gap:8px">
+            <sc-for list="{{ groupCamList }}" as="row" hint-placeholder-count="6">
+              <div onClick="{{ row.toggle }}" style="cursor:pointer;display:flex;align-items:center;gap:12px;background:{{ row.rowBg }};border:1px solid {{ row.rowBd }};border-radius:14px;padding:10px 12px"><div style="width:42px;height:42px;border-radius:11px;background:{{ row.bg }};flex:none"></div><div style="flex:1"><div style="font-size:13.5px;font-weight:700;color:var(--tx,#f4f6fa)">{{ row.name }}</div><div style="font-size:11.5px;color:var(--ts,#9aa3af);font-weight:600;margin-top:1px">{{ row.area }}</div></div><div style="width:26px;height:26px;border-radius:8px;background:{{ row.boxBg }};border:2px solid {{ row.boxBd }};display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="opacity:{{ row.checkOpacity }}"><path d="M20 6L9 17l-5-5"></path></svg></div></div>
+            </sc-for>
+          </div>
+          <div style="display:flex;gap:10px;padding:14px 22px 0">
+            <sc-if value="{{ groupIsEditing }}" hint-placeholder-val="{{ false }}">
+            <div onClick="{{ deleteGroup }}" style="cursor:pointer;flex:none;width:50px;border-radius:14px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.28);display:flex;align-items:center;justify-content:center"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--dg,#ef4444)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"></path></svg></div>
+            </sc-if>
+            <div onClick="{{ saveGroup }}" style="cursor:pointer;flex:1;text-align:center;border-radius:14px;padding:15px;background:linear-gradient(120deg,var(--ac,#3b82f6),var(--ac2,#2563eb));color:#fff;font-size:15px;font-weight:800;box-shadow:0 12px 26px -10px var(--ac,#3b82f6)">{{ saveLabel }}</div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:520,&quot;height&quot;:960},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#3b82f6&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;showAlerts&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+class Component extends DCLogic {
+  state = {
+    screen: 'login',
+    theme: this.props.theme || 'dark',
+    live: false,
+    cameraName: 'Entrada Principal',
+    cameraMeta: 'Recepção · WebRTC · 1080p',
+    liveId: null,
+    favs: ['c1', 'c2', 'c4', 'c10'],
+    selectedGroup: 'all',
+    sheet: null,            // null | 'favs' | 'group'
+    recSelectMode: false,
+    recSelected: [],
+    groupEditing: false,
+    draftId: null,
+    draftName: '',
+    draftCams: [],
+    groups: [
+      { id: 'g1', name: '1º andar', cameraIds: ['c1', 'c2', 'c3'] },
+      { id: 'g2', name: '2º andar', cameraIds: ['c4', 'c5', 'c6'] },
+      { id: 'g3', name: '3º andar', cameraIds: ['c7', 'c8', 'c9'] },
+      { id: 'g4', name: '4º andar', cameraIds: ['c10', 'c11', 'c12'] },
+    ],
+  };
+
+  cams() {
+    return [
+      { id: 'c1', name: 'Entrada Principal', area: '1º andar', res: '1080p', status: 'online', rec: true, bg: 'linear-gradient(160deg,#1f2937,#0f172a)' },
+      { id: 'c2', name: 'Recepção', area: '1º andar', res: '1080p', status: 'online', rec: true, bg: 'linear-gradient(160deg,#2b2733,#13111a)' },
+      { id: 'c3', name: 'Corredor A', area: '1º andar', res: '720p', status: 'online', rec: false, bg: 'linear-gradient(160deg,#243044,#101826)' },
+      { id: 'c4', name: 'Sala 201', area: '2º andar', res: '1080p', status: 'online', rec: true, bg: 'linear-gradient(160deg,#1e2b29,#0c1413)' },
+      { id: 'c5', name: 'Copa', area: '2º andar', res: '720p', status: 'online', rec: false, bg: 'linear-gradient(160deg,#26223a,#120f1f)' },
+      { id: 'c6', name: 'Corredor B', area: '2º andar', res: '720p', status: 'offline', rec: false, bg: 'linear-gradient(160deg,#2a2433,#141019)' },
+      { id: 'c7', name: 'Sala 301', area: '3º andar', res: '1080p', status: 'online', rec: false, bg: 'linear-gradient(160deg,#203a3a,#0c1a1a)' },
+      { id: 'c8', name: 'Depósito', area: '3º andar', res: '—', status: 'nosignal', rec: false, bg: '#0d0f14' },
+      { id: 'c9', name: 'Almoxarifado', area: '3º andar', res: '1080p', status: 'online', rec: true, bg: 'linear-gradient(160deg,#243044,#101826)' },
+      { id: 'c10', name: 'Estacionamento', area: '4º andar', res: '1080p', status: 'online', rec: true, bg: 'linear-gradient(160deg,#243044,#101826)' },
+      { id: 'c11', name: 'Pátio Externo', area: '4º andar', res: '1080p', status: 'online', rec: false, bg: 'linear-gradient(160deg,#1e2b29,#0c1413)' },
+      { id: 'c12', name: 'Terraço', area: '4º andar', res: '1080p', status: 'online', rec: false, bg: 'linear-gradient(160deg,#27313f,#101722)' },
+    ];
+  }
+  camById(id) { return this.cams().find((c) => c.id === id); }
+  recordings() {
+    return [
+      { id: 'r1', range: '14:12 – 14:48', duration: '36 min', kind: 'MOVIMENTO', size: '512 MB', bg: 'linear-gradient(160deg,#243044,#101826)' },
+      { id: 'r2', range: '11:30 – 12:05', duration: '35 min', kind: 'CONTÍNUA', size: '498 MB', bg: 'linear-gradient(160deg,#1f2937,#0f172a)' },
+      { id: 'r3', range: '09:02 – 09:24', duration: '22 min', kind: 'MOVIMENTO', size: '310 MB', bg: 'linear-gradient(160deg,#2b2733,#13111a)' },
+      { id: 'r4', range: '07:40 – 08:15', duration: '35 min', kind: 'CONTÍNUA', size: '486 MB', bg: 'linear-gradient(160deg,#1e2b29,#0c1413)' },
+    ];
+  }
+  toggleRec(id) {
+    this.setState((s) => ({ recSelected: s.recSelected.includes(id) ? s.recSelected.filter((x) => x !== id) : [...s.recSelected, id] }));
+  }
+
+  hexToRgba(hex, a) {
+    const m = hex.replace('#', '');
+    const r = parseInt(m.substring(0, 2), 16), g = parseInt(m.substring(2, 4), 16), b = parseInt(m.substring(4, 6), 16);
+    return `rgba(${r},${g},${b},${a})`;
+  }
+  vars(theme, ac) {
+    const acDark = { '#3b82f6': '#2563eb', '#06b6d4': '#0891b2', '#22c55e': '#16a34a', '#8b5cf6': '#7c3aed' }[ac] || '#2563eb';
+    const base = theme === 'light'
+      ? { '--bg': '#eef0f4', '--sf': '#ffffff', '--sf2': '#f5f6f9', '--bd': 'rgba(15,23,42,.09)', '--tx': '#0d1117', '--ts': '#5b6573', '--tm': '#9aa3af' }
+      : { '--bg': '#0b0d12', '--sf': '#15181f', '--sf2': '#1b1f28', '--bd': 'rgba(255,255,255,.08)', '--tx': '#f4f6fa', '--ts': '#9aa3af', '--tm': '#6b7484' };
+    return { ...base, '--ac': ac, '--ac2': acDark, '--acbg': this.hexToRgba(ac, theme === 'light' ? 0.1 : 0.16), '--ok': '#22c55e', '--dg': '#ef4444', '--wn': '#f59e0b' };
+  }
+  go(screen) { this.setState({ screen, live: false, sheet: null }); }
+  openLive(cam) { this.setState({ live: true, liveId: cam.id, cameraName: cam.name, cameraMeta: `${cam.area} · WebRTC · ${cam.res}` }); }
+  toggleFav(id) {
+    this.setState((s) => ({ favs: s.favs.includes(id) ? s.favs.filter((x) => x !== id) : [...s.favs, id] }));
+  }
+  dotFor(status) { return status === 'online' ? 'var(--ok,#22c55e)' : status === 'offline' ? 'var(--dg,#ef4444)' : '#4b5563'; }
+
+  mk(cam) {
+    const fav = this.state.favs.includes(cam.id);
+    return {
+      id: cam.id, name: cam.name, area: cam.area, bg: cam.bg,
+      sub: `${cam.area} · ${cam.res}`,
+      online: cam.status === 'online', offline: cam.status === 'offline', nosignal: cam.status === 'nosignal',
+      dot: this.dotFor(cam.status),
+      nameColor: cam.status === 'nosignal' ? '#5b6573' : '#fff',
+      starFill: fav ? '#fbbf24' : 'none',
+      starStroke: fav ? '#fbbf24' : '#fff',
+      open: () => this.openLive(cam),
+      toggleFav: (e) => { if (e && e.stopPropagation) e.stopPropagation(); this.toggleFav(cam.id); },
+    };
+  }
+
+  saveGroup() {
+    const name = (this.state.draftName || '').trim() || 'Novo grupo';
+    const cams = this.state.draftCams;
+    if (this.state.groupEditing) {
+      const id = this.state.draftId;
+      this.setState((s) => ({
+        groups: s.groups.map((g) => (g.id === id ? { ...g, name, cameraIds: cams } : g)),
+        sheet: null, selectedGroup: id,
+      }));
+    } else {
+      const id = 'g' + Date.now();
+      this.setState((s) => ({
+        groups: [...s.groups, { id, name, cameraIds: cams }],
+        sheet: null, selectedGroup: id,
+      }));
+    }
+  }
+  deleteGroup() {
+    const id = this.state.draftId;
+    this.setState((s) => ({ groups: s.groups.filter((g) => g.id !== id), sheet: null, selectedGroup: 'all' }));
+  }
+
+  renderVals() {
+    const { screen, theme, live, favs, selectedGroup, groups, sheet } = this.state;
+    const ac = this.props.accent || '#3b82f6';
+    const baseVars = this.vars(theme, ac);
+    const frameVars = live
+      ? { ...baseVars, '--sf': 'rgba(255,255,255,.08)', '--sf2': 'rgba(255,255,255,.06)', '--tx': '#ffffff', '--ts': 'rgba(255,255,255,.65)', '--tm': 'rgba(255,255,255,.5)', '--bd': 'rgba(255,255,255,.12)' }
+      : baseVars;
+    const bg = live ? '#070809' : (theme === 'light' ? '#eef0f4' : '#0b0d12');
+    const frameStyle = { ...frameVars, position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: bg, fontFamily: 'Manrope, system-ui, sans-serif' };
+    const tc = (s) => (!live && screen === s ? ac : (theme === 'light' ? '#9aa3af' : '#6b7484'));
+    const isDark = theme !== 'light';
+    const allCams = this.cams();
+    const mutedChip = theme === 'light' ? '#5b6573' : '#9aa3af';
+
+    // favorites
+    const favCams = favs.map((id) => this.camById(id)).filter(Boolean);
+    const favGrid = favCams.slice(0, 4).map((c) => this.mk(c));
+
+    // recordings (playback)
+    const recordings = this.recordings();
+    const recSel = this.state.recSelected;
+    const recSelectActive = this.state.recSelectMode;
+    const recList = recordings.map((r) => {
+      const checked = recSel.includes(r.id);
+      const isMov = r.kind === 'MOVIMENTO';
+      return {
+        id: r.id, range: r.range, duration: r.duration, kind: r.kind, size: r.size, bg: r.bg,
+        tagColor: isMov ? 'var(--wn,#f59e0b)' : 'var(--ts,#9aa3af)',
+        tagBg: isMov ? 'rgba(245,158,11,.14)' : 'var(--sf2,#1b1f28)',
+        rowBg: recSelectActive && checked ? 'var(--acbg,rgba(59,130,246,.16))' : 'var(--sf,#15181f)',
+        rowBd: recSelectActive && checked ? ac : 'var(--bd,rgba(255,255,255,.08))',
+        boxBg: checked ? ac : 'transparent',
+        boxBd: checked ? ac : 'var(--bd,rgba(255,255,255,.22))',
+        checkOpacity: checked ? 1 : 0,
+        onTap: () => recSelectActive ? this.toggleRec(r.id) : this.openLive(this.camById('c1')),
+      };
+    });
+    const allRecSelected = recSel.length === recordings.length && recordings.length > 0;
+
+    // mosaico
+    const group = groups.find((g) => g.id === selectedGroup);
+    const filtered = selectedGroup === 'all' ? allCams : allCams.filter((c) => group && group.cameraIds.includes(c.id));
+    const filteredCams = filtered.map((c) => this.mk(c));
+
+    // chips
+    const chips = [{ id: 'all', name: 'Todas' }, ...groups].map((g) => {
+      const on = selectedGroup === g.id;
+      return {
+        label: g.name,
+        bg: on ? ac : 'var(--sf,#15181f)',
+        color: on ? '#fff' : mutedChip,
+        bd: on ? ac : 'var(--bd,rgba(255,255,255,.08))',
+        select: () => this.setState({ selectedGroup: g.id }),
+      };
+    });
+    const groupSelected = selectedGroup !== 'all' && !!group;
+    const groupCountLabel = group ? `${group.cameraIds.length} câmera${group.cameraIds.length === 1 ? '' : 's'} neste grupo` : '';
+
+    // sheets — favorites manager list
+    const favCamList = allCams.map((c) => {
+      const fav = favs.includes(c.id);
+      return {
+        name: c.name, area: c.area, bg: c.bg, dot: this.dotFor(c.status),
+        starFill: fav ? '#fbbf24' : 'none', starStroke: fav ? '#fbbf24' : (isDark ? '#6b7484' : '#9aa3af'),
+        btnBg: fav ? 'rgba(251,191,36,.14)' : 'var(--sf2,#1b1f28)',
+        btnBd: fav ? 'rgba(251,191,36,.4)' : 'var(--bd,rgba(255,255,255,.08))',
+        toggle: () => this.toggleFav(c.id),
+      };
+    });
+
+    // sheets — group editor list
+    const draftCams = this.state.draftCams;
+    const groupCamList = allCams.map((c) => {
+      const checked = draftCams.includes(c.id);
+      return {
+        name: c.name, area: c.area, bg: c.bg,
+        checked,
+        rowBg: checked ? 'var(--acbg,rgba(59,130,246,.16))' : 'var(--sf,#15181f)',
+        rowBd: checked ? ac : 'var(--bd,rgba(255,255,255,.08))',
+        boxBg: checked ? ac : 'transparent',
+        boxBd: checked ? ac : 'var(--bd,rgba(255,255,255,.22))',
+        checkOpacity: checked ? 1 : 0,
+        toggle: () => this.setState((s) => ({ draftCams: s.draftCams.includes(c.id) ? s.draftCams.filter((x) => x !== c.id) : [...s.draftCams, c.id] })),
+      };
+    });
+
+    const liveFav = favs.includes(this.state.liveId);
+
+    return {
+      frameStyle,
+      isLogin: screen === 'login' && !live,
+      isCentral: screen === 'central' && !live,
+      isMosaico: screen === 'mosaico' && !live,
+      isPlayback: screen === 'reproducao' && !live,
+      isAlarmes: screen === 'alarmes' && !live,
+      isAjustes: screen === 'ajustes' && !live,
+      isLive: live,
+      showTabs: !live && screen !== 'login',
+      showAlerts: this.props.showAlerts !== false,
+      cameraName: this.state.cameraName,
+      cameraMeta: this.state.cameraMeta,
+      // stats
+      nOnline: allCams.filter((c) => c.status === 'online').length,
+      nOffline: allCams.filter((c) => c.status !== 'online').length,
+      nRec: allCams.filter((c) => c.rec).length,
+      // favorites
+      favHasAny: favCams.length > 0,
+      favEmpty: favCams.length === 0,
+      favGrid,
+      // playback recordings + selection
+      recList,
+      recSelectActive,
+      recBrowseActive: !recSelectActive,
+      selectModeLabel: recSelectActive ? 'Cancelar' : 'Selecionar',
+      selectModeColor: recSelectActive ? 'var(--dg,#ef4444)' : 'var(--ac,#3b82f6)',
+      allSelBg: allRecSelected ? ac : 'transparent',
+      allSelBd: allRecSelected ? ac : 'var(--bd,rgba(255,255,255,.22))',
+      allSelOpacity: allRecSelected ? 1 : 0,
+      showDownloadBar: recSelectActive,
+      downloadOpacity: recSel.length ? 1 : 0.45,
+      downloadLabel: recSel.length ? `Baixar ${recSel.length} ${recSel.length === 1 ? 'gravação' : 'gravações'}` : 'Selecione gravações',
+      toggleSelectMode: () => this.setState((s) => ({ recSelectMode: !s.recSelectMode, recSelected: [] })),
+      toggleSelectAll: () => this.setState((s) => ({ recSelected: s.recSelected.length === this.recordings().length ? [] : this.recordings().map((r) => r.id) })),
+      downloadSelected: () => { if (this.state.recSelected.length) this.setState({ recSelectMode: false, recSelected: [] }); },
+      // mosaico
+      chips, filteredCams, groupSelected, groupCountLabel,
+      // sheets
+      sheetFavs: sheet === 'favs',
+      sheetGroup: sheet === 'group',
+      favCamList, groupCamList,
+      groupName: this.state.draftName,
+      groupIsEditing: this.state.groupEditing,
+      sheetTitle: this.state.groupEditing ? 'Editar grupo' : 'Novo grupo',
+      saveLabel: this.state.groupEditing ? 'Salvar alterações' : 'Criar grupo',
+      draftCountLabel: `${draftCams.length} selecionada${draftCams.length === 1 ? '' : 's'}`,
+      // live star
+      liveStarFill: liveFav ? '#fbbf24' : 'none',
+      liveStarStroke: liveFav ? '#fbbf24' : '#fff',
+      toggleLiveFav: () => this.toggleFav(this.state.liveId),
+      // nav
+      goApp: () => this.setState({ screen: 'central', live: false }),
+      logout: () => this.setState({ screen: 'login', live: false, sheet: null }),
+      closeLive: () => this.setState({ live: false }),
+      closeSheet: () => this.setState({ sheet: null }),
+      tabCentral: () => this.go('central'),
+      tabMosaico: () => this.go('mosaico'),
+      tabPlayback: () => this.go('reproducao'),
+      tabAlarmes: () => this.go('alarmes'),
+      tabAjustes: () => this.go('ajustes'),
+      openFavsSheet: () => this.setState({ sheet: 'favs' }),
+      openNewGroup: () => this.setState({ sheet: 'group', groupEditing: false, draftId: null, draftName: '', draftCams: [] }),
+      openEditGroup: () => this.setState((s) => {
+        const g = s.groups.find((x) => x.id === s.selectedGroup);
+        return g ? { sheet: 'group', groupEditing: true, draftId: g.id, draftName: g.name, draftCams: [...g.cameraIds] } : {};
+      }),
+      setGroupName: (e) => this.setState({ draftName: e.target.value }),
+      saveGroup: () => this.saveGroup(),
+      deleteGroup: () => this.deleteGroup(),
+      // playback/alarmes camera opens
+      openEntrada: () => this.openLive(this.camById('c1')),
+      openEstacionamento: () => this.openLive(this.camById('c10')),
+      toggleRec: (id) => this.toggleRec(id),
+      // theme
+      setThemeDark: () => this.setState({ theme: 'dark' }),
+      setThemeLight: () => this.setState({ theme: 'light' }),
+      darkBorder: isDark ? ac : 'transparent',
+      lightBorder: isDark ? 'transparent' : ac,
+      darkText: isDark ? ac : '#5b6573',
+      lightText: isDark ? '#9aa3af' : ac,
+      // tab colors
+      cCentral: tc('central'), cMosaico: tc('mosaico'), cPlayback: tc('reproducao'), cAlarmes: tc('alarmes'), cAjustes: tc('ajustes'),
+    };
+  }
+}
+</script>
+</body>
+</html>

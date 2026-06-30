@@ -45,6 +45,19 @@ const ALLOWED_ORIGINS = String(process.env.DRAC_CENTRAL_ALLOWED_ORIGINS || '*')
   .filter(Boolean);
 const loginAttempts = new Map();
 
+// Build-agent (gera os APKs white-label). Roda no HOST; a Central fala com ele
+// pela gateway da bridge Docker. Token compartilhado (nunca exposto ao browser).
+const APP_BUILDER_AGENT_URL = String(process.env.APP_BUILDER_AGENT_URL || '').replace(/\/+$/, '');
+const APP_BUILDER_AGENT_TOKEN = String(process.env.APP_BUILDER_AGENT_TOKEN || '');
+// De onde a Central busca o APK publicado p/ reentregar com nome amigável.
+// Mesma gateway usada p/ o agente; o web publica os APKs em /apk no :5173.
+const APK_SOURCE_BASE = String(process.env.APK_SOURCE_BASE || 'http://172.17.0.1:5173').replace(/\/+$/, '');
+
+// Jobs de instalação remota via SSH (em memória; o log é volátil por design —
+// nunca persiste credenciais). jobId -> { id, installationId, status, log, ... }
+const remoteInstalls = new Map();
+const REMOTE_INSTALL_KEEP = 30;
+
 function securityHeaders(req) {
   const origin = String(req?.headers?.origin || '');
   const allowAnyOrigin = ALLOWED_ORIGINS.includes('*');
@@ -95,24 +108,65 @@ async function readBody(req) {
   return JSON.parse(raw);
 }
 
+function parseDbText(raw) {
+  if (!raw || !raw.trim()) return null;
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object') return null;
+  return parsed;
+}
+
+function normalizeDb(parsed) {
+  if (!parsed || typeof parsed !== 'object') parsed = {};
+  if (!parsed.installations || typeof parsed.installations !== 'object') parsed.installations = {};
+  if (!parsed.sessions || typeof parsed.sessions !== 'object') parsed.sessions = {};
+  if (!parsed.users || typeof parsed.users !== 'object') parsed.users = {};
+  return parsed;
+}
+
+// loadDb NUNCA lança: arquivo corrompido derrubava o processo em qualquer request
+// (login/heartbeat) num loop de crash. Agora cai pro .bak e, em último caso, isola
+// o arquivo corrompido e começa limpo — a Central continua de pé.
 async function loadDb() {
   try {
     const raw = await fs.readFile(DATA_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!parsed.installations || typeof parsed.installations !== 'object') {
-      return { installations: {}, sessions: {} };
-    }
-    if (!parsed.sessions || typeof parsed.sessions !== 'object') parsed.sessions = {};
-    return parsed;
+    const parsed = parseDbText(raw);
+    if (parsed) return normalizeDb(parsed);
   } catch (error) {
-    if (error && error.code === 'ENOENT') return { installations: {}, sessions: {} };
-    throw error;
+    if (error && error.code === 'ENOENT') return normalizeDb({});
+    console.error(`[central] ${DATA_FILE} ilegível/corrompido: ${error.message}`);
   }
+  // Tentativa de recuperação pelo backup conhecido-bom.
+  try {
+    const bak = await fs.readFile(`${DATA_FILE}.bak`, 'utf8');
+    const parsed = parseDbText(bak);
+    if (parsed) {
+      console.error('[central] recuperado a partir de .bak');
+      return normalizeDb(parsed);
+    }
+  } catch { /* sem backup utilizável */ }
+  // Último recurso: isola o arquivo corrompido e segue com base limpa.
+  try {
+    if (fsSync.existsSync(DATA_FILE)) {
+      const quarantine = `${DATA_FILE}.corrupt-${Date.now()}`;
+      await fs.copyFile(DATA_FILE, quarantine);
+      console.error(`[central] arquivo corrompido isolado em ${quarantine}; iniciando base limpa`);
+    }
+  } catch { /* ignore */ }
+  return normalizeDb({});
 }
 
+// saveDb atômico: grava em .tmp e faz rename (atômico no mesmo FS), evitando o
+// arquivo meio-escrito que corrompia em crash/escrita concorrente. Antes de
+// sobrescrever, guarda o último estado VÁLIDO em .bak (rede de segurança).
 async function saveDb(db) {
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
-  await fs.writeFile(DATA_FILE, JSON.stringify(db, null, 2));
+  try {
+    const current = await fs.readFile(DATA_FILE, 'utf8');
+    if (parseDbText(current)) await fs.writeFile(`${DATA_FILE}.bak`, current);
+  } catch { /* sem arquivo atual ainda, ou ilegível: ignora o backup */ }
+  const tmp = `${DATA_FILE}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(db, null, 2));
+  await fs.rename(tmp, DATA_FILE);
 }
 
 function timingSafeTextEquals(a, b) {
@@ -129,6 +183,25 @@ function verifyPassword(password, encodedHash) {
   if (!Number.isFinite(iterations) || iterations < 100000) return false;
   const derived = crypto.pbkdf2Sync(String(password || ''), salt, iterations, 32, 'sha256').toString('hex');
   return timingSafeTextEquals(derived, hash);
+}
+
+function hashPassword(password) {
+  const iterations = 210000;
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(String(password || ''), salt, iterations, 32, 'sha256').toString('hex');
+  return `pbkdf2_sha256$${iterations}$${salt}$${hash}`;
+}
+
+// Autentica contra o admin do .env OU um usuário cadastrado (db.users).
+function authenticate(db, email, password) {
+  if (ADMIN_PASSWORD_HASH && email === ADMIN_EMAIL && verifyPassword(password, ADMIN_PASSWORD_HASH)) {
+    return { email: ADMIN_EMAIL, name: 'Administrador', builtin: true };
+  }
+  const u = db.users && db.users[email];
+  if (u && verifyPassword(password, u.passwordHash)) {
+    return { email, name: u.name || email, builtin: false };
+  }
+  return null;
 }
 
 function parseCookies(req) {
@@ -323,7 +396,8 @@ async function handleLogin(req, res) {
     await saveDb(db);
     return json(req, res, 429, { error: 'too_many_attempts', message: 'Muitas tentativas. Aguarde alguns minutos e tente novamente.' });
   }
-  if (!ADMIN_PASSWORD_HASH || email !== ADMIN_EMAIL || !verifyPassword(password, ADMIN_PASSWORD_HASH)) {
+  const account = authenticate(db, email, password);
+  if (!account) {
     recordLoginFailure(limit.key, limit.entry);
     addAuditEvent(db, req, { type: 'auth.login_failed', actor: email || 'unknown', result: 'denied' });
     await saveDb(db);
@@ -335,12 +409,12 @@ async function handleLogin(req, res) {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + SESSION_TTL_MS);
   db.sessions[sessionHash(token)] = {
-    email: ADMIN_EMAIL,
+    email: account.email,
     createdAt: now.toISOString(),
     lastSeenAt: now.toISOString(),
     expiresAt: expiresAt.toISOString(),
   };
-  addAuditEvent(db, req, { type: 'auth.login_success', actor: ADMIN_EMAIL, result: 'accepted' });
+  addAuditEvent(db, req, { type: 'auth.login_success', actor: account.email, result: 'accepted' });
   await saveDb(db);
 
   return json(
@@ -348,7 +422,7 @@ async function handleLogin(req, res) {
     res,
     200,
     {
-      user: { email: ADMIN_EMAIL, role: 'ADMIN' },
+      user: { email: account.email, name: account.name, role: 'ADMIN' },
       expiresAt: expiresAt.toISOString(),
     },
     { 'set-cookie': sessionCookie(token, Math.floor(SESSION_TTL_MS / 1000)) },
@@ -465,6 +539,7 @@ function publicInstallation(item) {
     provisionedAt: item.provisionedAt || null,
     provisionedBy: item.provisionedBy || null,
     provisionedServerAddress: item.provisionedServerAddress || null,
+    app: item.app || null,
     updatedAt: item.updatedAt || null,
   };
 }
@@ -695,6 +770,10 @@ async function handleHeartbeat(req, res) {
     ...existing,
     id: installationId,
     licenseKey: expectedKey,
+    // IP de onde o cliente envia heartbeat — usado p/ derivar o servidor da API
+    // ao gerar o app automaticamente, quando não há endereço cadastrado.
+    observedAddress: clientIp(req) || existing.observedAddress || null,
+    reportedApiUrl: body.installation?.apiUrl || body.apiUrl || existing.reportedApiUrl || null,
     name: body.installation?.name || existing.name || installationId,
     customerName: body.installation?.customerName || existing.customerName || null,
     launchProfile: body.installation?.launchProfile || metrics.launchProfile || existing.launchProfile || null,
@@ -861,6 +940,348 @@ async function serveStatic(req, res) {
   }
 }
 
+// ── Proxy para o build-agent (geração de APK) ───────────────────────────────
+async function agentFetch(pathname, init = {}) {
+  if (!APP_BUILDER_AGENT_URL) {
+    const err = new Error('Build-agent não configurado (APP_BUILDER_AGENT_URL vazio).');
+    err.statusCode = 503;
+    throw err;
+  }
+  const res = await fetch(`${APP_BUILDER_AGENT_URL}${pathname}`, {
+    ...init,
+    headers: {
+      'content-type': 'application/json',
+      'x-build-token': APP_BUILDER_AGENT_TOKEN,
+      ...(init.headers || {}),
+    },
+  });
+  const raw = await res.text();
+  let data;
+  try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
+  return { status: res.status, data };
+}
+
+// ── Geração automática de app por cliente ────────────────────────────────────
+function clientIp(req) {
+  const xff = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
+  let ip = xff || req?.socket?.remoteAddress || '';
+  return ip.replace(/^::ffff:/, '');
+}
+
+// Converte um endereço (host, host:porta ou URL) na URL da API do DRAC. Layout
+// padrão: web/API atrás do nginx em :5173 com a API em /api.
+function addrToApiUrl(addr) {
+  let a = String(addr || '').trim();
+  if (!a) return '';
+  if (/^https?:\/\//i.test(a)) return a.replace(/\/+$/, '').replace(/\/api$/i, '') + '/api';
+  if (/:\d+$/.test(a)) return `http://${a}/api`;
+  return `http://${a}:5173/api`;
+}
+
+// Descobre a URL da API do cliente a partir do que a Central já sabe, em ordem
+// de confiança: URL reportada > endereço do provisionamento > IP observado no
+// heartbeat > IP embutido no id (ex.: drac-local-168-194-13-70).
+function deriveClientApiUrl(item) {
+  if (item.reportedApiUrl) return addrToApiUrl(item.reportedApiUrl);
+  if (item.apiUrl) return addrToApiUrl(item.apiUrl);
+  if (item.provisionedServerAddress) return addrToApiUrl(item.provisionedServerAddress);
+  if (item.observedAddress) return addrToApiUrl(item.observedAddress);
+  const m = String(item.id || '').match(/(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})$/);
+  if (m) return addrToApiUrl(`${m[1]}.${m[2]}.${m[3]}.${m[4]}`);
+  return '';
+}
+
+// Slug estável e único por instalação (1 app por cliente). a-z 0-9 -, máx 39.
+function deriveAppSlug(item) {
+  let s = String(item.id || '').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  if (s.length < 2) s = `app-${s || 'cliente'}`;
+  return s.slice(0, 39);
+}
+
+// Segmento de package Android válido a partir de um texto livre.
+function sanitizePkgSegment(s) {
+  let seg = String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!seg) seg = 'app';
+  if (!/^[a-z]/.test(seg)) seg = `a${seg}`;
+  return seg.slice(0, 40);
+}
+
+// Package ID padrão LIMPO, derivado do NOME do cliente (não do id com IP).
+// Ex.: "DRAC Local" → com.ajustconsulting.draclocal. Editável por cliente.
+function deriveAppPackageId(item) {
+  return `com.ajustconsulting.${sanitizePkgSegment(item.customerName || item.name || item.id)}`;
+}
+
+const PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
+
+// Nome e package efetivos (override do usuário tem prioridade sobre o padrão).
+function effectiveAppName(item) {
+  return (item.app && item.app.appName) || item.customerName || item.name || deriveAppSlug(item);
+}
+function effectiveAppPackageId(item) {
+  return (item.app && item.app.packageId) || deriveAppPackageId(item);
+}
+
+// Nome de arquivo seguro p/ o download (ASCII), derivado do nome do app.
+function safeApkFilename(name) {
+  let n = String(name || 'app').normalize('NFKD').replace(/[^\w.\- ]/g, '').trim().replace(/\s+/g, '-');
+  return `${n || 'app'}.apk`;
+}
+
+async function fetchClientBranding(apiUrl) {
+  try {
+    const res = await fetch(`${apiUrl}/settings/branding`, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+
+// Monta o cliente no build-agent a partir do cadastro do cliente + puxa logo/cor
+// do próprio sistema dele, e dispara o build. SEM digitação manual.
+async function handleGenerateApp(req, res, db, actor, installationId) {
+  const item = db.installations[installationId];
+  if (!item) return json(req, res, 404, { error: 'installation_not_found' });
+  const apiUrl = deriveClientApiUrl(item);
+  if (!apiUrl) {
+    return json(req, res, 400, {
+      error: 'no_server_address',
+      message: 'A Central ainda não conhece o servidor deste cliente. Provisione pela aba Instalação ou aguarde o primeiro heartbeat.',
+    });
+  }
+  const slug = deriveAppSlug(item);
+  const appName = effectiveAppName(item);
+  const packageId = effectiveAppPackageId(item);
+  const branding = await fetchClientBranding(apiUrl);
+  const payload = { slug, appName, apiUrl, packageId };
+  if (branding) {
+    if (branding.brandPrimaryColor) payload.primaryColor = branding.brandPrimaryColor;
+    if (branding.brandLogoDataUrl) payload.logoBase64 = branding.brandLogoDataUrl;
+  }
+  const created = await agentFetch('/clients', { method: 'POST', body: JSON.stringify(payload) });
+  if (created.status >= 400) return json(req, res, created.status, created.data);
+  const build = await agentFetch('/builds', { method: 'POST', body: JSON.stringify({ slug }) });
+  addAuditEvent(db, req, { type: 'apk.build_started', actor: actor.email, result: build.status < 400 ? 'accepted' : 'denied', installationId });
+  item.app = { ...(item.app || {}), slug, apiUrl, appName, packageId, brandingApplied: !!branding, lastBuildJobId: build.data?.jobId || null, lastBuildAt: new Date().toISOString() };
+  await saveDb(db);
+  return json(req, res, build.status, { slug, apiUrl, packageId, brandingApplied: !!branding, ...build.data });
+}
+
+// Edita nome de exibição e/ou package ID do app (antes de publicar). NÃO builda.
+async function handlePatchApp(req, res, db, actor, installationId) {
+  const item = db.installations[installationId];
+  if (!item) return json(req, res, 404, { error: 'installation_not_found' });
+  const body = await readBody(req);
+  const appName = String(body.appName || '').trim();
+  const packageId = String(body.packageId || '').trim();
+  if (packageId && !PKG_RE.test(packageId)) {
+    return json(req, res, 400, { error: 'invalid_package', message: 'Pacote inválido. Use o formato com.empresa.app (letras, números, pontos).' });
+  }
+  item.app = item.app || { slug: deriveAppSlug(item), apiUrl: deriveClientApiUrl(item) };
+  if (appName) item.app.appName = appName;
+  if (packageId) item.app.packageId = packageId;
+  addAuditEvent(db, req, { type: 'apk.app_edited', actor: actor.email, result: 'accepted', installationId });
+  await saveDb(db);
+  return json(req, res, 200, { app: item.app, appName: effectiveAppName(item), packageId: effectiveAppPackageId(item) });
+}
+
+async function handleInstallationApp(req, res, db, installationId) {
+  const item = db.installations[installationId];
+  if (!item) return json(req, res, 404, { error: 'installation_not_found' });
+  const slug = deriveAppSlug(item);
+  let client = null;
+  try {
+    const r = await agentFetch('/clients');
+    client = (r.data?.clients || []).find((c) => c.slug === slug) || null;
+  } catch { /* agente indisponível */ }
+  return json(req, res, 200, {
+    slug,
+    apiUrl: deriveClientApiUrl(item),
+    appName: effectiveAppName(item),
+    packageId: effectiveAppPackageId(item),
+    client,
+  });
+}
+
+// ── Instalação remota via SSH ────────────────────────────────────────────────
+// Monta o comando de instalação numa única linha (para `conn.exec`). Em Debian/
+// Ubuntu instala o curl se faltar; outras distros precisam de curl pré-instalado.
+function buildRemoteInstallCommand(item, centralUrl) {
+  const q = (v) => `'${String(v ?? '').replace(/'/g, `'\\''`)}'`;
+  const envs = [
+    `DRAC_CUSTOMER_NAME=${q(item.customerName || item.id)}`,
+    `DRAC_INSTALLATION_ID=${q(item.id)}`,
+    `DRAC_LICENSE_KEY=${q(item.licenseKey)}`,
+    `DRAC_CENTRAL_URL=${q(centralUrl)}`,
+    `DRAC_SERVER_IP=${q(item.provisionedServerAddress || '')}`,
+    'DRAC_AUTO_YES=true',
+  ].join(' ');
+  const ensureCurl = '(command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl))';
+  return `${ensureCurl} && curl -fsSL ${q(DEFAULT_INSTALLER_URL)} | ${envs} bash`;
+}
+
+function appendInstallLog(job, chunk, secrets = []) {
+  let text = String(chunk);
+  for (const s of secrets) {
+    if (s) text = text.split(s).join('••••••');
+  }
+  job.log += text;
+  if (job.log.length > 200_000) job.log = job.log.slice(-200_000);
+}
+
+function pruneRemoteInstalls() {
+  if (remoteInstalls.size <= REMOTE_INSTALL_KEEP) return;
+  const ids = [...remoteInstalls.keys()];
+  for (const id of ids.slice(0, ids.length - REMOTE_INSTALL_KEEP)) remoteInstalls.delete(id);
+}
+
+// Executa a instalação via SSH. A SENHA é usada de forma transitória e NUNCA é
+// gravada (nem no log, nem no banco). Atualiza job.status e o log em streaming.
+function runRemoteInstall(job, conn, opts, command) {
+  const { Client } = require('ssh2');
+  job.status = 'running';
+  appendInstallLog(job, `>> conectando em ${opts.username}@${opts.host}:${opts.port}…\n`);
+
+  const client = conn || new Client();
+  const finish = (status, code) => {
+    if (job.status === 'done' || job.status === 'failed') return;
+    job.status = status;
+    job.exitCode = code ?? null;
+    job.finishedAt = new Date().toISOString();
+    try { client.end(); } catch { /* ignore */ }
+  };
+
+  client
+    .on('ready', () => {
+      appendInstallLog(job, '>> conectado. iniciando instalador…\n');
+      client.exec(command, { pty: true }, (err, stream) => {
+        if (err) {
+          appendInstallLog(job, `>> erro ao executar: ${err.message}\n`);
+          return finish('failed', null);
+        }
+        stream
+          .on('close', (code) => {
+            appendInstallLog(job, `\n>> instalador finalizou com código ${code}.\n`);
+            finish(code === 0 ? 'done' : 'failed', code);
+          })
+          .on('data', (d) => appendInstallLog(job, d, [opts.password]))
+          .stderr.on('data', (d) => appendInstallLog(job, d, [opts.password]));
+      });
+    })
+    .on('error', (err) => {
+      appendInstallLog(job, `>> falha de conexão SSH: ${err.message}\n`);
+      finish('failed', null);
+    })
+    .connect({
+      host: opts.host,
+      port: opts.port,
+      username: opts.username,
+      password: opts.password,
+      readyTimeout: 20_000,
+      // Servidores de clientes têm host key desconhecida na 1ª conexão; como o
+      // operador forneceu as credenciais root, aceitamos a chave (TOFU).
+      algorithms: undefined,
+    });
+}
+
+async function handleRemoteInstall(req, res, db, actor, installationId) {
+  const item = db.installations[installationId];
+  if (!item) return json(req, res, 404, { error: 'installation_not_found' });
+  const body = await readBody(req);
+  const host = String(body.host || item.provisionedServerAddress || '').trim();
+  const port = Number(body.port || 22);
+  const username = String(body.username || 'root').trim();
+  const password = String(body.password || '');
+  if (!host) return json(req, res, 400, { error: 'missing_host', message: 'Informe o endereço/IP do servidor.' });
+  if (!password) return json(req, res, 400, { error: 'missing_password', message: 'Informe a senha de acesso (root).' });
+
+  const centralUrl = publicBaseUrl(req);
+  const command = buildRemoteInstallCommand(item, centralUrl);
+  const jobId = `${Date.now()}-${installationId}`;
+  const job = {
+    id: jobId,
+    installationId,
+    host,
+    username,
+    status: 'queued',
+    log: '',
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    exitCode: null,
+  };
+  remoteInstalls.set(jobId, job);
+  pruneRemoteInstalls();
+
+  // Marca tentativa + auditoria (sem credenciais).
+  item.remoteInstall = { jobId, host, username, startedAt: job.startedAt, startedBy: actor.email };
+  item.updatedAt = new Date().toISOString();
+  addAuditEvent(db, req, { type: 'installation.remote_install_started', actor: actor.email, result: 'accepted', installationId });
+  await saveDb(db);
+
+  // Dispara em background; o cliente acompanha por GET /remote-installs/:id.
+  runRemoteInstall(job, null, { host, port, username, password }, command);
+
+  return json(req, res, 202, { jobId, status: job.status });
+}
+
+function publicRemoteInstall(job) {
+  if (!job) return null;
+  return {
+    id: job.id,
+    installationId: job.installationId,
+    host: job.host,
+    username: job.username,
+    status: job.status,
+    exitCode: job.exitCode,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt,
+    log: job.log,
+  };
+}
+
+// ── Usuários da Central (multi-admin) ────────────────────────────────────────
+function publicUsers(db) {
+  const out = [{ email: ADMIN_EMAIL, name: 'Administrador', builtin: true }];
+  for (const [email, u] of Object.entries(db.users || {})) {
+    out.push({ email, name: u.name || email, builtin: false, createdAt: u.createdAt || null, createdBy: u.createdBy || null });
+  }
+  return out;
+}
+async function handleListUsers(req, res, db) {
+  await saveDb(db);
+  return json(req, res, 200, { users: publicUsers(db), adminEmail: ADMIN_EMAIL });
+}
+async function handleUpsertUser(req, res, db, actor) {
+  const body = await readBody(req);
+  const email = String(body.email || '').trim().toLowerCase();
+  const name = String(body.name || '').trim();
+  const password = String(body.password || '');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json(req, res, 400, { error: 'invalid_email', message: 'E-mail inválido.' });
+  if (email === ADMIN_EMAIL) return json(req, res, 400, { error: 'reserved_email', message: 'Este e-mail é o administrador do sistema (definido no servidor) e não é editável aqui.' });
+  if (password && password.length < 8) return json(req, res, 400, { error: 'weak_password', message: 'A senha precisa ter ao menos 8 caracteres.' });
+  db.users = db.users || {};
+  const existing = db.users[email];
+  if (!existing && !password) return json(req, res, 400, { error: 'password_required', message: 'Defina uma senha para o novo usuário.' });
+  db.users[email] = {
+    name: name || (existing && existing.name) || email,
+    passwordHash: password ? hashPassword(password) : existing.passwordHash,
+    createdAt: (existing && existing.createdAt) || new Date().toISOString(),
+    createdBy: (existing && existing.createdBy) || actor.email,
+  };
+  addAuditEvent(db, req, { type: existing ? 'user.updated' : 'user.created', actor: actor.email, result: 'accepted', installationId: email });
+  await saveDb(db);
+  return json(req, res, 200, { ok: true });
+}
+async function handleDeleteUser(req, res, db, actor, emailRaw) {
+  const email = String(emailRaw || '').toLowerCase();
+  if (email === ADMIN_EMAIL) return json(req, res, 400, { error: 'reserved_email', message: 'Não é possível remover o administrador do sistema.' });
+  if (email === actor.email) return json(req, res, 400, { error: 'self_delete', message: 'Você não pode remover a própria conta logada.' });
+  if (!db.users || !db.users[email]) return json(req, res, 404, { error: 'user_not_found' });
+  delete db.users[email];
+  addAuditEvent(db, req, { type: 'user.deleted', actor: actor.email, result: 'accepted', installationId: email });
+  await saveDb(db);
+  return json(req, res, 200, { ok: true });
+}
+
 async function route(req, res) {
   if (req.method === 'OPTIONS') return empty(req, res, 204);
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -908,6 +1329,114 @@ async function route(req, res) {
       }
       if (req.method === 'POST' && url.pathname === '/api/admin/provision') {
         return handleProvision(req, res, db, actor);
+      }
+
+      // ── Usuários da Central ────────────────────────────────────────────────
+      if (req.method === 'GET' && url.pathname === '/api/admin/users') {
+        return handleListUsers(req, res, db);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/admin/users') {
+        return handleUpsertUser(req, res, db, actor);
+      }
+      const userDelMatch = url.pathname.match(/^\/api\/admin\/users\/(.+)$/);
+      if (req.method === 'DELETE' && userDelMatch) {
+        return handleDeleteUser(req, res, db, actor, decodeURIComponent(userDelMatch[1]));
+      }
+
+      // ── Geração de APK (proxy para o build-agent) ──────────────────────────
+      if (req.method === 'GET' && url.pathname === '/api/admin/apk/clients') {
+        await saveDb(db);
+        const r = await agentFetch('/clients');
+        return json(req, res, r.status, r.data);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/admin/apk/clients') {
+        const body = await readBody(req);
+        await saveDb(db);
+        const r = await agentFetch('/clients', { method: 'POST', body: JSON.stringify(body) });
+        addAuditEvent(db, req, { type: 'apk.client_upserted', actor: actor.email, result: r.status < 400 ? 'accepted' : 'denied', installationId: body.slug || null });
+        await saveDb(db);
+        return json(req, res, r.status, r.data);
+      }
+      const apkDeleteMatch = url.pathname.match(/^\/api\/admin\/apk\/clients\/([^/]+)$/);
+      if (req.method === 'DELETE' && apkDeleteMatch) {
+        const slug = decodeURIComponent(apkDeleteMatch[1]);
+        const r = await agentFetch(`/clients/${encodeURIComponent(slug)}`, { method: 'DELETE' });
+        // Limpa a referência ao app nas instalações que o usavam.
+        for (const inst of Object.values(db.installations)) {
+          if (inst.app && inst.app.slug === slug) inst.app = null;
+        }
+        addAuditEvent(db, req, { type: 'apk.client_deleted', actor: actor.email, result: r.status < 400 ? 'accepted' : 'denied', installationId: slug });
+        await saveDb(db);
+        return json(req, res, r.status, r.data);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/admin/apk/builds') {
+        await saveDb(db);
+        const r = await agentFetch('/builds');
+        return json(req, res, r.status, r.data);
+      }
+      const apkBuildMatch = url.pathname.match(/^\/api\/admin\/apk\/clients\/([^/]+)\/build$/);
+      if (req.method === 'POST' && apkBuildMatch) {
+        const slug = decodeURIComponent(apkBuildMatch[1]);
+        const r = await agentFetch('/builds', { method: 'POST', body: JSON.stringify({ slug }) });
+        addAuditEvent(db, req, { type: 'apk.build_started', actor: actor.email, result: r.status < 400 ? 'accepted' : 'denied', installationId: slug });
+        await saveDb(db);
+        return json(req, res, r.status, r.data);
+      }
+      // Download do APK com NOME AMIGÁVEL (nome do app), não o slug interno.
+      // Reentrega o arquivo publicado em /apk com Content-Disposition.
+      const apkDownloadMatch = url.pathname.match(/^\/api\/admin\/apk\/clients\/([^/]+)\/download$/);
+      if (req.method === 'GET' && apkDownloadMatch) {
+        const slug = decodeURIComponent(apkDownloadMatch[1]);
+        const inst = db.installations[slug];
+        const filename = safeApkFilename(inst ? effectiveAppName(inst) : slug);
+        await saveDb(db);
+        const upstream = await fetch(`${APK_SOURCE_BASE}/apk/drac-${encodeURIComponent(slug)}.apk`);
+        if (!upstream.ok || !upstream.body) {
+          return json(req, res, 404, { error: 'apk_not_found', message: 'APK ainda não gerado para este cliente.' });
+        }
+        const len = upstream.headers.get('content-length');
+        res.writeHead(200, {
+          ...securityHeaders(req),
+          'content-type': 'application/vnd.android.package-archive',
+          'content-disposition': `attachment; filename="${filename}"`,
+          ...(len ? { 'content-length': len } : {}),
+        });
+        const { Readable } = require('node:stream');
+        Readable.fromWeb(upstream.body).pipe(res);
+        return;
+      }
+      const apkBuildStatusMatch = url.pathname.match(/^\/api\/admin\/apk\/builds\/([^/]+)$/);
+      if (req.method === 'GET' && apkBuildStatusMatch) {
+        await saveDb(db);
+        const r = await agentFetch(`/builds/${encodeURIComponent(decodeURIComponent(apkBuildStatusMatch[1]))}`);
+        return json(req, res, r.status, r.data);
+      }
+
+      // ── App por cliente (auto: deriva tudo do cadastro + branding do cliente) ─
+      const genAppMatch = url.pathname.match(/^\/api\/admin\/installations\/([^/]+)\/generate-app$/);
+      if (req.method === 'POST' && genAppMatch) {
+        return handleGenerateApp(req, res, db, actor, decodeURIComponent(genAppMatch[1]));
+      }
+      const instAppMatch = url.pathname.match(/^\/api\/admin\/installations\/([^/]+)\/app$/);
+      if (req.method === 'GET' && instAppMatch) {
+        await saveDb(db);
+        return handleInstallationApp(req, res, db, decodeURIComponent(instAppMatch[1]));
+      }
+      if (req.method === 'PATCH' && instAppMatch) {
+        return handlePatchApp(req, res, db, actor, decodeURIComponent(instAppMatch[1]));
+      }
+
+      // ── Instalação remota via SSH ──────────────────────────────────────────
+      const remoteInstallMatch = url.pathname.match(/^\/api\/admin\/installations\/([^/]+)\/remote-install$/);
+      if (req.method === 'POST' && remoteInstallMatch) {
+        return handleRemoteInstall(req, res, db, actor, decodeURIComponent(remoteInstallMatch[1]));
+      }
+      const remoteInstallStatusMatch = url.pathname.match(/^\/api\/admin\/remote-installs\/([^/]+)$/);
+      if (req.method === 'GET' && remoteInstallStatusMatch) {
+        await saveDb(db);
+        const job = remoteInstalls.get(decodeURIComponent(remoteInstallStatusMatch[1]));
+        if (!job) return json(req, res, 404, { error: 'job_not_found' });
+        return json(req, res, 200, publicRemoteInstall(job));
       }
       if (req.method === 'GET' && url.pathname === '/api/admin/audit') {
         await saveDb(db);
@@ -1005,6 +1534,25 @@ async function route(req, res) {
   }
 }
 
-http.createServer(route).listen(PORT, HOST, () => {
+// Guardas globais: um erro solto (ex.: handler chamado sem await) NUNCA deve
+// derrubar o processo — antes virava crash loop e tirava a Central do ar.
+process.on('uncaughtException', (error) => {
+  console.error('[central] uncaughtException:', error && error.stack ? error.stack : error);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[central] unhandledRejection:', reason && reason.stack ? reason.stack : reason);
+});
+
+http.createServer((req, res) => {
+  // route() é async; sem este .catch, uma rejeição (ex.: loadDb) escapava como
+  // unhandledRejection. Aqui garantimos uma resposta 500 e seguimos vivos.
+  Promise.resolve(route(req, res)).catch((error) => {
+    console.error('[central] erro não tratado na rota:', error && error.stack ? error.stack : error);
+    try {
+      if (!res.headersSent) json(req, res, 500, { error: 'internal_error' });
+      else res.end();
+    } catch { /* resposta já encerrada */ }
+  });
+}).listen(PORT, HOST, () => {
   console.log(`DRAC Central ouvindo em http://${HOST}:${PORT}`);
 });

@@ -154,6 +154,11 @@ services:
       - AI_RTSP_STREAM_PROFILE=${AI_RTSP_STREAM_PROFILE:-analytics}
       - AI_ANALYTICS_SOURCE=${AI_ANALYTICS_SOURCE:-direct_camera}
       - AI_ANALYTICS_HEVC_FALLBACK=${AI_ANALYTICS_HEVC_FALLBACK:-true}
+      # Agente de build white-label (roda no HOST; ver scripts/build-agent.mjs)
+      - APP_BUILDER_AGENT_URL=${APP_BUILDER_AGENT_URL:-http://host.docker.internal:8780}
+      - APP_BUILDER_AGENT_TOKEN=${APP_BUILDER_AGENT_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./storage:/storage
       - ./backups/postgres:/backups/postgres:ro
@@ -179,6 +184,11 @@ services:
     container_name: vms-web
     restart: unless-stopped
     logging: *default-logging
+    # APKs white-label publicados pelo build-agent ficam num diretório do HOST
+    # montado aqui (somente leitura). Sobrevive a rebuilds do container — antes os
+    # APKs eram copiados pra dentro do container e sumiam a cada recriação.
+    volumes:
+      - ./apk:/usr/share/nginx/html/apk:ro
     depends_on:
       - api
     healthcheck:

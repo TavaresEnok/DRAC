@@ -1,0 +1,7 @@
+{
+  "appName": "IB Telecom",
+  "slug": "drac-drac-local-168-194-13-70",
+  "packageId": "com.ibtelecom.app",
+  "apiUrl": "http://172.17.0.1:5173/api",
+  "primaryColor": "#d56d0b"
+}

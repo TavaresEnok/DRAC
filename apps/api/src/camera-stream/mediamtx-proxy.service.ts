@@ -41,9 +41,9 @@ type EnsuredCameraPath = {
 export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(MediamtxProxyService.name);
   private readonly liveCodecCache = new Map<string, { isHevc: boolean; at: number }>();
-  // Cache da decisão da fonte da GRADE por câmera: codec do sub-stream (ou null se
-  // não houver sub). Evita um ffprobe a cada (re)configuração do path de grid.
-  private readonly gridSourceCache = new Map<string, { codec: string | null; at: number }>();
+  // Cache da decisão da fonte da GRADE por câmera: URL escolhida + codec do sub
+  // (url null = sem sub, usa o main). Evita ffprobe a cada (re)configuração.
+  private readonly gridSourceCache = new Map<string, { url: string | null; codec: string | null; at: number }>();
   private readonly pathEnsureInFlight = new Map<string, Promise<EnsuredCameraPath>>();
   private readonly pathEnsureCache = new Map<string, { value: EnsuredCameraPath; at: number }>();
   private static readonly LIVE_CODEC_TTL_MS = 30 * 60 * 1000;
@@ -322,34 +322,62 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
    *     antigo: passthrough se H.264, transcode se H.265).
    * O resultado do probe é cacheado por câmera para não sondar a cada configuração.
    */
+  // Caminho RTSP do SUB no protocolo ALTERNATIVO. Algumas câmeras OEM amarram cada
+  // protocolo a um stream fixo: /Streaming/Channels/* sempre devolve o main e
+  // /cam/realmonitor* sempre devolve o sub (H.264), ignorando o índice do canal.
+  // Quando o sub no caminho configurado não é H.264, tentamos o protocolo oposto.
+  private alternateSubPath(rtspPath: string | null | undefined, channel: number): string | null {
+    const p = (rtspPath || '').toLowerCase();
+    if (p.includes('/streaming/channels')) return `/cam/realmonitor?channel=${channel}&subtype=1`;
+    if (p.includes('realmonitor')) return `/Streaming/Channels/${channel}02`;
+    return null;
+  }
+
   private async chooseGridSource(cameraId: string, camera: any, password: string, transport: string) {
     const subProfile = resolveGridRtspProfile(camera);
-    const subUrl = buildRtspUrl({
-      username: camera.username,
-      password,
-      ip: camera.ip,
-      rtspPort: camera.rtspPort,
-      rtspPath: camera.rtspPath,
-      channel: subProfile.channel,
-      subtype: subProfile.subtype,
-    });
     const updatedAt = camera.updatedAt instanceof Date ? camera.updatedAt.toISOString() : String(camera.updatedAt ?? '');
-    const cacheKey = `grid:${cameraId}:${subProfile.channel}:${subProfile.subtype}:${updatedAt}`;
+    const cacheKey = `grid:${cameraId}:${updatedAt}`;
 
-    let codec: string | null;
+    // Cache: devolve a decisão pronta (url do sub OU null = usar o main).
     const cached = this.gridSourceCache.get(cacheKey);
     if (cached && Date.now() - cached.at < MediamtxProxyService.LIVE_CODEC_TTL_MS) {
-      codec = cached.codec;
-    } else {
-      codec = await this.probeStreamVideoCodec(subUrl, transport);
-      this.gridSourceCache.set(cacheKey, { codec, at: Date.now() });
+      if (cached.url) {
+        return { profile: subProfile, sourceUrl: cached.url, isHevc: cached.codec ? isHevcCodec(cached.codec) : false, usedSubStream: true };
+      }
+      const m = await this.chooseLiveSource(cameraId, camera, password, transport);
+      return { profile: m.profile, sourceUrl: m.sourceUrl, isHevc: m.isHevc, usedSubStream: false };
     }
 
-    if (codec) {
-      return { profile: subProfile, sourceUrl: subUrl, isHevc: isHevcCodec(codec), usedSubStream: true };
+    // Candidato 1: sub no caminho configurado (subtype 1 aplicado ao rtspPath).
+    const primaryUrl = buildRtspUrl({
+      username: camera.username, password, ip: camera.ip, rtspPort: camera.rtspPort,
+      rtspPath: camera.rtspPath, channel: subProfile.channel, subtype: subProfile.subtype,
+    });
+    // Candidato 2: sub no protocolo alternativo (para as OEM Hik↔Dahua).
+    const altPath = this.alternateSubPath(camera.rtspPath, subProfile.channel);
+    const altUrl = altPath
+      ? `rtsp://${encodeURIComponent(camera.username)}:${encodeURIComponent(password)}@${camera.ip}:${camera.rtspPort}${altPath}`
+      : null;
+
+    const found: Array<{ url: string; codec: string }> = [];
+    const c1 = await this.probeStreamVideoCodec(primaryUrl, transport);
+    if (c1) found.push({ url: primaryUrl, codec: c1 });
+    // Só sonda o alternativo se o primeiro não for H.264 (economiza um probe).
+    const has264 = found.some((f) => !isHevcCodec(f.codec));
+    if (!has264 && altUrl) {
+      const c2 = await this.probeStreamVideoCodec(altUrl, transport);
+      if (c2) found.push({ url: altUrl, codec: c2 });
     }
 
-    // Sem sub-stream utilizável → usa a fonte principal (mesma do live).
+    // Preferência: qualquer sub H.264 (passthrough) > qualquer sub H.265 (transcode 480p).
+    const chosen = found.find((f) => !isHevcCodec(f.codec)) ?? found[0];
+    if (chosen) {
+      this.gridSourceCache.set(cacheKey, { url: chosen.url, codec: chosen.codec, at: Date.now() });
+      return { profile: subProfile, sourceUrl: chosen.url, isHevc: isHevcCodec(chosen.codec), usedSubStream: true };
+    }
+
+    // Sem sub utilizável → usa a fonte principal (mesma do live).
+    this.gridSourceCache.set(cacheKey, { url: null, codec: null, at: Date.now() });
     const main = await this.chooseLiveSource(cameraId, camera, password, transport);
     this.logger.log(`Grade sem sub-stream para ${cameraId}; usando o stream principal.`);
     return { profile: main.profile, sourceUrl: main.sourceUrl, isHevc: main.isHevc, usedSubStream: false };

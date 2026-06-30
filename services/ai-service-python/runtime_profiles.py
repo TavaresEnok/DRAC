@@ -80,7 +80,10 @@ FACE_PROFILE = {
     "mode": "face",
     "model": "scrfd_500m",
     "pack": "buffalo_s",
-    "runtime": "onnxruntime_cpu",
+    # Runtime do detector de rostos (onnxruntime). Default CPU. Para acelerar por
+    # GPU NVIDIA, suba o serviço com FACE_RUNTIME=onnxruntime_cuda numa imagem com
+    # onnxruntime-gpu (ver Dockerfile.gpu). Dormente por padrão.
+    "runtime": _env_str("FACE_RUNTIME", "onnxruntime_cpu"),
     "analysis_width": 960,
     "analysis_height": 540,
     "detector_size": 640,
@@ -147,6 +150,24 @@ def runtime_profile(mode: str) -> dict:
     if selected == "general":
         return GENERAL_PROFILE.copy()
     return MOTION_PROFILE.copy()
+
+
+def onnxruntime_providers(runtime: str | None) -> list:
+    """ONNX Runtime providers para um runtime de perfil.
+
+    'onnxruntime_cuda' / qualquer coisa com 'cuda'/'gpu' → tenta CUDA e cai para CPU.
+    Caso contrário → só CPU (comportamento atual, default). Dormente até alguém
+    setar FACE_RUNTIME=onnxruntime_cuda numa imagem com onnxruntime-gpu.
+    """
+    selected = (runtime or "").strip().lower()
+    if "cuda" in selected or "gpu" in selected:
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    return ["CPUExecutionProvider"]
+
+
+def runtime_uses_gpu(runtime: str | None) -> bool:
+    selected = (runtime or "").strip().lower()
+    return "cuda" in selected or "gpu" in selected
 
 
 def exposed_profiles() -> dict:

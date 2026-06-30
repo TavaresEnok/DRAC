@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { Plus, UserX, Unlock, Edit2, Save, Trash2, RefreshCw, Search, MoreHorizontal } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { useVmsDataStore } from '../store/vmsDataStore';
@@ -58,6 +58,24 @@ function apiClient() {
     baseURL: API_URL,
     headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
   });
+}
+
+// Piso mínimo do backend (DTO). A política de senha forte é OPCIONAL e fica em
+// Configurações → Segurança ("Exigir senha forte").
+const PASSWORD_HINT = 'Mín. 4 caracteres.';
+function passwordPolicyError(pw: string): string | null {
+  if (pw.length < 4) return 'A senha precisa ter ao menos 4 caracteres.';
+  return null;
+}
+
+// Extrai a mensagem real da API (class-validator devolve string OU array).
+function apiErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    const m = error.response?.data?.message;
+    if (Array.isArray(m)) return m.join('; ');
+    if (typeof m === 'string') return m;
+  }
+  return error instanceof Error ? error.message : fallback;
 }
 
 export default function UsuariosPage() {
@@ -167,6 +185,22 @@ export default function UsuariosPage() {
     await updateUserActive(id, active);
   };
 
+  const deleteUser = async (u: { id: string; name: string; email: string }) => {
+    if (!window.confirm(`Excluir permanentemente "${u.name}" (${u.email})?\n\nEsta ação não pode ser desfeita. O histórico de auditoria é preservado (anonimizado).`)) return;
+    try {
+      await apiClient().delete(`/users/${u.id}/permanent`);
+      toast({ title: 'Usuário excluído', description: `${u.name} foi removido do sistema.` });
+      if (selectedUserId === u.id) setSelectedUserId('');
+      await loadData();
+    } catch (error) {
+      toast({
+        title: 'Falha ao excluir',
+        description: apiErrorMessage(error, 'Não foi possível excluir o usuário.'),
+        variant: 'destructive',
+      });
+    }
+  };
+
   const grantGroupAccess = async () => {
     const userId = selectedUser?.id;
     const groupId = selectedGroup?.id;
@@ -214,6 +248,14 @@ export default function UsuariosPage() {
       toast({ title: 'Senha obrigatória', description: 'Crie uma senha inicial para o usuário.', variant: 'destructive' });
       return;
     }
+    // Valida a política antes de enviar (evita 400 sem explicação).
+    if (userForm.password) {
+      const pwErr = passwordPolicyError(userForm.password);
+      if (pwErr) {
+        toast({ title: 'Senha fraca', description: pwErr, variant: 'destructive' });
+        return;
+      }
+    }
 
     setUserSaving(true);
     try {
@@ -247,7 +289,7 @@ export default function UsuariosPage() {
     } catch (error) {
       toast({
         title: editUser ? 'Falha ao atualizar usuário' : 'Falha ao criar usuário',
-        description: error instanceof Error ? error.message : 'Não foi possível salvar o usuário.',
+        description: apiErrorMessage(error, 'Não foi possível salvar o usuário.'),
         variant: 'destructive',
       });
     } finally {
@@ -337,6 +379,15 @@ export default function UsuariosPage() {
                         >
                           {u.active ? <UserX className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
                         </button>
+                        {u.id !== currentUser?.id && (
+                          <button
+                            onClick={() => void deleteUser(u)}
+                            className="w-6 h-6 flex items-center justify-center rounded text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--accent))] transition-colors"
+                            title="Excluir permanentemente"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -361,6 +412,9 @@ export default function UsuariosPage() {
         <DialogContent className="max-w-md border-border bg-card max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editUser ? `Editar usuário - ${editUser.name}` : 'Novo usuário'}</DialogTitle>
+            <DialogDescription>
+              {editUser ? 'Atualize os dados, o perfil de acesso ou a senha.' : 'Preencha os dados para criar uma nova conta de acesso.'}
+            </DialogDescription>
           </DialogHeader>
           <div className="mt-2 space-y-3">
             <div>
@@ -397,9 +451,10 @@ export default function UsuariosPage() {
                 type="password"
                 value={userForm.password}
                 onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))}
-                placeholder={editUser ? 'Deixe em branco para manter' : 'Mínimo 12, com maiúscula, minúscula e número'}
+                placeholder={editUser ? 'Deixe em branco para manter' : PASSWORD_HINT}
                 className="h-8 w-full rounded border border-border bg-background px-3 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
               />
+              <p className="mt-1 text-[10px] text-muted-foreground">{editUser ? `Em branco mantém a atual. ${PASSWORD_HINT}` : PASSWORD_HINT}</p>
             </div>
             {editUser ? (
               <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5">

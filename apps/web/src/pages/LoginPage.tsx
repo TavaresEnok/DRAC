@@ -171,7 +171,7 @@ export default function LoginPage() {
           <div className="relative mx-auto" style={{ width: 60, height: 60, marginBottom: 16 }}>
             <div style={{ position: 'absolute', inset: -6, borderRadius: 20, background: 'radial-gradient(circle, hsl(var(--primary) / 0.22), transparent 70%)', filter: 'blur(2px)' }} />
             <div
-              className="relative flex h-full w-full items-center justify-center"
+              className="relative flex h-full w-full items-center justify-center overflow-hidden"
               style={{ borderRadius: 17, background: 'linear-gradient(150deg, var(--acc-dim), transparent)', border: '1px solid var(--acc-bdr)' }}
             >
               <LogoDrac size={30} />

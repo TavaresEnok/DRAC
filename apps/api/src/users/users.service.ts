@@ -215,4 +215,32 @@ export class UsersService {
 
     return this.sanitize(user);
   }
+
+  // Exclusão DEFINITIVA. As FKs estão preparadas: cameraPermissions caem em
+  // cascata; auditLogs/investigations viram SetNull (histórico preservado, só
+  // anonimizado). Mesmas regras de permissão do softDelete + não pode excluir a
+  // própria conta.
+  async hardDelete(actor: AuthUser, id: string) {
+    const existing = await this.prisma.user.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
+    if (existing.id === actor.id) {
+      throw new ForbiddenException('Você não pode excluir a própria conta.');
+    }
+
+    if (!this.isPrivileged(actor)) {
+      await this.assertCanManageUser(actor, id);
+      if (existing.role === UserRole.ADMIN || existing.role === UserRole.SUPER_ADMIN) {
+        throw new ForbiddenException('Administrador de grupo não pode excluir administradores globais.');
+      }
+    }
+
+    if (this.isPrivileged(actor) && !this.authService.canAssignRole(actor.role, existing.role)) {
+      throw new ForbiddenException('Sem permissão para excluir este usuário.');
+    }
+
+    await this.prisma.user.delete({ where: { id } });
+    return { id, deleted: true };
+  }
 }

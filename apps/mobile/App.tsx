@@ -1,43 +1,53 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  RefreshControl,
-  SafeAreaView,
-  ScrollView,
-} from 'react-native';
-import { DEFAULT_API_URL } from './src/config';
+import { useEffect, useState } from 'react';
+import { Alert, SafeAreaView, StyleSheet, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { DEFAULT_API_URL, TOP_SAFE } from './src/config';
 import { BottomTabs } from './src/components/BottomTabs';
 import { AlarmsScreen } from './src/screens/AlarmsScreen';
-import { DashboardScreen } from './src/screens/DashboardScreen';
-import { GridScreen } from './src/screens/GridScreen';
+import { CentralScreen } from './src/screens/CentralScreen';
 import { LiveScreen } from './src/screens/LiveScreen';
 import { LoginScreen } from './src/screens/LoginScreen';
+import { MosaicScreen } from './src/screens/MosaicScreen';
 import { PlaybackScreen } from './src/screens/PlaybackScreen';
-import { ProfileScreen } from './src/screens/ProfileScreen';
+import { SettingsScreen } from './src/screens/SettingsScreen';
 import { request, normalizeServerUrl } from './src/services/api';
+import { fetchBranding } from './src/services/branding';
 import { requestCachedStreamUrls } from './src/services/stream-urls-cache';
 import { cleanApiUrl, clearStoredSession, loadStoredSession, saveStoredSession } from './src/services/sessionStore';
 import { useAlarms } from './src/hooks/useAlarms';
 import { useLiveDetections } from './src/hooks/useLiveDetections';
-import type { ActivePlayback, Camera, Direction, MosaicArea, Recording, Session, StreamUrls, Tab, User } from './src/types';
-import { styles } from './src/styles/appStyles';
-
-const MOSAIC_AREAS_KEY = '@drac:mosaic-areas:v1';
+import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
+import { LibraryProvider } from './src/state/LibraryProvider';
+import type { ActivePlayback, Camera, Direction, Recording, Session, StreamUrls, Tab, User } from './src/types';
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <LibraryProvider>
+          <AppInner />
+        </LibraryProvider>
+      </ThemeProvider>
+    </SafeAreaProvider>
+  );
+}
+
+function AppInner() {
+  const { theme, mode, applyBranding } = useTheme();
   const [session, setSession] = useState<Session | null>(null);
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [tab, setTab] = useState<Tab>('dashboard');
+  const [tab, setTab] = useState<Tab>('central');
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
+  const [liveCamera, setLiveCamera] = useState<Camera | null>(null);
   const [streamUrls, setStreamUrls] = useState<Record<string, string | null>>({});
   const [streamWhep, setStreamWhep] = useState<Record<string, string | null>>({});
   const [streamPosters, setStreamPosters] = useState<Record<string, string | null>>({});
@@ -45,70 +55,37 @@ export default function App() {
   const [activePlayback, setActivePlayback] = useState<ActivePlayback | null>(null);
   const [ptzActive, setPtzActive] = useState<Direction | null>(null);
   const [ptzFeedback, setPtzFeedback] = useState<string | null>(null);
-  const [showPtz, setShowPtz] = useState(true);
-  const [selectedMosaicGroup, setSelectedMosaicGroup] = useState<string>('all');
-  const [mosaicAreas, setMosaicAreas] = useState<MosaicArea[]>([]);
-  const [mosaicAreasLoaded, setMosaicAreasLoaded] = useState(false);
+  const [recordingActive, setRecordingActive] = useState(false);
   const [recordingDate, setRecordingDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [lastSyncError, setLastSyncError] = useState<string | null>(null);
   const previewLimit = 8;
   const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) ?? cameras[0] ?? null;
 
   const { alarms, openAlarmCount, reload: reloadAlarms, ack: ackAlarm, resolve: resolveAlarm } = useAlarms(session);
-  const liveDetections = useLiveDetections(session, tab === 'live', selectedCamera?.id ?? null);
+  const liveDetections = useLiveDetections(session, liveCamera != null, liveCamera?.id ?? null);
 
-  const groupedCameras = useMemo(() => {
-    const map = new Map<string, Camera[]>();
-    for (const camera of cameras) {
-      const groupName = camera.group?.name ?? 'Sem grupo';
-      map.set(groupName, [...(map.get(groupName) ?? []), camera]);
-    }
-    return Array.from(map.entries());
-  }, [cameras]);
-  const operationalMessages = useMemo(() => {
+  const operationalMessages = (() => {
     const messages: string[] = [];
     const offline = cameras.filter((camera) => camera.status !== 'ONLINE').length;
     if (lastSyncError) messages.push(lastSyncError);
     if (offline > 0) messages.push(`${offline} câmera(s) offline ou sem comunicação.`);
     if (session?.user.role === 'VIEWER') messages.push('Seu perfil é somente visualização. Gravação e PTZ podem estar bloqueados.');
     return messages.slice(0, 3);
-  }, [cameras, lastSyncError, session?.user.role]);
-  const mosaicCameras = useMemo(() => {
-    if (selectedMosaicGroup === 'all') return cameras;
-    if (selectedMosaicGroup.startsWith('area:')) {
-      const area = mosaicAreas.find((item) => `area:${item.id}` === selectedMosaicGroup);
-      if (!area) return cameras;
-      return cameras.filter((camera) => area.cameraIds.includes(camera.id));
-    }
-    if (selectedMosaicGroup.startsWith('group:')) {
-      const groupName = selectedMosaicGroup.slice('group:'.length);
-      return groupedCameras.find(([name]) => name === groupName)?.[1] ?? cameras;
-    }
-    return cameras;
-  }, [cameras, groupedCameras, mosaicAreas, selectedMosaicGroup]);
+  })();
+
+  // Busca a marca (logo/nome/cores) do servidor e aplica no tema. Silencioso:
+  // se falhar (offline, sem branding configurado), mantém o tema padrão.
+  const loadBranding = (url: string) => {
+    if (!url) return;
+    fetchBranding(url)
+      .then(applyBranding)
+      .catch(() => undefined);
+  };
 
   useEffect(() => {
-    AsyncStorage.getItem(MOSAIC_AREAS_KEY)
-      .then((raw) => {
-        if (!raw) return;
-        const parsed = JSON.parse(raw) as MosaicArea[];
-        if (Array.isArray(parsed)) setMosaicAreas(parsed);
-      })
-      .catch(() => undefined)
-      .finally(() => setMosaicAreasLoaded(true));
-  }, []);
+    // Em builds white-label o servidor já vem embutido: aplica a marca já no login.
+    if (DEFAULT_API_URL) loadBranding(DEFAULT_API_URL);
 
-  useEffect(() => {
-    if (!mosaicAreasLoaded) return;
-    void AsyncStorage.setItem(MOSAIC_AREAS_KEY, JSON.stringify(mosaicAreas));
-  }, [mosaicAreas, mosaicAreasLoaded]);
-
-  useEffect(() => {
-    if (!selectedMosaicGroup.startsWith('area:')) return;
-    const areaExists = mosaicAreas.some((area) => `area:${area.id}` === selectedMosaicGroup);
-    if (!areaExists) setSelectedMosaicGroup('all');
-  }, [mosaicAreas, selectedMosaicGroup]);
-  useEffect(() => {
     loadStoredSession()
       .then((raw) => {
         if (!raw) return;
@@ -119,6 +96,7 @@ export default function App() {
         }
         setSession(normalized);
         setApiUrl(normalized.apiUrl);
+        loadBranding(normalized.apiUrl);
       })
       .catch(() => undefined);
   }, []);
@@ -127,6 +105,16 @@ export default function App() {
     if (session) void loadAll();
   }, [session?.token]);
 
+  // Orientação: o app é retrato; SÓ a tela ao vivo libera paisagem (gira ao deitar
+  // o aparelho) e volta a travar em retrato ao sair.
+  useEffect(() => {
+    if (liveCamera) {
+      ScreenOrientation.unlockAsync().catch(() => undefined);
+    } else {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => undefined);
+    }
+  }, [liveCamera]);
+
   useEffect(() => {
     if (selectedCamera && session) {
       void loadStream(selectedCamera.id);
@@ -134,11 +122,22 @@ export default function App() {
     }
   }, [selectedCamera?.id, session?.token, recordingDate]);
 
+  // Ao abrir o ao vivo, busca o estado real de gravação e revalida a cada 15s.
+  useEffect(() => {
+    if (!liveCamera || !session) {
+      setRecordingActive(false);
+      return;
+    }
+    void refreshRecordingStatus(liveCamera.id);
+    const timer = setInterval(() => void refreshRecordingStatus(liveCamera.id), 15000);
+    return () => clearInterval(timer);
+  }, [liveCamera?.id, session?.token]);
+
   const login = async () => {
     setLoading(true);
     try {
       const nextApiUrl = cleanApiUrl(apiUrl);
-      if (!nextApiUrl) throw new Error('Informe a URL da API nas configurações do app.');
+      if (!nextApiUrl) throw new Error('Informe a URL da API no campo "Servidor".');
       const data = await request<{ accessToken: string; user: User }>(nextApiUrl, '/auth/login', undefined, {
         method: 'POST',
         body: JSON.stringify({ email, password }),
@@ -147,6 +146,9 @@ export default function App() {
       await saveStoredSession(nextSession);
       setSession(nextSession);
       setPassword('');
+      // Aplica a marca da instalação que acabou de logar (caso o servidor não
+      // estivesse embutido no APK, ex.: app DRAC padrão apontando p/ um cliente).
+      loadBranding(nextApiUrl);
     } catch (error) {
       Alert.alert('Falha no login', error instanceof Error ? error.message : 'Não foi possível entrar.');
     } finally {
@@ -171,8 +173,7 @@ export default function App() {
         body: JSON.stringify({ email: targetEmail }),
       });
     } catch {
-      // O backend responde igual existindo ou não a conta (evita enumeração de e-mails);
-      // não revelamos falha ao usuário por esse motivo.
+      // O backend responde igual existindo ou não a conta (evita enumeração de e-mails).
     }
     Alert.alert(
       'Verifique seu e-mail',
@@ -186,6 +187,8 @@ export default function App() {
     setCameras([]);
     setRecordings([]);
     setStreamUrls({});
+    setLiveCamera(null);
+    setTab('central');
   };
 
   const loadAll = async () => {
@@ -201,9 +204,6 @@ export default function App() {
     } catch (error) {
       const status = (error as { status?: number })?.status;
       const message = error instanceof Error ? error.message : 'Não foi possível carregar câmeras.';
-      // 401 = token ausente/expirado: derruba a sessão salva e volta ao login, em vez
-      // de ficar preso mostrando "unauthorized". Detecta pelo status HTTP (robusto) e
-      // também pelo texto, caso o status não venha.
       const isAuthError = status === 401 || /\b401\b|unauthorized|não autorizado/i.test(message);
       setLastSyncError(isAuthError ? 'Sessão expirada. Entre novamente.' : `Servidor indisponível: ${message}`);
       if (isAuthError) {
@@ -220,11 +220,8 @@ export default function App() {
   const loadStream = async (cameraId: string) => {
     if (!session) return;
     try {
-      // Use cached request to deduplicate concurrent requests for same camera
       const data = await requestCachedStreamUrls<StreamUrls>(session.apiUrl, cameraId, session.token);
       const hlsUrl = normalizeServerUrl(data.protocols?.hlsUrl, session.apiUrl);
-      // WHEP (WebRTC) vai DIRETO ao MediaMTX, na porta pública dele — não passa pelo
-      // /api. Aceita whepUrl pronto ou deriva de webrtcUrl + "/whep" (igual ao web).
       const whepRaw =
         data.protocols?.whepUrl
         ?? (data.protocols?.webrtcUrl ? `${data.protocols.webrtcUrl.replace(/\/+$/, '')}/whep` : null);
@@ -271,11 +268,12 @@ export default function App() {
   };
 
   const sendPtz = async (direction: Direction) => {
-    if (!session || !selectedCamera?.canControl) return;
+    const target = liveCamera;
+    if (!session || !target?.canControl) return;
     setPtzActive(direction);
     setPtzFeedback(direction);
     try {
-      await request(session.apiUrl, `/ptz/${selectedCamera.id}/move`, session.token, {
+      await request(session.apiUrl, `/ptz/${target.id}/move`, session.token, {
         method: 'POST',
         body: JSON.stringify({ action: 'step', direction, durationMs: 450, speed: 5 }),
       });
@@ -288,45 +286,41 @@ export default function App() {
     }
   };
 
-  const createMosaicArea = (name: string) => {
-    const cleanName = name.trim();
-    if (!cleanName) {
-      Alert.alert('Mosaico', 'Informe o nome da área.');
-      return;
+  // Estado REAL de gravação da câmera (intendedRecording do backend). O botão
+  // do ao vivo reflete isso (vermelho = gravando), em vez de só dar um alerta.
+  const refreshRecordingStatus = async (cameraId: string) => {
+    if (!session) return;
+    try {
+      const data = await request<{ isRecording?: boolean; intendedRecording?: boolean }>(
+        session.apiUrl,
+        `/cameras/${cameraId}/recording/status`,
+        session.token,
+      );
+      setRecordingActive(Boolean(data.intendedRecording ?? data.isRecording));
+    } catch {
+      // mantém o estado atual em caso de falha de rede
     }
-    if (mosaicAreas.some((area) => area.name.toLowerCase() === cleanName.toLowerCase())) {
-      Alert.alert('Mosaico', 'Já existe uma área com esse nome.');
-      return;
-    }
-    const nextArea = { id: `${Date.now()}`, name: cleanName, cameraIds: [] };
-    setMosaicAreas((current) => [...current, nextArea]);
-    setSelectedMosaicGroup(`area:${nextArea.id}`);
   };
 
-  const toggleCameraInMosaicArea = (areaId: string, cameraId: string) => {
-    setMosaicAreas((current) => current.map((area) => {
-      if (area.id !== areaId) return area;
-      const exists = area.cameraIds.includes(cameraId);
-      return {
-        ...area,
-        cameraIds: exists ? area.cameraIds.filter((id) => id !== cameraId) : [...area.cameraIds, cameraId],
-      };
-    }));
-  };
-
-  const deleteMosaicArea = (areaId: string) => {
-    setMosaicAreas((current) => current.filter((area) => area.id !== areaId));
-  };
-
-  const toggleRecording = async (camera: Camera, start: boolean) => {
+  const toggleRecording = async (camera: Camera) => {
     if (!session || !camera.canRecord) return;
+    const start = !recordingActive;
+    setRecordingActive(start); // otimista; confirma com o status real abaixo
     try {
       await request(session.apiUrl, `/cameras/${camera.id}/recording/${start ? 'start' : 'stop'}`, session.token, {
         method: 'POST',
         body: JSON.stringify({}),
       });
-      await loadAll();
+      await refreshRecordingStatus(camera.id);
+      Alert.alert(
+        'Gravação',
+        start
+          ? 'Gravação iniciada. O trecho aparece na linha do tempo quando o segmento fecha.'
+          : 'Gravação parada.',
+      );
+      void loadRecordings(camera.id, recordingDate);
     } catch (error) {
+      await refreshRecordingStatus(camera.id); // reverte para o estado real
       Alert.alert('Gravação', error instanceof Error ? error.message : 'Não foi possível alterar a gravação.');
     }
   };
@@ -362,107 +356,156 @@ export default function App() {
     }
   };
 
+  const takeSnapshot = async (camera: Camera) => {
+    if (!session) return;
+    const poster = streamPosters[camera.id];
+    if (!poster) {
+      Alert.alert('Foto', 'Imagem ainda indisponível. Aguarde a transmissão carregar e tente novamente.');
+      return;
+    }
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const target = `${FileSystem.documentDirectory}${camera.id}-${stamp}.jpg`;
+      // O poster já carrega o token na query — baixa direto, sem header de auth.
+      const fresh = `${poster}${poster.includes('?') ? '&' : '?'}snap=${Date.now()}`;
+      const result = await FileSystem.downloadAsync(fresh, target);
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(result.uri, { mimeType: 'image/jpeg', dialogTitle: 'Compartilhar foto' });
+      } else {
+        Alert.alert('Foto salva', result.uri);
+      }
+    } catch (error) {
+      Alert.alert('Foto', error instanceof Error ? error.message : 'Não foi possível capturar a imagem.');
+    }
+  };
+
+  const openLive = (camera: Camera) => {
+    setSelectedCameraId(camera.id);
+    setLiveCamera(camera);
+  };
+
   if (!session) {
     return (
-      <LoginScreen
-        apiUrl={apiUrl}
-        email={email}
-        password={password}
-        loading={loading}
-        onApiUrlChange={setApiUrl}
-        onEmailChange={setEmail}
-        onPasswordChange={setPassword}
-        onSubmit={login}
-        onForgotPassword={forgotPassword}
-      />
+      <SafeAreaView style={[styles.screen, { backgroundColor: theme.bg }]}>
+        <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+        <LoginScreen
+          apiUrl={apiUrl}
+          email={email}
+          password={password}
+          loading={loading}
+          onApiUrlChange={setApiUrl}
+          onEmailChange={setEmail}
+          onPasswordChange={setPassword}
+          onSubmit={login}
+          onForgotPassword={forgotPassword}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  // Ao vivo: overlay em tela cheia, sem BottomTabs.
+  if (liveCamera) {
+    const live = cameras.find((c) => c.id === liveCamera.id) ?? liveCamera;
+    return (
+      <SafeAreaView style={[styles.screen, { backgroundColor: '#070809' }]}>
+        <StatusBar style="light" />
+        <LiveScreen
+          camera={live}
+          topInset={TOP_SAFE}
+          streamUrl={streamUrls[live.id] ?? null}
+          whepUrl={streamWhep[live.id] ?? null}
+          posterUrl={streamPosters[live.id] ?? null}
+          detections={liveDetections}
+          ptzActive={ptzActive}
+          ptzFeedback={ptzFeedback}
+          recordings={recordings}
+          recordingDate={recordingDate}
+          activePlayback={activePlayback}
+          recordingActive={recordingActive}
+          onBack={() => { setActivePlayback(null); setLiveCamera(null); }}
+          onSendPtz={sendPtz}
+          onToggleRecording={toggleRecording}
+          onSnapshot={takeSnapshot}
+          onOpenPlayback={openPlayback}
+          onClosePlayback={() => setActivePlayback(null)}
+          onDownloadRecording={downloadRecording}
+          onPreviousDate={() => shiftRecordingDate(-1)}
+          onNextDate={() => shiftRecordingDate(1)}
+        />
+      </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <StatusBar style="dark" />
-      <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={loadAll} />} contentContainerStyle={styles.content}>
-        {tab === 'dashboard' && (
-          <DashboardScreen
+    <SafeAreaView style={[styles.screen, { backgroundColor: theme.bg }]}>
+      <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+      <View style={[styles.body, { paddingTop: TOP_SAFE }]}>
+        {tab === 'central' && (
+          <CentralScreen
             cameras={cameras}
-            groupedCameras={groupedCameras}
+            user={session.user}
             streamPosters={streamPosters}
-            previewLimit={previewLimit}
             operationalMessages={operationalMessages}
-            onOpenCamera={(cameraId) => { setSelectedCameraId(cameraId); setShowPtz(true); setTab('live'); }}
+            alarmCount={openAlarmCount}
+            refreshing={refreshing}
+            onRefresh={loadAll}
+            onOpenCamera={openLive}
+            onOpenAlarms={() => setTab('alarmes')}
           />
         )}
 
-        {tab === 'live' && (
-          <LiveScreen
-            selectedCamera={selectedCamera}
-            streamUrl={selectedCamera ? streamUrls[selectedCamera.id] ?? null : null}
-            whepUrl={selectedCamera ? streamWhep[selectedCamera.id] ?? null : null}
-            posterUrl={selectedCamera ? streamPosters[selectedCamera.id] ?? null : null}
-            detections={liveDetections}
-            showPtz={showPtz}
-            ptzActive={ptzActive}
-            ptzFeedback={ptzFeedback}
-            onBack={() => { setTab('dashboard'); setShowPtz(true); }}
-            onTogglePtz={() => setShowPtz((value) => !value)}
-            onSendPtz={sendPtz}
-            onStartRecording={(camera) => toggleRecording(camera, true)}
-          />
-        )}
-
-        {tab === 'grid' && (
-          <GridScreen
-            groupedCameras={groupedCameras}
+        {tab === 'mosaico' && (
+          <MosaicScreen
             cameras={cameras}
-            mosaicCameras={mosaicCameras}
-            mosaicAreas={mosaicAreas}
             streamPosters={streamPosters}
-            selectedMosaicGroup={selectedMosaicGroup}
-            onSelectGroup={setSelectedMosaicGroup}
-            onCreateArea={createMosaicArea}
-            onDeleteArea={deleteMosaicArea}
-            onToggleCameraInArea={toggleCameraInMosaicArea}
-            onOpenCamera={(cameraId) => { setSelectedCameraId(cameraId); setShowPtz(true); setTab('live'); }}
+            refreshing={refreshing}
+            onRefresh={loadAll}
+            onOpenCamera={openLive}
           />
         )}
 
-        {tab === 'playback' && (
+        {tab === 'reproducao' && (
           <PlaybackScreen
             cameras={cameras}
             selectedCamera={selectedCamera}
-            streamPosters={streamPosters}
             recordings={recordings}
             activePlayback={activePlayback}
-            onSelectCamera={(cameraId) => {
-              setSelectedCameraId(cameraId);
-              setActivePlayback(null);
-              void loadRecordings(cameraId, recordingDate);
-            }}
+            recordingDate={recordingDate}
+            onSelectCamera={(cameraId) => { setSelectedCameraId(cameraId); setActivePlayback(null); void loadRecordings(cameraId, recordingDate); }}
             onOpenPlayback={openPlayback}
             onClosePlayback={() => setActivePlayback(null)}
             onDownloadRecording={downloadRecording}
-            recordingDate={recordingDate}
             onPreviousDate={() => shiftRecordingDate(-1)}
             onNextDate={() => shiftRecordingDate(1)}
           />
         )}
 
-        {tab === 'alarms' && (
+        {tab === 'alarmes' && (
           <AlarmsScreen
             alarms={alarms}
             canManage={session.user.role !== 'VIEWER'}
+            refreshing={refreshing}
+            onRefresh={() => { void reloadAlarms(); }}
             onAck={ackAlarm}
             onResolve={resolveAlarm}
-            onOpenCamera={(cameraId) => { setSelectedCameraId(cameraId); setShowPtz(true); setTab('live'); }}
+            onOpenCamera={(cameraId) => {
+              const camera = cameras.find((c) => c.id === cameraId);
+              if (camera) openLive(camera);
+            }}
           />
         )}
 
-        {tab === 'profile' && (
-          <ProfileScreen session={session} onLogout={logout} />
+        {tab === 'ajustes' && (
+          <SettingsScreen user={session.user} apiUrl={session.apiUrl} onLogout={logout} />
         )}
-      </ScrollView>
+      </View>
 
-      {tab !== 'live' ? <BottomTabs activeTab={tab} onChange={setTab} alarmCount={openAlarmCount} /> : null}
+      <BottomTabs active={tab} onChange={setTab} alarmCount={openAlarmCount} />
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  screen: { flex: 1 },
+  body: { flex: 1 },
+});

@@ -6,19 +6,46 @@
     <title>DRAC Central</title>
     <style>
       :root {
-        color-scheme: light;
+        color-scheme: dark;
         font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --page: #14161b;
+        --surface: #1b1e25;
+        --surface-soft: #21252e;
+        --surface-2: #282d38;
+        --ink: #e6e9ef;
+        --muted: #9ca5b2;
+        --quiet: #6d7787;
+        --line: #2a2f3a;
+        --line-soft: #23272f;
+        --brand: #4d93f0;
+        --brand-strong: #3b82f6;
+        --brand-soft: rgba(77, 147, 240, .14);
+        --green: #34d399;
+        --green-soft: rgba(52, 211, 153, .13);
+        --amber: #fbbf24;
+        --amber-soft: rgba(251, 191, 36, .13);
+        --red: #f87171;
+        --red-soft: rgba(248, 113, 113, .13);
+        --violet: #a78bfa;
+        --violet-soft: rgba(167, 139, 250, .13);
+        --shadow: 0 8px 24px rgba(0, 0, 0, .35);
+      }
+
+      /* Tema claro (toggle no menu). Mantém azul como cor principal. */
+      body.light {
+        color-scheme: light;
         --page: #f3f5f7;
         --surface: #ffffff;
         --surface-soft: #f8fafc;
+        --surface-2: #eef2f6;
         --ink: #17202c;
         --muted: #667085;
         --quiet: #98a2b3;
         --line: #d9dee7;
         --line-soft: #eef1f5;
-        --brand: #155b75;
-        --brand-strong: #0f465d;
-        --brand-soft: #e7f4f8;
+        --brand: #0b6bd6;
+        --brand-strong: #0a59b6;
+        --brand-soft: rgba(11, 107, 214, .10);
         --green: #18794e;
         --green-soft: #e7f7ee;
         --amber: #9a6700;
@@ -27,7 +54,7 @@
         --red-soft: #fff0ed;
         --violet: #6f4bd8;
         --violet-soft: #f2edff;
-        --shadow: 0 8px 20px rgba(16, 24, 40, .055);
+        --shadow: 0 8px 20px rgba(16, 24, 40, .06);
       }
 
       * { box-sizing: border-box; }
@@ -38,7 +65,7 @@
         min-height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
         color: var(--ink); padding: 0 13px; font-weight: 700; cursor: pointer;
       }
-      button:hover { border-color: #b7c0ce; background: #fbfcfd; }
+      button:hover { border-color: var(--line); background: var(--surface-2); }
       button.primary { border-color: var(--brand); background: var(--brand); color: #ffffff; }
       button.primary:hover { background: var(--brand-strong); }
       button.danger { border-color: #f4b8b0; background: var(--red-soft); color: var(--red); }
@@ -48,15 +75,17 @@
         color: var(--ink); padding: 0 12px; outline: none;
       }
       textarea { min-height: 88px; padding: 10px 12px; resize: vertical; line-height: 1.45; }
-      input:focus, select:focus, textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(21, 91, 117, .12); }
+      input:focus, select:focus, textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(77, 147, 240, .22); }
       .hidden { display: none !important; }
 
       .login-screen { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) 430px; background: var(--page); }
       .login-visual {
         padding: 54px; background:
-          linear-gradient(120deg, rgba(21,91,117,.88), rgba(23,32,44,.94)),
-          radial-gradient(circle at 30% 20%, rgba(255,255,255,.22), transparent 35%);
+          linear-gradient(140deg, rgba(77,147,240,.20), rgba(20,22,27,.0) 55%),
+          radial-gradient(circle at 25% 15%, rgba(77,147,240,.18), transparent 40%),
+          #181b22;
         color: #fff; display: flex; flex-direction: column; justify-content: space-between;
+        border-right: 1px solid var(--line);
       }
       .login-brand { font-size: 22px; font-weight: 850; letter-spacing: 0; }
       .login-claim { max-width: 680px; }
@@ -74,20 +103,30 @@
       .field label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 750; color: var(--muted); }
       .login-error { min-height: 20px; color: var(--red); font-size: 12px; }
 
-      .shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
-      .topbar {
-        min-height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 18px;
-        padding: 0 24px; background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20;
+      .shell { min-height: 100vh; display: grid; grid-template-columns: 238px minmax(0, 1fr); }
+      .sidebar {
+        background: var(--surface); border-right: 1px solid var(--line); display: flex; flex-direction: column;
+        padding: 16px 12px; position: sticky; top: 0; height: 100vh; gap: 4px;
       }
-      .brand { display: flex; align-items: center; gap: 12px; min-width: 240px; }
+      .brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 14px; }
       .brand-mark { width: 34px; height: 34px; border-radius: 10px; background: var(--brand); color: #fff; display: grid; place-items: center; font-weight: 900; }
-      .brand-title { font-weight: 850; }
-      .brand-subtitle { color: var(--muted); font-size: 12px; margin-top: 2px; }
-      .nav { display: flex; align-items: center; gap: 4px; border: 1px solid var(--line); background: var(--surface-soft); padding: 4px; border-radius: 8px; }
-      .nav button { border: 0; min-height: 34px; background: transparent; color: var(--muted); }
-      .nav button.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(16,24,40,.08); }
-      .top-actions { display: flex; align-items: center; gap: 10px; }
-      .user-chip { border: 1px solid var(--line); background: var(--surface-soft); border-radius: 999px; padding: 8px 12px; color: var(--muted); font-size: 12px; }
+      .brand-title { font-weight: 850; font-size: 14px; }
+      .brand-subtitle { color: var(--muted); font-size: 11px; margin-top: 2px; }
+      .nav { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
+      .nav button {
+        border: 0; min-height: 40px; background: transparent; color: var(--muted);
+        justify-content: flex-start; text-align: left; padding: 0 12px; border-radius: 9px; font-weight: 600;
+      }
+      .nav button:hover { background: var(--surface-soft); color: var(--ink); }
+      .nav button.active { background: var(--brand-soft); color: var(--brand); }
+      .sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+      .sidebar-foot button { width: 100%; }
+      .main { display: grid; grid-template-rows: auto 1fr; min-width: 0; }
+      .topbar {
+        min-height: 56px; display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+        padding: 0 24px; background: var(--page); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 20;
+      }
+      .user-chip { border: 1px solid var(--line); background: var(--surface-soft); border-radius: 999px; padding: 9px 12px; color: var(--muted); font-size: 12px; text-align: center; }
       .content { padding: 22px 24px 30px; max-width: 1560px; width: 100%; margin: 0 auto; }
 
       .view { display: none; }
@@ -112,13 +151,13 @@
       .panel-head { padding: 16px 18px; border-bottom: 1px solid var(--line-soft); display: flex; justify-content: space-between; gap: 12px; align-items: center; }
       .panel-title { font-weight: 850; }
       .panel-subtitle { color: var(--muted); font-size: 12px; margin-top: 3px; }
-      .filters { display: grid; grid-template-columns: minmax(240px, 1fr) 170px 190px 170px; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line-soft); background: #fcfdfe; }
+      .filters { display: grid; grid-template-columns: minmax(240px, 1fr) 170px 190px 170px; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line-soft); background: var(--surface-soft); }
       .table-wrap { overflow: auto; }
       table { width: 100%; min-width: 980px; border-collapse: collapse; }
       th, td { padding: 14px 18px; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: middle; font-size: 13px; }
-      th { color: var(--muted); background: #fcfdfe; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+      th { color: var(--muted); background: var(--surface-soft); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
       tbody tr { cursor: pointer; transition: background .14s ease; }
-      tbody tr:hover, tbody tr.selected { background: #f7fafc; }
+      tbody tr:hover, tbody tr.selected { background: var(--surface-2); }
       tbody tr:last-child td { border-bottom: 0; }
       .client-name { font-weight: 850; }
       .subtext { color: var(--muted); font-size: 12px; margin-top: 4px; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -126,14 +165,14 @@
         display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; border: 1px solid transparent; padding: 5px 9px; font-size: 12px; font-weight: 800; white-space: nowrap;
       }
       .badge::before { content: ""; width: 7px; height: 7px; border-radius: 99px; background: currentColor; }
-      .ok { color: var(--green); background: var(--green-soft); border-color: #b8e8ca; }
-      .warn { color: var(--amber); background: var(--amber-soft); border-color: #f3d47b; }
-      .bad { color: var(--red); background: var(--red-soft); border-color: #f5b7ae; }
-      .neutral { color: var(--muted); background: #f2f4f7; border-color: #e4e7ec; }
-      .contract { color: var(--violet); background: var(--violet-soft); border-color: #dccdff; }
+      .ok { color: var(--green); background: var(--green-soft); border-color: rgba(52, 211, 153, .35); }
+      .warn { color: var(--amber); background: var(--amber-soft); border-color: rgba(251, 191, 36, .35); }
+      .bad { color: var(--red); background: var(--red-soft); border-color: rgba(248, 113, 113, .35); }
+      .neutral { color: var(--muted); background: var(--surface-2); border-color: var(--line); }
+      .contract { color: var(--violet); background: var(--violet-soft); border-color: rgba(167, 139, 250, .35); }
       .mono { font-variant-numeric: tabular-nums; }
       .progress { width: 134px; }
-      .progress-line { height: 8px; border-radius: 99px; background: #eef2f6; overflow: hidden; margin-top: 7px; }
+      .progress-line { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; margin-top: 7px; }
       .progress-fill { height: 100%; border-radius: inherit; background: var(--green); }
       .progress-fill.mid { background: var(--amber); }
       .progress-fill.high { background: var(--red); }
@@ -144,7 +183,7 @@
       .detail-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
       .detail-title h2 { margin: 0; font-size: 20px; }
       .quick-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-      .quick-stat { border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; background: #fcfdfe; }
+      .quick-stat { border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; background: var(--surface-soft); }
       .quick-stat label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
       .quick-stat strong { font-size: 20px; }
       .section { border-top: 1px solid var(--line-soft); margin-top: 18px; padding-top: 16px; }
@@ -153,23 +192,23 @@
       .kv div:nth-child(odd) { color: var(--muted); }
       .kv div:nth-child(even) { text-align: right; font-weight: 700; }
       .resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-      .resource { border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12px; background: #fcfdfe; }
-      .resource.allowed { border-color: #b8e8ca; background: var(--green-soft); color: var(--green); }
-      .resource.blocked { border-color: #f5b7ae; background: var(--red-soft); color: var(--red); }
+      .resource { border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12px; background: var(--surface-soft); }
+      .resource.allowed { border-color: rgba(52, 211, 153, .35); background: var(--green-soft); color: var(--green); }
+      .resource.blocked { border-color: rgba(248, 113, 113, .35); background: var(--red-soft); color: var(--red); }
       .spark { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; align-items: end; height: 54px; }
       .spark span { display: block; min-height: 4px; border-radius: 4px 4px 0 0; background: var(--brand); opacity: .85; }
       .trend-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-      .trend-card { border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; background: #fcfdfe; }
+      .trend-card { border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; background: var(--surface-soft); }
       .trend-card label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
       .trend-card strong { display: block; font-size: 20px; }
       .trend-card svg { display: block; width: 100%; height: 54px; margin-top: 8px; overflow: visible; }
       .trend-card path { fill: none; stroke: var(--brand); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-      .trend-card .area { fill: rgba(21, 91, 117, .08); stroke: none; }
+      .trend-card .area { fill: rgba(77, 147, 240, .12); stroke: none; }
       .history-grid { display: grid; gap: 10px; }
       .history-item { border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; background: var(--surface); }
       .history-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 12px; }
       .deploy-steps { display: grid; gap: 8px; }
-      .deploy-step { display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; background: #fcfdfe; }
+      .deploy-step { display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; background: var(--surface-soft); }
       .deploy-dot { width: 24px; height: 24px; border-radius: 999px; display: grid; place-items: center; font-size: 11px; font-weight: 900; color: #fff; background: var(--quiet); }
       .deploy-step.done .deploy-dot { background: var(--green); }
       .deploy-step.current .deploy-dot { background: var(--brand); }
@@ -184,13 +223,31 @@
       .policy-card p { color: var(--muted); margin: 0; line-height: 1.55; font-size: 13px; }
       .alert-list, .timeline { display: grid; gap: 10px; }
       .alert-item, .timeline-item { border: 1px solid var(--line-soft); border-radius: 8px; padding: 12px; background: var(--surface); }
+      /* Alertas — visual moderno com faixa de severidade à esquerda */
+      .alert-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+      .alert-stat { border: 1px solid var(--line-soft); border-radius: 10px; padding: 14px 16px; background: var(--surface); box-shadow: var(--shadow); display: flex; align-items: center; gap: 12px; }
+      .alert-stat .dot { width: 10px; height: 10px; border-radius: 99px; flex: 0 0 auto; }
+      .alert-stat strong { display: block; font-size: 26px; line-height: 1; }
+      .alert-stat span { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+      .alert-card { display: grid; grid-template-columns: 4px 1fr auto; gap: 0 14px; align-items: start; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface); overflow: hidden; }
+      .alert-card .accent { background: var(--quiet); border-radius: 4px 0 0 4px; align-self: stretch; }
+      .alert-card.bad .accent { background: var(--red); }
+      .alert-card.warn .accent { background: var(--amber); }
+      .alert-card.neutral .accent { background: var(--quiet); }
+      .alert-card .body { padding: 13px 0; min-width: 0; }
+      .alert-card .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .alert-card .title { font-weight: 800; }
+      .alert-card .who { color: var(--muted); font-size: 12px; }
+      .alert-card .msg { margin-top: 5px; color: var(--ink); font-size: 13px; line-height: 1.45; }
+      .alert-card .when { padding: 13px 14px 13px 0; color: var(--quiet); font-size: 11px; white-space: nowrap; text-align: right; }
+      .alert-card .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; color: var(--quiet); font-size: 11px; }
       .toast {
-        position: fixed; right: 20px; bottom: 20px; z-index: 50; min-width: 280px; max-width: 430px; background: #17202c; color: #fff;
+        position: fixed; right: 20px; bottom: 20px; z-index: 50; min-width: 280px; max-width: 430px; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line);
         border-radius: 12px; padding: 13px 15px; box-shadow: 0 20px 50px rgba(16,24,40,.25); display: none; font-size: 13px;
       }
       .toast.show { display: block; }
-      dialog { border: 0; border-radius: 16px; padding: 0; width: min(520px, calc(100vw - 32px)); box-shadow: 0 26px 80px rgba(16,24,40,.32); }
-      dialog::backdrop { background: rgba(16,24,40,.45); }
+      dialog { border: 1px solid var(--line); border-radius: 16px; padding: 0; width: min(520px, calc(100vw - 32px)); background: var(--surface); color: var(--ink); box-shadow: 0 26px 80px rgba(0,0,0,.55); }
+      dialog::backdrop { background: rgba(0,0,0,.55); }
       .modal-head, .modal-body, .modal-actions { padding: 18px; }
       .modal-head { font-weight: 900; border-bottom: 1px solid var(--line-soft); }
       .modal-body { color: var(--muted); line-height: 1.55; }
@@ -205,9 +262,13 @@
       @media (max-width: 820px) {
         .login-screen { grid-template-columns: 1fr; }
         .login-visual { display: none; }
-        .topbar { align-items: flex-start; flex-direction: column; padding: 16px; }
-        .nav { width: 100%; overflow-x: auto; justify-content: flex-start; }
-        .top-actions { width: 100%; justify-content: space-between; }
+        .shell { grid-template-columns: 1fr; }
+        .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
+        .brand { padding: 4px; }
+        .nav { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; flex: 1 1 100%; }
+        .nav button { white-space: nowrap; }
+        .sidebar-foot { margin: 0; border: 0; padding: 0; flex-direction: row; align-items: center; }
+        .sidebar-foot button { width: auto; }
         .content { padding: 16px; }
         .metrics, .cards-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .filters { grid-template-columns: 1fr; }
@@ -250,27 +311,34 @@
     </section>
 
     <section id="app-shell" class="shell hidden">
-      <header class="topbar">
+      <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">D</div>
           <div>
             <div class="brand-title">DRAC Central</div>
-            <div class="brand-subtitle">Operação, contratos e saúde da frota</div>
+            <div class="brand-subtitle">Painel da frota</div>
           </div>
         </div>
         <nav class="nav">
           <button data-view-button="operacao" class="active">Operação</button>
           <button data-view-button="clientes">Clientes</button>
           <button data-view-button="instalacao">Instalação</button>
+          <button data-view-button="apps">Apps</button>
           <button data-view-button="contratos">Contratos</button>
           <button data-view-button="alertas">Alertas</button>
           <button data-view-button="auditoria">Auditoria</button>
+          <button data-view-button="usuarios">Usuários</button>
         </nav>
-        <div class="top-actions">
+        <div class="sidebar-foot">
+          <button id="theme-toggle" class="ghost">☀ Tema claro</button>
           <span id="user-chip" class="user-chip">Administrador</span>
-          <button id="refresh" class="primary">Atualizar</button>
           <button id="logout">Sair</button>
         </div>
+      </aside>
+
+      <div class="main">
+      <header class="topbar">
+        <button id="refresh" class="primary">Atualizar</button>
       </header>
 
       <main class="content">
@@ -364,7 +432,7 @@
             <div class="table-wrap">
               <table>
                 <thead>
-                  <tr><th>Cliente</th><th>Servidor</th><th>Processador</th><th>Memória</th><th>Armazenamento</th><th>Versão</th><th>Último sinal</th></tr>
+                  <tr><th>Cliente</th><th>Servidor</th><th>Processador</th><th>Memória</th><th>Armazenamento</th><th>Versão</th><th>Último sinal</th><th>App (APK)</th></tr>
                 </thead>
                 <tbody id="inventory-rows"></tbody>
               </table>
@@ -442,6 +510,58 @@
               </div>
             </aside>
           </div>
+
+          <section class="panel" style="margin-top:16px">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">Instalação remota (SSH)</div>
+                <div class="panel-subtitle">A Central conecta no servidor do cliente e instala sozinha. Gere a instalação oficial acima primeiro.</div>
+              </div>
+            </div>
+            <div class="detail-body">
+              <div class="license-form">
+                <div class="field">
+                  <label for="ri-host">Servidor (IP ou domínio)</label>
+                  <input id="ri-host" placeholder="Ex.: 203.0.113.10" />
+                </div>
+                <div class="field">
+                  <label for="ri-port">Porta SSH</label>
+                  <input id="ri-port" value="22" />
+                </div>
+                <div class="field">
+                  <label for="ri-user">Usuário root</label>
+                  <input id="ri-user" value="root" />
+                </div>
+                <div class="field">
+                  <label for="ri-pass">Senha root</label>
+                  <input id="ri-pass" type="password" placeholder="Usada só para instalar — nunca é salva" />
+                </div>
+                <div class="license-actions">
+                  <button id="ri-start" class="primary">Instalar remotamente</button>
+                </div>
+              </div>
+              <div id="ri-status" class="subtext" style="margin-top:10px">Preencha o servidor e a senha root e clique em instalar.</div>
+              <textarea id="ri-log" readonly style="margin-top:10px;min-height:220px;width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px" placeholder="A saída da instalação aparece aqui em tempo real."></textarea>
+            </div>
+          </section>
+        </section>
+
+        <section id="apps-view" class="view">
+          <div class="page-head">
+            <div>
+              <h1>Apps (APK)</h1>
+              <p>Os apps são gerados por cliente na aba <strong>Clientes</strong> (botão “Gerar app”). Nome, servidor, logo e cores vêm automaticamente do sistema de cada cliente. Aqui você acompanha o build e baixa o APK.</p>
+            </div>
+          </div>
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">Apps dos clientes</div>
+                <div class="panel-subtitle">Status do build e link de download por cliente</div>
+              </div>
+            </div>
+            <div id="apps-list" class="detail-body"><div class="empty">Carregando…</div></div>
+          </section>
         </section>
 
         <section id="contratos-view" class="view">
@@ -498,7 +618,45 @@
             </div>
           </section>
         </section>
+
+        <section id="usuarios-view" class="view">
+          <div class="page-head">
+            <div>
+              <h1>Usuários da central</h1>
+              <p>Contas que podem acessar este painel. O administrador do sistema é definido no servidor e não aparece na lista para edição.</p>
+            </div>
+          </div>
+          <div class="workgrid">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <div class="panel-title">Novo usuário / redefinir senha</div>
+                  <div class="panel-subtitle">Reenviar com o mesmo e-mail troca o nome/senha</div>
+                </div>
+              </div>
+              <div class="detail-body">
+                <div class="license-form">
+                  <div class="field"><label for="user-email">E-mail</label><input id="user-email" type="email" placeholder="pessoa@empresa.com" /></div>
+                  <div class="field"><label for="user-name">Nome</label><input id="user-name" placeholder="Nome da pessoa" /></div>
+                  <div class="field"><label for="user-password">Senha (mín. 8)</label><input id="user-password" type="password" placeholder="Senha de acesso" /></div>
+                  <div class="license-actions"><span></span><button id="user-save" class="primary">Salvar usuário</button></div>
+                </div>
+                <div id="user-form-status" class="subtext" style="margin-top:10px"></div>
+              </div>
+            </section>
+            <aside class="panel detail">
+              <div class="panel-head">
+                <div>
+                  <div class="panel-title">Usuários com acesso</div>
+                  <div class="panel-subtitle">Quem pode entrar na central</div>
+                </div>
+              </div>
+              <div id="users-list" class="detail-body"><div class="empty">Carregando…</div></div>
+            </aside>
+          </div>
+        </section>
       </main>
+      </div>
     </section>
 
     <dialog id="confirm-dialog">
@@ -507,6 +665,28 @@
       <div class="modal-actions">
         <button id="confirm-cancel">Cancelar</button>
         <button id="confirm-apply" class="danger">Aplicar</button>
+      </div>
+    </dialog>
+    <dialog id="app-edit-dialog">
+      <div class="modal-head">Editar app do cliente</div>
+      <div class="modal-body">
+        <input type="hidden" id="app-edit-id" />
+        <div class="field" style="margin-bottom:10px">
+          <label for="app-edit-name">Nome de exibição</label>
+          <input id="app-edit-name" placeholder="Ex.: VIBE" />
+        </div>
+        <div class="field">
+          <label for="app-edit-pkg">Pacote Android (Play Store)</label>
+          <input id="app-edit-pkg" placeholder="com.ajustconsulting.exemplo" />
+        </div>
+        <div class="subtext" style="margin-top:10px;color:#b45309">
+          ⚠️ O pacote é a identidade permanente do app na Play Store. Defina antes da
+          primeira publicação — depois de publicado, NÃO mude (vira outro app).
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="app-edit-cancel">Cancelar</button>
+        <button id="app-edit-save" class="primary">Salvar</button>
       </div>
     </dialog>
     <div id="toast" class="toast"></div>
@@ -737,16 +917,22 @@
         if (number(metric(item, 'openAlarms', 0)) > 0) score += 10;
         return score;
       }
+      // Nome efetivo do cliente em TODA a Central: o que o operador editou
+      // (app.appName) tem prioridade sobre o nome reportado pelo sistema
+      // (customerName, que o heartbeat sobrescreve). Fonte única de exibição.
+      function displayName(item) {
+        return (item && ((item.app && item.app.appName) || item.customerName || item.name || item.id)) || '';
+      }
       function filteredItems() {
         const query = els.search.value.trim().toLowerCase();
         const items = state.installations.filter((item) => {
           if (els.communication.value !== 'all' && item.status !== els.communication.value) return false;
           if (els.contract.value !== 'all' && item.licenseStatus !== els.contract.value) return false;
           if (!query) return true;
-          return [item.id, item.name, item.customerName, item.server?.hostname, item.version].join(' ').toLowerCase().includes(query);
+          return [item.id, item.name, item.customerName, item.app?.appName, item.server?.hostname, item.version].join(' ').toLowerCase().includes(query);
         });
         return items.sort((a, b) => {
-          if (els.sort.value === 'name') return String(a.customerName || a.id).localeCompare(String(b.customerName || b.id));
+          if (els.sort.value === 'name') return displayName(a).localeCompare(displayName(b));
           if (els.sort.value === 'recent') return number(a.ageSeconds, 999999) - number(b.ageSeconds, 999999);
           if (els.sort.value === 'disk') return number(metric(b, 'diskUsagePercent', 0)) - number(metric(a, 'diskUsagePercent', 0));
           if (els.sort.value === 'alarms') return number(metric(b, 'openAlarms', 0)) - number(metric(a, 'openAlarms', 0));
@@ -892,7 +1078,7 @@
           const disk = metric(item, 'diskUsagePercent', null);
           return `
             <tr data-id="${escapeHtml(item.id)}" class="${item.id === state.selectedId ? 'selected' : ''}">
-              <td><div class="client-name">${escapeHtml(item.customerName || item.name || item.id)}</div><div class="subtext">${escapeHtml(item.id)}</div></td>
+              <td><div class="client-name">${escapeHtml(displayName(item))}</div><div class="subtext">${escapeHtml(item.id)}</div></td>
               <td><span class="badge ${item.status === 'ONLINE' ? 'ok' : item.status === 'PENDING_INSTALL' ? 'neutral' : 'bad'}">${communicationLabel(item)}</span><div class="subtext">${item.status === 'PENDING_INSTALL' ? 'sem heartbeat ainda' : timeAgo(item.ageSeconds)}</div></td>
               <td><span class="badge ${contractClasses[item.licenseStatus] || 'ok'}">${contractLabels[item.licenseStatus] || 'Regular'}</span></td>
               <td><span class="mono">${camOnline}/${camTotal}</span><div class="subtext">${camIssue ? `${camIssue} em atenção` : 'sem falhas'}</div></td>
@@ -911,7 +1097,9 @@
       function renderDetail() {
         const item = selectedItem();
         if (!item) {
-          els.detail.innerHTML = '<div class="empty">Selecione um cliente para ver detalhes.</div>';
+          els.detail.innerHTML = state.installations.length
+            ? '<div class="empty">Selecione um cliente para ver detalhes.</div>'
+            : '<div class="empty"><strong>Nenhum cliente ainda</strong><div style="margin-top:8px">Vá em <b>Instalação</b> para cadastrar o primeiro servidor e gerar o comando de instalação.</div></div>';
           return;
         }
         state.selectedId = item.id;
@@ -919,7 +1107,7 @@
         els.detail.innerHTML = `
           <div class="panel-head">
             <div>
-              <div class="panel-title">${escapeHtml(item.customerName || item.id)}</div>
+              <div class="panel-title">${escapeHtml(displayName(item))}</div>
               <div class="panel-subtitle">${escapeHtml(item.id)}</div>
             </div>
             <span class="badge ${item.status === 'ONLINE' ? 'ok' : item.status === 'PENDING_INSTALL' ? 'neutral' : 'bad'}">${communicationLabel(item)}</span>
@@ -1017,15 +1205,28 @@
         els.inventoryRows.innerHTML = items.length ? items.map(item => {
           const mem = item.server?.totalMemoryBytes ? Math.round(((item.server.totalMemoryBytes - item.server.freeMemoryBytes) / item.server.totalMemoryBytes) * 100) : null;
           return `<tr data-id="${escapeHtml(item.id)}">
-            <td><div class="client-name">${escapeHtml(item.customerName || item.id)}</div><div class="subtext">${escapeHtml(item.id)}</div></td>
+            <td><div class="client-name">${escapeHtml(displayName(item))}</div><div class="subtext">${escapeHtml(item.id)}</div></td>
             <td>${escapeHtml(item.server?.hostname || '-')}<div class="subtext">${escapeHtml(platformLabel(item.server?.platform))}</div></td>
             <td>${item.server?.cpuCount ?? '-'} núcleos</td>
             <td>${mem == null ? '-' : progress(mem)}</td>
             <td>${progress(metric(item, 'diskUsagePercent', 0))}</td>
             <td>${escapeHtml(item.version || '-')}</td>
             <td>${item.lastHeartbeatAt ? dtf.format(new Date(item.lastHeartbeatAt)) : '-'}</td>
+            <td>
+              <button data-genapp="${escapeHtml(item.id)}">${item.app ? 'Atualizar app' : 'Gerar app'}</button>
+              <button data-editapp="${escapeHtml(item.id)}" style="margin-left:4px">Editar</button>
+              ${item.app && item.app.packageId ? `<div class="subtext">${escapeHtml(item.app.packageId)}</div>` : ''}
+            </td>
           </tr>`;
-        }).join('') : '<tr><td colspan="7">Nenhum cliente encontrado.</td></tr>';
+        }).join('') : '<tr><td colspan="8">Nenhum cliente encontrado.</td></tr>';
+        els.inventoryRows.querySelectorAll('[data-genapp]').forEach(btn => btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          generateAppForClient(btn.dataset.genapp);
+        }));
+        els.inventoryRows.querySelectorAll('[data-editapp]').forEach(btn => btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          openAppEdit(btn.dataset.editapp);
+        }));
       }
       function renderContractBoard() {
         const item = selectedItem();
@@ -1036,7 +1237,7 @@
         els.contractBoard.innerHTML = `
           <div class="detail-title">
             <div>
-              <h2>${escapeHtml(item.customerName || item.id)}</h2>
+              <h2>${escapeHtml(displayName(item))}</h2>
               <div class="subtext">${escapeHtml(item.id)}${item.policyPending ? ' · aguardando sincronização' : ''}</div>
             </div>
             <span class="badge ${contractClasses[item.licenseStatus] || 'ok'}">${contractLabels[item.licenseStatus] || 'Regular'}</span>
@@ -1054,18 +1255,18 @@
       function collectAlerts() {
         const alerts = [];
         for (const item of state.installations) {
-          if (item.status === 'PENDING_INSTALL') alerts.push({ title: 'Instalação aguardando execução', message: `${item.customerName || item.id} foi provisionado, mas ainda não enviou heartbeat.`, item, tone: 'neutral' });
-          else if (item.status !== 'ONLINE') alerts.push({ title: 'Cliente sem comunicação', message: `${item.customerName || item.id} não enviou sinal recente.`, item, tone: 'bad' });
+          if (item.status === 'PENDING_INSTALL') alerts.push({ title: 'Instalação aguardando execução', message: `${displayName(item)} foi provisionado, mas ainda não enviou heartbeat.`, item, tone: 'neutral' });
+          else if (item.status !== 'ONLINE') alerts.push({ title: 'Cliente sem comunicação', message: `${displayName(item)} não enviou sinal recente.`, item, tone: 'bad' });
           if (['RESTRICTED', 'SUSPENDED'].includes(item.licenseStatus)) alerts.push({ title: `Contrato ${contractLabels[item.licenseStatus]}`, message: item.licenseMessage || 'Política comercial exige atenção.', item, tone: item.licenseStatus === 'SUSPENDED' ? 'bad' : 'warn' });
-          if (number(metric(item, 'diskUsagePercent', 0)) >= 85) alerts.push({ title: 'Armazenamento alto', message: `${metric(item, 'diskUsagePercent', 0)}% de uso em ${item.customerName || item.id}.`, item, tone: 'warn' });
+          if (number(metric(item, 'diskUsagePercent', 0)) >= 85) alerts.push({ title: 'Armazenamento alto', message: `${metric(item, 'diskUsagePercent', 0)}% de uso em ${displayName(item)}.`, item, tone: 'warn' });
           const camIssue = number(metric(item, 'cameraOffline', 0)) + number(metric(item, 'cameraError', 0));
-          if (camIssue) alerts.push({ title: 'Câmeras em atenção', message: `${camIssue} câmera(s) com falha em ${item.customerName || item.id}.`, item, tone: 'warn' });
+          if (camIssue) alerts.push({ title: 'Câmeras em atenção', message: `${camIssue} câmera(s) com falha em ${displayName(item)}.`, item, tone: 'warn' });
           const streamRisk = number(metric(item, 'streamHighCpuRiskCameras', 0));
-          if (streamRisk) alerts.push({ title: 'Streaming em atenção', message: `${streamRisk} câmera(s) com risco alto de CPU/live em ${item.customerName || item.id}.`, item, tone: streamRisk >= 3 ? 'bad' : 'warn' });
+          if (streamRisk) alerts.push({ title: 'Streaming em atenção', message: `${streamRisk} câmera(s) com risco alto de CPU/live em ${displayName(item)}.`, item, tone: streamRisk >= 3 ? 'bad' : 'warn' });
           const liveFailures = number(metric(item, 'streamLiveFailuresLast24h', 0));
-          if (liveFailures) alerts.push({ title: 'Falhas recentes de live', message: `${liveFailures} falha(s) de live nas últimas 24h em ${item.customerName || item.id}.`, item, tone: liveFailures >= 10 ? 'bad' : 'warn' });
+          if (liveFailures) alerts.push({ title: 'Falhas recentes de live', message: `${liveFailures} falha(s) de live nas últimas 24h em ${displayName(item)}.`, item, tone: liveFailures >= 10 ? 'bad' : 'warn' });
           const recordingAttention = number(metric(item, 'recordingAttentionCameras', 0));
-          if (recordingAttention) alerts.push({ title: 'Gravação em atenção', message: `${recordingAttention} câmera(s) com gap ou segmento ausente em ${item.customerName || item.id}.`, item, tone: 'warn' });
+          if (recordingAttention) alerts.push({ title: 'Gravação em atenção', message: `${recordingAttention} câmera(s) com gap ou segmento ausente em ${displayName(item)}.`, item, tone: 'warn' });
           for (const alert of item.alerts || []) alerts.push({ title: alertTitle(alert), message: alertMessage(alert), item, tone: alert.level === 'critical' ? 'bad' : 'warn' });
         }
         return alerts;
@@ -1085,31 +1286,49 @@
       function renderAlerts() {
         const alerts = collectAlerts();
         const history = collectAlertHistory();
+        const crit = alerts.filter(a => a.tone === 'bad').length;
+        const attn = alerts.filter(a => a.tone === 'warn').length;
+        const resolved = history.filter(e => e.status !== 'ACTIVE').length;
         els.alertsBoard.innerHTML = `
+          <div class="alert-summary">
+            <div class="alert-stat"><span class="dot" style="background:var(--red)"></span><div><strong>${crit}</strong><span>Críticos</span></div></div>
+            <div class="alert-stat"><span class="dot" style="background:var(--amber)"></span><div><strong>${attn}</strong><span>Em atenção</span></div></div>
+            <div class="alert-stat"><span class="dot" style="background:var(--green)"></span><div><strong>${resolved}</strong><span>Resolvidos (histórico)</span></div></div>
+          </div>
           <div class="section" style="border-top:0;margin-top:0;padding-top:0">
             <div class="section-title">Alertas ativos</div>
             ${alerts.length ? `<div class="alert-list">${alerts.map(alert => `
-              <div class="alert-item">
-                <span class="badge ${alert.tone}">${escapeHtml(alert.title)}</span>
-                <div class="subtext">${escapeHtml(alert.item.customerName || alert.item.id)}</div>
-                <div style="margin-top:8px">${escapeHtml(alert.message)}</div>
-              </div>`).join('')}</div>` : '<div class="empty">Nenhum alerta ativo.</div>'}
+              <div class="alert-card ${alert.tone}">
+                <div class="accent"></div>
+                <div class="body">
+                  <div class="head"><span class="title">${escapeHtml(alert.title)}</span><span class="who">· ${escapeHtml(displayName(alert.item))}</span></div>
+                  <div class="msg">${escapeHtml(alert.message)}</div>
+                </div>
+                <div class="when">${alert.item.lastHeartbeatAt ? dtf.format(new Date(alert.item.lastHeartbeatAt)) : ''}</div>
+              </div>`).join('')}</div>` : '<div class="empty">Nenhum alerta ativo. ✓</div>'}
           </div>
           <div class="section">
             <div class="section-title">Histórico persistente</div>
-            ${history.length ? `<div class="history-grid">${history.slice(0, 80).map(entry => `
-              <div class="history-item">
-                <span class="badge ${entry.status === 'ACTIVE' ? (entry.level === 'critical' ? 'bad' : 'warn') : 'neutral'}">${entry.status === 'ACTIVE' ? 'Ativo' : 'Resolvido'}</span>
-                <strong style="display:block;margin-top:8px">${escapeHtml(alertCodeLabels[entry.code] || entry.code || 'Alerta operacional')}</strong>
-                <div class="subtext">${escapeHtml(entry.item.customerName || entry.item.id)}</div>
-                <div style="margin-top:8px">${escapeHtml(entry.message || 'Sem mensagem.')}</div>
-                <div class="history-meta">
-                  <span>primeiro: ${entry.firstSeenAt ? dtf.format(new Date(entry.firstSeenAt)) : '-'}</span>
-                  <span>último: ${entry.lastSeenAt ? dtf.format(new Date(entry.lastSeenAt)) : '-'}</span>
-                  ${entry.resolvedAt ? `<span>resolvido: ${dtf.format(new Date(entry.resolvedAt))}</span>` : ''}
-                  <span>${fmt.format(number(entry.occurrences, 1))} ocorrência(s)</span>
+            ${history.length ? `<div class="alert-list">${history.slice(0, 80).map(entry => {
+              const tone = entry.status === 'ACTIVE' ? (entry.level === 'critical' ? 'bad' : 'warn') : 'neutral';
+              return `<div class="alert-card ${tone}">
+                <div class="accent"></div>
+                <div class="body">
+                  <div class="head">
+                    <span class="title">${escapeHtml(alertCodeLabels[entry.code] || entry.code || 'Alerta operacional')}</span>
+                    <span class="badge ${tone}">${entry.status === 'ACTIVE' ? 'Ativo' : 'Resolvido'}</span>
+                    <span class="who">· ${escapeHtml(displayName(entry.item))}</span>
+                  </div>
+                  <div class="msg">${escapeHtml(entry.message || 'Sem mensagem.')}</div>
+                  <div class="meta">
+                    <span>primeiro: ${entry.firstSeenAt ? dtf.format(new Date(entry.firstSeenAt)) : '-'}</span>
+                    <span>último: ${entry.lastSeenAt ? dtf.format(new Date(entry.lastSeenAt)) : '-'}</span>
+                    ${entry.resolvedAt ? `<span>resolvido: ${dtf.format(new Date(entry.resolvedAt))}</span>` : ''}
+                    <span>${fmt.format(number(entry.occurrences, 1))} ocorrência(s)</span>
+                  </div>
                 </div>
-              </div>`).join('')}</div>` : '<div class="empty">Nenhum histórico de alerta persistente.</div>'}
+              </div>`;
+            }).join('')}</div>` : '<div class="empty">Nenhum histórico de alerta persistente.</div>'}
           </div>`;
       }
       function renderAudit() {
@@ -1249,7 +1468,7 @@
         const item = state.installations.find(entry => entry.id === id);
         state.pendingContract = { id, status, message };
         document.querySelector('#confirm-title').textContent = status === 'SUSPENDED' ? 'Suspender cliente' : 'Alterar política';
-        document.querySelector('#confirm-copy').innerHTML = `<strong>${escapeHtml(item?.customerName || id)}</strong><br>A política será alterada para <strong>${contractLabels[status]}</strong>. ${status === 'SUSPENDED' ? 'Ao vivo, novas gravações e IA serão bloqueados após a próxima sincronização.' : 'A nova política será aplicada na próxima sincronização.'}`;
+        document.querySelector('#confirm-copy').innerHTML = `<strong>${escapeHtml(item ? displayName(item) : id)}</strong><br>A política será alterada para <strong>${contractLabels[status]}</strong>. ${status === 'SUSPENDED' ? 'Ao vivo, novas gravações e IA serão bloqueados após a próxima sincronização.' : 'A nova política será aplicada na próxima sincronização.'}`;
         document.querySelector('#confirm-apply').className = status === 'SUSPENDED' ? 'danger' : 'primary';
         document.querySelector('#confirm-dialog').showModal();
       }
@@ -1377,6 +1596,18 @@
 
       els.loginButton.addEventListener('click', login);
       [els.email, els.password].forEach(input => input.addEventListener('keydown', event => { if (event.key === 'Enter') login(); }));
+      function applyTheme(theme) {
+        const light = theme === 'light';
+        document.body.classList.toggle('light', light);
+        try { localStorage.setItem('drac-central-theme', light ? 'light' : 'dark'); } catch { /* ignore */ }
+        const btn = document.querySelector('#theme-toggle');
+        if (btn) btn.textContent = light ? '☾ Tema escuro' : '☀ Tema claro';
+      }
+      applyTheme(localStorage.getItem('drac-central-theme') === 'light' ? 'light' : 'dark');
+      document.querySelector('#theme-toggle').addEventListener('click', () => {
+        applyTheme(document.body.classList.contains('light') ? 'dark' : 'light');
+      });
+
       document.querySelector('#refresh').addEventListener('click', load);
       document.querySelector('#logout').addEventListener('click', async () => {
         await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined);
@@ -1387,6 +1618,8 @@
       document.querySelectorAll('[data-view-button]').forEach(button => button.addEventListener('click', () => {
         setView(button.dataset.viewButton);
         if (state.view === 'auditoria') void load();
+        if (state.view === 'apps') void loadApps();
+        if (state.view === 'usuarios') void loadUsers();
         render();
       }));
       [els.search, els.communication, els.contract, els.sort].forEach(input => input.addEventListener('input', render));
@@ -1420,9 +1653,256 @@
         }
       });
 
+      // ── Apps (APK) ──────────────────────────────────────────────────────────
+      let appsBuildPoll = null;
+      // A aba Apps é dirigida pela lista de INSTALAÇÕES (todos os clientes),
+      // juntando o status de build vindo do agente. Assim Apps e Clientes batem.
+      async function loadApps() {
+        const agentBySlug = {};
+        try {
+          const res = await fetch('/api/admin/apk/clients', { credentials: 'include' });
+          if (res.ok) (((await res.json()).clients) || []).forEach(c => { agentBySlug[c.slug] = c; });
+        } catch { /* agente indisponível: segue só com os dados da Central */ }
+        renderApps(state.installations, agentBySlug);
+      }
+      function buildBadge(status) {
+        const cls = status === 'done' ? 'ok' : status === 'failed' ? 'bad' : (status === 'building' || status === 'queued') ? 'warn' : 'neutral';
+        const label = { done: 'Pronto', failed: 'Falhou', building: 'Gerando…', queued: 'Na fila' }[status] || 'Sem build';
+        return `<span class="badge ${cls}">${label}</span>`;
+      }
+      function renderApps(installs, agentBySlug) {
+        const box = document.querySelector('#apps-list');
+        if (!installs || !installs.length) {
+          box.innerHTML = '<div class="empty">Nenhum cliente ainda. Cadastre um na aba <strong>Instalação</strong> — o app aparece aqui.</div>';
+          return;
+        }
+        let anyBuilding = false;
+        box.innerHTML = installs.map(it => {
+          const app = it.app || {};
+          const slug = app.slug || '';
+          const ac = slug ? agentBySlug[slug] : null;
+          const status = ac && ac.lastBuild ? ac.lastBuild.status : null;
+          const building = status === 'building' || status === 'queued';
+          if (building) anyBuilding = true;
+          const name = displayName(it);
+          const pkg = app.packageId ? escapeHtml(app.packageId) : '<span class="subtext">definido ao gerar</span>';
+          const dl = (ac && ac.apkUrl)
+            ? `<a href="/api/admin/apk/clients/${encodeURIComponent(slug)}/download">Baixar APK</a>`
+            : '<span class="subtext">—</span>';
+          return `<div class="section">
+            <div class="detail-title">
+              <div>
+                <div class="section-title" style="margin:0">${escapeHtml(name)}</div>
+                <div class="subtext">${escapeHtml(it.id)}</div>
+              </div>
+              ${buildBadge(status)}
+            </div>
+            <div class="kv">
+              <div>Pacote</div><div>${pkg}</div>
+              <div>Servidor</div><div>${escapeHtml((ac && ac.apiUrl) || '—')}</div>
+              <div>APK</div><div>${dl}</div>
+            </div>
+            <div class="license-actions" style="grid-template-columns:repeat(3,1fr);margin-top:12px">
+              <button data-genapp="${escapeHtml(it.id)}" class="primary" ${building ? 'disabled' : ''}>${building ? 'Gerando…' : (ac ? 'Atualizar' : 'Gerar app')}</button>
+              <button data-editapp="${escapeHtml(it.id)}">Editar</button>
+              <button data-del-slug="${escapeHtml(slug)}" ${(!ac || building) ? 'disabled' : ''} style="color:var(--red)">Apagar</button>
+            </div>
+          </div>`;
+        }).join('');
+        box.querySelectorAll('[data-genapp]').forEach(b => b.addEventListener('click', () => generateAppForClient(b.dataset.genapp)));
+        box.querySelectorAll('[data-editapp]').forEach(b => b.addEventListener('click', () => openAppEdit(b.dataset.editapp)));
+        box.querySelectorAll('[data-del-slug]').forEach(b => { if (b.dataset.delSlug) b.addEventListener('click', () => deleteApp(b.dataset.delSlug)); });
+        if (anyBuilding) startApkBuildPolling();
+      }
+      async function buildApk(slug) {
+        try {
+          const res = await fetch(`/api/admin/apk/clients/${encodeURIComponent(slug)}/build`, { method: 'POST', credentials: 'include' });
+          const data = await res.json();
+          if (!res.ok) { showToast(data.message || data.error || 'Não foi possível iniciar o build.'); return; }
+          showToast('Build do APK iniciado.');
+          await loadApps();
+          startApkBuildPolling();
+        } catch { showToast('Falha ao iniciar build.'); }
+      }
+      async function deleteApp(slug) {
+        if (!confirm(`Apagar o app "${slug}"? O APK publicado também será removido.`)) return;
+        try {
+          const res = await fetch(`/api/admin/apk/clients/${encodeURIComponent(slug)}`, { method: 'DELETE', credentials: 'include' });
+          const data = await res.json();
+          if (!res.ok) { showToast(data.message || data.error || 'Falha ao apagar.'); return; }
+          showToast('App apagado.');
+          await load();
+          await loadApps();
+        } catch { showToast('Falha ao apagar app.'); }
+      }
+      // Abre o diálogo de edição (nome + pacote) prefill com os valores efetivos.
+      async function openAppEdit(id) {
+        try {
+          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/app`, { credentials: 'include' });
+          const data = await res.json();
+          document.querySelector('#app-edit-id').value = id;
+          document.querySelector('#app-edit-name').value = data.appName || '';
+          document.querySelector('#app-edit-pkg').value = data.packageId || '';
+          document.querySelector('#app-edit-dialog').showModal();
+        } catch { showToast('Não foi possível carregar os dados do app.'); }
+      }
+      async function saveAppEdit() {
+        const id = document.querySelector('#app-edit-id').value;
+        const appName = document.querySelector('#app-edit-name').value.trim();
+        const packageId = document.querySelector('#app-edit-pkg').value.trim();
+        try {
+          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/app`, {
+            method: 'PATCH', credentials: 'include', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ appName, packageId }),
+          });
+          const data = await res.json();
+          if (!res.ok) { showToast(data.message || data.error || 'Falha ao salvar.'); return; }
+          document.querySelector('#app-edit-dialog').close();
+          showToast('App atualizado. Gere o app novamente para aplicar.');
+          await load();
+        } catch { showToast('Falha ao salvar.'); }
+      }
+      async function loadUsers() {
+        const box = document.querySelector('#users-list');
+        try {
+          const res = await fetch('/api/admin/users', { credentials: 'include' });
+          const data = await res.json();
+          if (!res.ok) { box.innerHTML = '<div class="empty">Falha ao carregar usuários.</div>'; return; }
+          renderUsers(data.users || []);
+        } catch { box.innerHTML = '<div class="empty">Falha ao carregar usuários.</div>'; }
+      }
+      function renderUsers(users) {
+        const box = document.querySelector('#users-list');
+        box.innerHTML = users.map((u, i) => `
+          <div class="section" style="${i === 0 ? 'border-top:0;margin-top:0;padding-top:0' : ''}">
+            <div class="detail-title" style="margin:0">
+              <div>
+                <div class="section-title" style="margin:0">${escapeHtml(u.name || u.email)}</div>
+                <div class="subtext">${escapeHtml(u.email)}</div>
+              </div>
+              ${u.builtin
+                ? '<span class="badge neutral">Sistema</span>'
+                : `<button data-deluser="${escapeHtml(u.email)}" style="color:var(--red)">Remover</button>`}
+            </div>
+          </div>`).join('');
+        box.querySelectorAll('[data-deluser]').forEach(b => b.addEventListener('click', () => deleteUser(b.dataset.deluser)));
+      }
+      async function saveUser() {
+        const email = document.querySelector('#user-email').value.trim();
+        const name = document.querySelector('#user-name').value.trim();
+        const password = document.querySelector('#user-password').value;
+        const statusEl = document.querySelector('#user-form-status');
+        if (!email) { statusEl.textContent = 'Informe o e-mail.'; return; }
+        try {
+          const res = await fetch('/api/admin/users', { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, name, password }) });
+          const data = await res.json();
+          if (!res.ok) { statusEl.textContent = data.message || data.error || 'Falha ao salvar.'; return; }
+          statusEl.textContent = 'Usuário salvo.';
+          document.querySelector('#user-email').value = '';
+          document.querySelector('#user-name').value = '';
+          document.querySelector('#user-password').value = '';
+          await loadUsers();
+        } catch { statusEl.textContent = 'Falha ao salvar usuário.'; }
+      }
+      async function deleteUser(email) {
+        if (!confirm(`Remover o acesso de ${email}?`)) return;
+        try {
+          const res = await fetch(`/api/admin/users/${encodeURIComponent(email)}`, { method: 'DELETE', credentials: 'include' });
+          const data = await res.json();
+          if (!res.ok) { showToast(data.message || data.error || 'Falha ao remover.'); return; }
+          showToast('Usuário removido.');
+          await loadUsers();
+        } catch { showToast('Falha ao remover usuário.'); }
+      }
+      function startApkBuildPolling() {
+        if (appsBuildPoll) return;
+        appsBuildPoll = setInterval(async () => {
+          if (state.view !== 'apps') { clearInterval(appsBuildPoll); appsBuildPoll = null; return; }
+          await loadApps();
+        }, 5000);
+      }
+      // Gera o app de um cliente SEM digitação: a Central deriva nome/servidor do
+      // cadastro e puxa logo/cores do próprio sistema do cliente. Mostra o build na aba Apps.
+      async function generateAppForClient(id) {
+        showToast('Gerando app do cliente…');
+        try {
+          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/generate-app`, { method: 'POST', credentials: 'include' });
+          const data = await res.json();
+          if (!res.ok) { showToast(data.message || data.error || 'Não foi possível gerar o app.'); return; }
+          showToast('Build do app iniciado' + (data.brandingApplied ? ' (logo e cores do cliente aplicados).' : '.'));
+          await load();
+          setView('apps');
+          render();
+          await loadApps();
+          startApkBuildPolling();
+        } catch { showToast('Falha ao gerar o app.'); }
+      }
+
+      // ── Instalação remota (SSH) ───────────────────────────────────────────────
+      let riPoll = null;
+      async function startRemoteInstall() {
+        const id = (state.provision?.installation?.id) || document.querySelector('#install-id').value.trim();
+        const statusEl = document.querySelector('#ri-status');
+        if (!id) { statusEl.textContent = 'Gere a instalação oficial acima antes de instalar remotamente.'; return; }
+        const host = document.querySelector('#ri-host').value.trim();
+        const port = Number(document.querySelector('#ri-port').value || 22);
+        const username = document.querySelector('#ri-user').value.trim() || 'root';
+        const password = document.querySelector('#ri-pass').value;
+        if (!host) { statusEl.textContent = 'Informe o servidor.'; return; }
+        if (!password) { statusEl.textContent = 'Informe a senha root.'; return; }
+        const btn = document.querySelector('#ri-start');
+        btn.disabled = true; btn.textContent = 'Instalando…';
+        document.querySelector('#ri-log').value = '';
+        try {
+          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/remote-install`, {
+            method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ host, port, username, password }),
+          });
+          const data = await res.json();
+          if (!res.ok) { statusEl.textContent = data.message || data.error || 'Falha ao iniciar.'; btn.disabled = false; btn.textContent = 'Instalar remotamente'; return; }
+          document.querySelector('#ri-pass').value = ''; // não mantém a senha na tela
+          pollRemoteInstall(data.jobId);
+        } catch { statusEl.textContent = 'Falha ao iniciar instalação remota.'; btn.disabled = false; btn.textContent = 'Instalar remotamente'; }
+      }
+      function pollRemoteInstall(jobId) {
+        const statusEl = document.querySelector('#ri-status');
+        const logEl = document.querySelector('#ri-log');
+        const btn = document.querySelector('#ri-start');
+        if (riPoll) clearInterval(riPoll);
+        riPoll = setInterval(async () => {
+          try {
+            const res = await fetch(`/api/admin/remote-installs/${encodeURIComponent(jobId)}`, { credentials: 'include' });
+            const job = await res.json();
+            if (!res.ok) return;
+            logEl.value = job.log || '';
+            logEl.scrollTop = logEl.scrollHeight;
+            statusEl.textContent = 'Status: ' + job.status;
+            if (job.status === 'done' || job.status === 'failed') {
+              clearInterval(riPoll); riPoll = null;
+              btn.disabled = false; btn.textContent = 'Instalar remotamente';
+              statusEl.textContent = job.status === 'done'
+                ? 'Instalação concluída ✓ (aguarde o primeiro heartbeat na Operação).'
+                : 'Instalação falhou — veja o log.';
+              if (job.status === 'done') void load();
+            }
+          } catch { /* segue tentando */ }
+        }, 2000);
+      }
+
+      document.querySelector('#ri-start').addEventListener('click', startRemoteInstall);
+      document.querySelector('#app-edit-cancel').addEventListener('click', () => document.querySelector('#app-edit-dialog').close());
+      document.querySelector('#app-edit-save').addEventListener('click', saveAppEdit);
+      document.querySelector('#user-save').addEventListener('click', saveUser);
+      // Pré-preenche o host da instalação remota com o servidor informado acima.
+      els.installServer.addEventListener('input', () => {
+        const ri = document.querySelector('#ri-host');
+        if (ri && !ri.value.trim()) ri.value = els.installServer.value.trim();
+      });
+
       setView(state.view);
       renderInstallCommand();
       load();
+      if (state.view === 'apps') void loadApps();
       setInterval(load, 30000);
     </script>
   </body>

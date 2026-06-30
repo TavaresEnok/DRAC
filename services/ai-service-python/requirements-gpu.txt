@@ -1,0 +1,15 @@
+# Variante GPU (NVIDIA/CUDA) do serviço de IA. Idêntica à requirements.txt, mas
+# troca onnxruntime (CPU) por onnxruntime-gpu (CUDA). Usada pelo Dockerfile.gpu.
+# Dormente: a imagem padrão continua usando requirements.txt (CPU).
+fastapi==0.115.0
+uvicorn==0.31.1
+pydantic==2.9.2
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
+requests==2.32.3
+python-multipart==0.0.12
+onnx==1.16.1
+onnxruntime-gpu==1.19.2
+insightface==0.7.3
+openvino>=2025.3.0
+supervision==0.27.0

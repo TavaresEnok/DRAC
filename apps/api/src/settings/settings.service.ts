@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 
-type SettingType = 'string' | 'number' | 'boolean';
+type SettingType = 'string' | 'number' | 'boolean' | 'color' | 'image';
 
 type SettingSpec = {
   type: SettingType;
@@ -9,6 +9,15 @@ type SettingSpec = {
   min?: number;
   max?: number;
 };
+
+// Tamanho máximo do logo em base64 (~400 KB de imagem). Logos de login/topo são
+// pequenos; este teto evita estourar o payload e o banco.
+const MAX_IMAGE_CHARS = 550_000;
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+// Chaves de marca (branding) expostas publicamente — a tela de login precisa
+// lê-las antes de autenticar.
+const BRANDING_KEYS = ['facilityName', 'brandLogoDataUrl', 'brandPrimaryColor', 'brandBackgroundColor'] as const;
 
 // Apenas configurações que produzem efeito real no sistema são expostas aqui.
 // Cada chave abaixo é lida por algum subsistema (ver SettingsService.* getters).
@@ -18,8 +27,24 @@ const SETTING_SPECS: Record<string, SettingSpec> = {
   autoCleanupEnabled: { type: 'boolean', default: true },
   sessionTimeoutMinutes: { type: 'number', default: 480, min: 5, max: 1440 },
   maxLoginAttempts: { type: 'number', default: 5, min: 3, max: 20 },
-  requireStrongPassword: { type: 'boolean', default: true },
+  requireStrongPassword: { type: 'boolean', default: false },
   alarmAudioEnabled: { type: 'boolean', default: true },
+  // Aceleração por GPU do transcode de vídeo (ffmpeg NVENC). Default OFF: só é
+  // ligado pelo módulo de GPU em Configurações depois que o auto-teste passa.
+  gpuAccelerationEnabled: { type: 'boolean', default: false },
+  // Liga a feature de IA no sistema (página + módulo de IA). Default OFF: enquanto
+  // false, a IA e os controles de aceleração de IA ficam dormentes na interface.
+  aiFeatureEnabled: { type: 'boolean', default: false },
+  // Aceleração por GPU da IA (onnxruntime CUDA). Só tem efeito quando aiFeatureEnabled
+  // estiver true E a infraestrutura de GPU para IA estiver provisionada. Default OFF.
+  gpuAiAccelerationEnabled: { type: 'boolean', default: false },
+  // ── Marca (branding) do app web — aplicado em runtime na interface ──────────
+  // Logo em data URL (base64). Vazio = usa o logo padrão DRAC.
+  brandLogoDataUrl: { type: 'image', default: '' },
+  // Cor principal (#RRGGBB). Vazio = usa a cor do tema.
+  brandPrimaryColor: { type: 'color', default: '' },
+  // Cor de fundo (#RRGGBB). Vazio = usa a cor do tema.
+  brandBackgroundColor: { type: 'color', default: '' },
 };
 
 export type SettingsMap = Record<string, string | number | boolean>;
@@ -39,6 +64,7 @@ export class SettingsService {
       return Number.isFinite(n) ? n : Number(spec.default);
     }
     if (spec.type === 'boolean') return raw === 'true' || raw === '1';
+    // 'color' e 'image' são armazenados/lidos como string crua.
     return raw;
   }
 
@@ -62,6 +88,14 @@ export class SettingsService {
     return { ...(await this.loadAll()) };
   }
 
+  // Subconjunto público de marca, lido pela tela de login antes da autenticação.
+  async getBranding(): Promise<SettingsMap> {
+    const all = await this.loadAll();
+    const branding: SettingsMap = {};
+    for (const key of BRANDING_KEYS) branding[key] = all[key];
+    return branding;
+  }
+
   async patch(values: Record<string, unknown>, userId?: string): Promise<SettingsMap> {
     const entries = Object.entries(values).filter(([key]) => key in SETTING_SPECS);
     if (entries.length === 0) {
@@ -78,6 +112,19 @@ export class SettingsService {
         serialized = String(clamped);
       } else if (spec.type === 'boolean') {
         serialized = value === true || value === 'true' || value === 1 || value === '1' ? 'true' : 'false';
+      } else if (spec.type === 'color') {
+        const s = String(value ?? '').trim();
+        // Vazio é válido: significa "voltar ao padrão do tema".
+        if (s && !HEX_COLOR.test(s)) throw new BadRequestException(`Cor inválida para ${key} (use #RRGGBB).`);
+        serialized = s.toLowerCase();
+      } else if (spec.type === 'image') {
+        const s = String(value ?? '').trim();
+        // Vazio é válido: remove o logo personalizado.
+        if (s) {
+          if (!s.startsWith('data:image/')) throw new BadRequestException(`Imagem inválida para ${key}.`);
+          if (s.length > MAX_IMAGE_CHARS) throw new BadRequestException(`Imagem muito grande para ${key} (máx. ~400 KB).`);
+        }
+        serialized = s;
       } else {
         const s = String(value ?? '').trim().slice(0, 200);
         if (!s) throw new BadRequestException(`Valor inválido para ${key}.`);
@@ -114,5 +161,17 @@ export class SettingsService {
 
   async isStrongPasswordRequired(): Promise<boolean> {
     return Boolean((await this.loadAll()).requireStrongPassword);
+  }
+
+  async isGpuAccelerationEnabled(): Promise<boolean> {
+    return Boolean((await this.loadAll()).gpuAccelerationEnabled);
+  }
+
+  async isAiFeatureEnabled(): Promise<boolean> {
+    return Boolean((await this.loadAll()).aiFeatureEnabled);
+  }
+
+  async isGpuAiAccelerationEnabled(): Promise<boolean> {
+    return Boolean((await this.loadAll()).gpuAiAccelerationEnabled);
   }
 }

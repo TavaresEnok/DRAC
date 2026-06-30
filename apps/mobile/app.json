@@ -2,8 +2,8 @@
   "expo": {
     "name": "DRAC Mobile",
     "slug": "drac-mobile",
-    "version": "1.0.0",
-    "orientation": "portrait",
+    "version": "1.0.5",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "newArchEnabled": false,
@@ -17,6 +17,7 @@
     },
     "android": {
       "package": "com.ajustconsulting.dracmobile",
+      "versionCode": 6,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#071013"

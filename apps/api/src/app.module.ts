@@ -22,9 +22,11 @@ import { EvidenceModule } from './evidence/evidence.module';
 import { AlarmsModule } from './alarms/alarms.module';
 import { InvestigationsModule } from './investigations/investigations.module';
 import { SettingsModule } from './settings/settings.module';
+import { GpuModule } from './gpu/gpu.module';
 import { RolePermissionsModule } from './role-permissions/role-permissions.module';
 import { CloudConnectorModule } from './cloud-connector/cloud-connector.module';
 import { CommercialPolicyModule } from './commercial-policy/commercial-policy.module';
+import { AppBuilderModule } from './app-builder/app-builder.module';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard } from '@nestjs/throttler';
 
@@ -45,6 +47,8 @@ import { ThrottlerGuard } from '@nestjs/throttler';
     PrismaModule,
     CommercialPolicyModule,
     SettingsModule,
+    AppBuilderModule,
+    GpuModule,
     RolePermissionsModule,
     CloudConnectorModule,
     HealthModule,

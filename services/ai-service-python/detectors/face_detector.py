@@ -1,7 +1,7 @@
 import threading
 from .base import Detection, Detector
 from onnxruntime_session import configure_insightface_onnxruntime
-from runtime_profiles import FACE_PROFILE
+from runtime_profiles import FACE_PROFILE, onnxruntime_providers, runtime_uses_gpu
 
 
 class FaceDetector(Detector):
@@ -14,6 +14,12 @@ class FaceDetector(Detector):
         self._models_dir = "/app/models"
         self._app = None    # FaceAnalysis (carregado em load())
         self._infer_lock = threading.Lock()
+        # Default: CPU (idêntico ao comportamento atual). Vira CUDA automaticamente
+        # se o serviço subir com FACE_RUNTIME=onnxruntime_cuda numa imagem com
+        # onnxruntime-gpu. Dormente por padrão.
+        self._runtime = str(FACE_PROFILE.get("runtime", "onnxruntime_cpu"))
+        self._providers = onnxruntime_providers(self._runtime)
+        self._ctx_id = 0 if runtime_uses_gpu(self._runtime) else -1
 
     def load(self) -> None:
         if self._app is not None:
@@ -28,11 +34,11 @@ class FaceDetector(Detector):
         self._app = FaceAnalysis(
             name=self._pack,
             root=self._models_dir,
-            providers=["CPUExecutionProvider"],
+            providers=self._providers,
             allowed_modules=["detection"],  # carrega apenas o modelo de detecção
         )
-        self._app.prepare(ctx_id=-1, det_size=(self.det_size, self.det_size))
-        print(f"[FaceDetector] Carregado model='scrfd_500m' runtime='onnxruntime_cpu' det_size={self.det_size} confidence={self.min_conf}")
+        self._app.prepare(ctx_id=self._ctx_id, det_size=(self.det_size, self.det_size))
+        print(f"[FaceDetector] Carregado model='scrfd_500m' runtime='{self._runtime}' providers={self._providers} det_size={self.det_size} confidence={self.min_conf}")
 
     def close(self) -> None:
         self._app = None

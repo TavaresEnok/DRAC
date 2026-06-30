@@ -5,7 +5,7 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import helmet from 'helmet';
 import { randomUUID } from 'node:crypto';
-import { type NextFunction, type Request, type Response } from 'express';
+import { json, urlencoded, type NextFunction, type Request, type Response } from 'express';
 
 // @ts-ignore
 BigInt.prototype.toJSON = function () {
@@ -14,6 +14,10 @@ BigInt.prototype.toJSON = function () {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // Limite do corpo da requisição. O padrão do Express (100kb) é pequeno para o
+  // logo de marca enviado em base64 (até ~550KB de string). 2mb cobre com folga.
+  app.use(json({ limit: '2mb' }));
+  app.use(urlencoded({ extended: true, limit: '2mb' }));
   app.use((req: Request, res: Response, next: NextFunction) => {
     const forwardedRequestId = req.headers['x-request-id'];
     const requestId = typeof forwardedRequestId === 'string' && forwardedRequestId.trim()

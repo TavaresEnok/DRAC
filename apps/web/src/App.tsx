@@ -57,6 +57,7 @@ const WallModePage    = lazyWithReload(() => import('./pages/WallModePage'));
 const UsersPage       = lazyWithReload(() => import('./pages/UsersPage'));
 const GroupsPage      = lazyWithReload(() => import('./pages/GroupsPage'));
 const RolesPage       = lazyWithReload(() => import('./pages/RolesPage'));
+const AppBuilderPage  = lazyWithReload(() => import('./pages/AppBuilderPage'));
 const ProfilePage     = lazyWithReload(() => import('./pages/ProfilePage'));
 const NotFound        = lazyWithReload(() => import('./pages/not-found'));
 
@@ -232,6 +233,9 @@ function AppRoutes() {
       </Route>
       <Route path="/roles">
         {() => <ProtectedRoute component={RolesPage} minRole="admin" />}
+      </Route>
+      <Route path="/app-builder">
+        {() => <ProtectedRoute component={AppBuilderPage} minRole="admin" />}
       </Route>
 
       <Route path="/" component={RootRedirect} />

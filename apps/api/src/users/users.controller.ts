@@ -60,4 +60,13 @@ export class UsersController {
     await this.auditService.log(actor.id, 'user.deactivate', 'User', user.id, undefined, req);
     return user;
   }
+
+  // Exclusão definitiva (diferente do soft-delete acima, que só desativa).
+  @Roles(UserRole.OPERATOR)
+  @Delete(':id/permanent')
+  async hardDelete(@CurrentUser() actor: AuthUser, @Param('id') id: string, @Req() req: Request) {
+    const result = await this.usersService.hardDelete(actor, id);
+    await this.auditService.log(actor.id, 'user.delete', 'User', id, undefined, req);
+    return result;
+  }
 }

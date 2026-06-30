@@ -1,0 +1,77 @@
+# Override de GPU NVIDIA — preparação ÚNICA para habilitar a aceleração por placa.
+#
+# Pré-requisitos no HOST (fora deste arquivo):
+#   1. Driver NVIDIA instalado e funcionando (`nvidia-smi` responde no host).
+#   2. NVIDIA Container Toolkit instalado
+#      (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/).
+#
+# Forma recomendada (faz tudo sozinho): ./gpu-setup.sh
+#
+# Ou manualmente (somando aos compose existentes):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.gpu.yml up -d --build
+#
+# Depois de subir: em Configurações → GPU / Aceleração, rode o auto-teste e clique
+# em "Ativar". O transcode passa de libx264 (CPU) para h264_nvenc (GPU).
+#
+# O ffmpeg com NVENC já vem embutido (mediamtx-nvenc.Dockerfile construído acima).
+# A API usa o mesmo ffmpeg do host-image para auto-teste/métricas via nvidia-smi.
+
+services:
+  api:
+    # Exponha a GPU para o serviço que roda o auto-teste/métricas (nvidia-smi + ffmpeg nvenc).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video, utility, compute]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+      # Sinaliza à API que o pipeline de transcode (MediaMTX) tem NVENC embutido,
+      # para o checklist da UI refletir a realidade mesmo que o ffmpeg da própria
+      # API não tenha nvenc. Setado automaticamente quando este override está ativo.
+      - GPU_TRANSCODE_AVAILABLE=true
+
+  mediamtx:
+    # Onde o transcode de vídeo realmente acontece. Esta imagem (construída
+    # automaticamente pelo gpu-setup.sh) já vem com ffmpeg NVENC embutido —
+    # não é preciso trocar nada à mão.
+    build:
+      context: .
+      dockerfile: mediamtx-nvenc.Dockerfile
+    image: drac-mediamtx-nvenc:local
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video, utility, compute]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+
+  ai-service:
+    # Aceleração de IA por GPU — PRONTA, porém DORMENTE. O ai-service está atrás do
+    # profile `admin-tools` e a feature de IA está desligada, então isto não sobe
+    # no dia a dia. Quando for ativar a IA com GPU, são poucos passos (ver
+    # infra/AI-GPU-README.md): construir esta imagem GPU e ligar os runtimes abaixo.
+    build:
+      context: ../services/ai-service-python
+      dockerfile: Dockerfile.gpu
+    image: drac-ai-service-gpu:local
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # Descomente para acelerar a IA por GPU (exige a imagem Dockerfile.gpu acima):
+      # - GENERAL_RUNTIME=onnxruntime_cuda   # detector de objetos (ver README: NVIDIA precisa de ONNX/TensorRT, não OpenVINO)
+      # - FACE_RUNTIME=onnxruntime_cuda      # detector de rostos (já pronto: cai para CUDA automaticamente)

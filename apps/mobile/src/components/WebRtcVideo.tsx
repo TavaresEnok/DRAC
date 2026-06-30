@@ -8,7 +8,9 @@ const ICE_GATHER_TIMEOUT_MS = 2_000;
 
 // react-native-webrtc expõe addEventListener em runtime (EventTarget do event-target-shim),
 // mas os tipos publicados não declaram. Tipamos só os eventos que usamos e fazemos cast.
-type RtcTrackEvent = { streams?: Array<{ toURL: () => string }> };
+type RtcAudioTrack = { kind: string; enabled: boolean };
+type RtcMediaStream = { toURL: () => string; getAudioTracks?: () => RtcAudioTrack[] };
+type RtcTrackEvent = { streams?: RtcMediaStream[] };
 type PcEvents = {
   addEventListener(type: 'track', listener: (event: RtcTrackEvent) => void): void;
   addEventListener(type: 'connectionstatechange' | 'icegatheringstatechange', listener: () => void): void;
@@ -23,6 +25,8 @@ type WebRtcVideoProps = {
   emptyTextStyle: StyleProp<TextStyle>;
   onStatusChange?: (status: LiveStatus) => void;
   onFailover: () => void;
+  muted?: boolean;
+  contentFit?: 'contain' | 'cover';
 };
 
 function waitIceGathering(pc: RTCPeerConnection): Promise<void> {
@@ -61,10 +65,28 @@ export function WebRtcVideo({
   emptyTextStyle,
   onStatusChange,
   onFailover,
+  muted = false,
+  contentFit = 'contain',
 }: WebRtcVideoProps) {
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<LiveStatus>('connecting');
   const liveRef = useRef(false);
+  const streamRef = useRef<RtcMediaStream | null>(null);
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
+
+  // Aplica o estado de mudo à trilha de áudio recebida (botão "Áudio").
+  const applyMuted = (stream: RtcMediaStream | null) => {
+    try {
+      stream?.getAudioTracks?.().forEach((track) => { track.enabled = !mutedRef.current; });
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    applyMuted(streamRef.current);
+  }, [muted]);
   const onStatusRef = useRef(onStatusChange);
   onStatusRef.current = onStatusChange;
   const onFailoverRef = useRef(onFailover);
@@ -98,7 +120,11 @@ export function WebRtcVideo({
         const ev = pc as unknown as PcEvents;
         ev.addEventListener('track', (event) => {
           const stream = event.streams?.[0];
-          if (stream && !cancelled) setStreamUrl(stream.toURL());
+          if (stream && !cancelled) {
+            streamRef.current = stream;
+            applyMuted(stream);
+            setStreamUrl(stream.toURL());
+          }
         });
         ev.addEventListener('connectionstatechange', () => {
           if (cancelled || !pc) return;
@@ -157,7 +183,7 @@ export function WebRtcVideo({
   return (
     <View style={[videoStyle, local.container]}>
       {streamUrl ? (
-        <RTCView streamURL={streamUrl} style={StyleSheet.absoluteFill} objectFit="contain" />
+        <RTCView streamURL={streamUrl} style={StyleSheet.absoluteFill} objectFit={contentFit} />
       ) : null}
 
       {showPoster ? <Image source={{ uri: posterUri ?? undefined }} style={[StyleSheet.absoluteFill, posterStyle]} /> : null}

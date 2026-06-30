@@ -1,6 +1,10 @@
+/** LoginScreen — autenticação real (POST /auth/login via App). Visual do redesign. */
 import { LinearGradient } from 'expo-linear-gradient';
-import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useState } from 'react';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { BRANDING, BRAND_LOGO } from '../branding';
+import { Icon } from '../components/Icon';
+import { useTheme } from '../theme/ThemeProvider';
 
 interface LoginScreenProps {
   apiUrl: string;
@@ -15,62 +19,139 @@ interface LoginScreenProps {
 }
 
 export function LoginScreen({
-  apiUrl,
-  email,
-  password,
-  loading,
-  onApiUrlChange,
-  onEmailChange,
-  onPasswordChange,
-  onSubmit,
-  onForgotPassword,
+  apiUrl, email, password, loading,
+  onApiUrlChange, onEmailChange, onPasswordChange, onSubmit, onForgotPassword,
 }: LoginScreenProps) {
+  const { theme, branding } = useTheme();
+  const [show, setShow] = useState(false);
+  // Sem servidor definido (app genérico) → mostra o campo já aberto. Em apps
+  // white-label o servidor vem embutido, então fica oculto atrás do link.
+  const [showServer, setShowServer] = useState(!apiUrl);
+
+  // Marca em runtime (do servidor) tem prioridade sobre a embutida no APK.
+  const logoSource = branding.logoDataUrl ? { uri: branding.logoDataUrl } : BRAND_LOGO;
+  const appName = branding.facilityName || BRANDING.appName;
+
   return (
-    <LinearGradient colors={['#f8fafc', '#eef2ff', '#ffffff']} style={styles.screen}>
-      <StatusBar style="dark" />
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.hero}>
-          <View style={styles.logoMark}>
-            <View style={styles.logoLens} />
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.bg }}
+      contentContainerStyle={styles.root}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <LinearGradient
+        colors={[theme.accentBg, 'transparent']}
+        start={{ x: 0.8, y: 0 }}
+        end={{ x: 0.3, y: 0.6 }}
+        style={styles.glow}
+        pointerEvents="none"
+      />
+
+      <View style={styles.hero}>
+        <Image source={logoSource} style={styles.logo} resizeMode="contain" />
+        <Text style={[styles.brand, { color: theme.text }]}>{appName}</Text>
+        <Text style={[styles.tagline, { color: theme.textSub }]}>Monitoramento inteligente</Text>
+      </View>
+
+      <View style={styles.form}>
+        <View style={[styles.field, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <Icon name="mail" size={19} color={theme.textMuted} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>E-MAIL</Text>
+            <TextInput
+              value={email}
+              onChangeText={onEmailChange}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              placeholder="voce@empresa.com"
+              placeholderTextColor={theme.textMuted}
+              style={[styles.input, { color: theme.text }]}
+            />
           </View>
-          <Text style={styles.brand}>DRAC</Text>
-          <Text style={styles.title}>Central de câmeras no bolso</Text>
-          <Text style={styles.subtitle}>Ao vivo, PTZ, reprodução, alertas e gravação com acesso filtrado por grupo.</Text>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.label}>Servidor</Text>
-          <TextInput value={apiUrl} onChangeText={onApiUrlChange} autoCapitalize="none" style={styles.input} placeholder="Endereço do servidor" placeholderTextColor="#8d877b" />
-          <Text style={styles.label}>E-mail</Text>
-          <TextInput value={email} onChangeText={onEmailChange} autoCapitalize="none" keyboardType="email-address" style={styles.input} placeholder="admin@local.dev" placeholderTextColor="#8d877b" />
-          <Text style={styles.label}>Senha</Text>
-          <TextInput value={password} onChangeText={onPasswordChange} secureTextEntry style={styles.input} placeholder="Sua senha" placeholderTextColor="#8d877b" />
-          <Pressable disabled={loading} onPress={onSubmit} style={styles.primaryButton}>
-            {loading ? <ActivityIndicator color="#f7f3ea" /> : <Text style={styles.primaryButtonText}>Entrar com segurança</Text>}
-          </Pressable>
-          <Pressable onPress={onForgotPassword} style={styles.forgotLink} hitSlop={8}>
-            <Text style={styles.forgotLinkText}>Esqueci minha senha</Text>
+        <View style={[styles.field, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          <Icon name="lock" size={19} color={theme.textMuted} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>SENHA</Text>
+            <TextInput
+              value={password}
+              onChangeText={onPasswordChange}
+              secureTextEntry={!show}
+              placeholder="••••••••"
+              placeholderTextColor={theme.textMuted}
+              onSubmitEditing={onSubmit}
+              style={[styles.input, { color: theme.text }]}
+            />
+          </View>
+          <Pressable onPress={() => setShow((s) => !s)} hitSlop={10}>
+            <Icon name="eye" size={19} color={theme.textMuted} />
           </Pressable>
         </View>
-      </SafeAreaView>
-    </LinearGradient>
+
+        {showServer ? (
+          <View style={[styles.field, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <Icon name="server" size={19} color={theme.textMuted} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.fieldLabel, { color: theme.textMuted }]}>SERVIDOR (URL DA API)</Text>
+              <TextInput
+                value={apiUrl}
+                onChangeText={onApiUrlChange}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                placeholder="https://drac.local/api"
+                placeholderTextColor={theme.textMuted}
+                style={[styles.input, { color: theme.text }]}
+              />
+            </View>
+          </View>
+        ) : null}
+
+        <View style={styles.linksRow}>
+          <Pressable onPress={() => setShowServer((s) => !s)} hitSlop={8}>
+            <Text style={[styles.smallLink, { color: theme.textSub }]}>{showServer ? 'Ocultar servidor' : 'Servidor'}</Text>
+          </Pressable>
+          <Pressable onPress={onForgotPassword} hitSlop={8}>
+            <Text style={[styles.forgot, { color: theme.accent }]}>Esqueci minha senha</Text>
+          </Pressable>
+        </View>
+
+        <Pressable onPress={onSubmit} disabled={loading}>
+          <LinearGradient colors={[theme.accent, theme.accentDark]} style={[styles.cta, loading && { opacity: 0.7 }]}>
+            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.ctaText}>Entrar</Text>}
+          </LinearGradient>
+        </Pressable>
+
+        <View style={styles.serverRow}>
+          <View style={[styles.dot, { backgroundColor: apiUrl ? theme.success : theme.warning }]} />
+          <Text style={[styles.serverText, { color: theme.textSub }]} numberOfLines={1}>
+            {apiUrl ? `Servidor · ${apiUrl.replace(/^https?:\/\//, '')}` : 'Defina o servidor para continuar'}
+          </Text>
+        </View>
+      </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  safe: { flex: 1, justifyContent: 'space-between', padding: 20, paddingTop: 64, paddingBottom: 28 },
-  hero: { gap: 10 },
-  logoMark: { width: 80, height: 80, borderRadius: 30, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', shadowColor: '#2563eb', shadowOpacity: 0.22, shadowRadius: 28, elevation: 12, borderWidth: 1, borderColor: '#dbeafe' },
-  logoLens: { width: 36, height: 36, borderRadius: 18, borderWidth: 8, borderColor: '#2563eb', backgroundColor: '#eff6ff' },
-  brand: { color: '#2563eb', fontSize: 16, fontWeight: '900', letterSpacing: 3, textTransform: 'uppercase', marginTop: 8 },
-  title: { color: '#111827', fontSize: 36, lineHeight: 40, fontWeight: '900', maxWidth: 340 },
-  subtitle: { color: '#6b7280', fontSize: 15, lineHeight: 22, maxWidth: 350 },
-  card: { backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 32, padding: 18, gap: 8, shadowColor: '#111827', shadowOpacity: 0.12, shadowRadius: 30, elevation: 12 },
-  label: { color: '#6b7280', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1.2, marginLeft: 2, marginTop: 4 },
-  input: { height: 54, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#f9fafb', borderRadius: 19, paddingHorizontal: 15, color: '#111827', fontSize: 14 },
-  primaryButton: { height: 56, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2563eb', marginTop: 10, shadowColor: '#2563eb', shadowOpacity: 0.24, shadowRadius: 20, elevation: 8 },
-  primaryButtonText: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
-  forgotLink: { alignItems: 'center', paddingVertical: 10, marginTop: 2 },
-  forgotLinkText: { color: '#2563eb', fontSize: 13, fontWeight: '700' },
+  root: { flexGrow: 1, paddingHorizontal: 30, justifyContent: 'center', paddingVertical: 40 },
+  glow: { position: 'absolute', top: 0, left: 0, right: 0, height: 360 },
+  hero: { alignItems: 'center', justifyContent: 'center', gap: 16, marginBottom: 40 },
+  logo: { width: 84, height: 84, borderRadius: 23 },
+  brand: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5, marginTop: 2 },
+  tagline: { fontSize: 14, fontWeight: '500', marginTop: -8 },
+  form: { gap: 13 },
+  field: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 15, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 16, paddingVertical: 11 },
+  fieldLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+  input: { fontSize: 15, fontWeight: '600', padding: 0, marginTop: 1 },
+  linksRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  smallLink: { fontSize: 12.5, fontWeight: '700' },
+  forgot: { textAlign: 'right', fontSize: 12.5, fontWeight: '700' },
+  cta: { borderRadius: 15, paddingVertical: 16, alignItems: 'center', marginTop: 4 },
+  ctaText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  serverRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 4 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  serverText: { fontSize: 11.5, fontWeight: '600', maxWidth: '90%' },
 });

@@ -1,0 +1,29 @@
+# Serviço do agente de build white-label (roda no HOST, como o usuário flashnet).
+# Instalar:
+#   1) echo "BUILD_AGENT_TOKEN=<token-forte>" > /home/flashnet/Drac/infra/build-agent.env
+#      (use o MESMO valor em APP_BUILDER_AGENT_TOKEN no infra/.env da API)
+#   2) sudo cp infra/build-agent.service /etc/systemd/system/drac-build-agent.service
+#   3) sudo systemctl daemon-reload && sudo systemctl enable --now drac-build-agent
+#   4) journalctl -u drac-build-agent -f   # acompanhar
+#
+# Segurança: a porta 8780 deve ficar acessível só ao host/containers (ex.: ufw
+# deny 8780 do exterior). O acesso é protegido por token, mas não exponha à net.
+[Unit]
+Description=DRAC white-label build agent
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=flashnet
+WorkingDirectory=/home/flashnet/Drac/apps/mobile
+EnvironmentFile=/home/flashnet/Drac/infra/build-agent.env
+Environment=BUILD_AGENT_PORT=8780
+Environment=PUBLIC_APK_BASE=http://168.194.13.70:5173
+Environment=MIN_FREE_GB=6
+Environment=PATH=/home/flashnet/toolchain/jdk-17.0.19+10/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/local/bin/node /home/flashnet/Drac/apps/mobile/scripts/build-agent.mjs
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

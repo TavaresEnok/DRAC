@@ -6,6 +6,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { AuthUser } from '../common/types/auth-user.type';
 import { RequirePermission } from '../role-permissions/require-permission.decorator';
+import { Public } from '../auth/decorators/public.decorator';
 import { SettingsService } from './settings.service';
 
 @Controller('settings')
@@ -18,6 +19,13 @@ export class SettingsController {
   @Get()
   getAll() {
     return this.settingsService.getAll();
+  }
+
+  // Marca do app (logo + cores). Público: a tela de login lê antes de autenticar.
+  @Public()
+  @Get('branding')
+  getBranding() {
+    return this.settingsService.getBranding();
   }
 
   @Roles(UserRole.ADMIN)

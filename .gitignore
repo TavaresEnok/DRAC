@@ -54,3 +54,11 @@ webrtc-implementation-guide/
 !services/ai-service-python/README.md
 !services/camera-worker-go/README.md
 !legacy/README.md
+
+# === Segredos e binários (nunca commitar) — adicionado 2026-06-30 ===
+infra/build-agent.env
+infra/apk/
+/drac-mobile.apk
+/drac-web.apk
+*.apk
+*.idsig

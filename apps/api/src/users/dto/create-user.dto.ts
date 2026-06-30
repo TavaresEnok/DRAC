@@ -1,6 +1,6 @@
 import { UserRole } from '@prisma/client';
 import { CameraPermissionLevel } from '@prisma/client';
-import { IsArray, IsEmail, IsEnum, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { IsArray, IsEmail, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class CreateUserDto {
   @IsString()
@@ -9,11 +9,10 @@ export class CreateUserDto {
   @IsEmail()
   email!: string;
 
+  // Sem política de senha forte (por escolha do operador). Piso mínimo só para
+  // evitar senha vazia/acidental.
   @IsString()
-  @MinLength(10)
-  @Matches(/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d])/, {
-    message: 'A senha deve conter letra maiúscula, minúscula, número e caractere especial.',
-  })
+  @MinLength(4)
   password!: string;
 
   @IsEnum(UserRole)

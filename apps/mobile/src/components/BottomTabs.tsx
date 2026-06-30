@@ -1,39 +1,58 @@
+/**
+ * BottomTabs — navegação inferior com blur/translucidez e badge de alarmes.
+ * Espelha apps/mobile/src/components/BottomTabs.tsx, mas usa o tema dinâmico.
+ */
+import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { BOTTOM_SAFE } from '../config';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTheme } from '../theme/ThemeProvider';
 import type { Tab } from '../types';
-import { SvgIcon } from './SvgIcon';
+import { Icon, type IconName } from './Icon';
 
 interface BottomTabsProps {
-  activeTab: Tab;
+  active: Tab;
   onChange: (tab: Tab) => void;
   alarmCount?: number;
 }
 
-const tabs: Array<{ id: Tab; label: string; icon: 'home' | 'play' | 'grid' | 'user' | 'bell' }> = [
-  { id: 'dashboard', icon: 'home', label: 'Casa' },
-  { id: 'alarms', icon: 'bell', label: 'Alarmes' },
-  { id: 'grid', icon: 'grid', label: 'Mosaico' },
-  { id: 'playback', icon: 'play', label: 'Reprodução' },
-  { id: 'profile', icon: 'user', label: 'Perfil' },
+const TABS: Array<{ id: Tab; label: string; icon: IconName }> = [
+  { id: 'central', label: 'Central', icon: 'home' },
+  { id: 'mosaico', label: 'Mosaico', icon: 'grid' },
+  { id: 'reproducao', label: 'Reprodução', icon: 'play' },
+  { id: 'alarmes', label: 'Alarmes', icon: 'bell' },
+  { id: 'ajustes', label: 'Ajustes', icon: 'settings' },
 ];
 
-export function BottomTabs({ activeTab, onChange, alarmCount = 0 }: BottomTabsProps) {
+export function BottomTabs({ active, onChange, alarmCount = 0 }: BottomTabsProps) {
+  const { theme } = useTheme();
+
+  // edge-to-edge: o app desenha atrás da barra de navegação do Android. O inset
+  // inferior real (gesture nav ou 3 botões) garante que as abas fiquem acima dela.
+  const insets = useSafeAreaInsets();
+
   return (
-    <View style={styles.tabs}>
-      {tabs.map((item) => {
-        const active = activeTab === item.id;
-        const showBadge = item.id === 'alarms' && alarmCount > 0;
+    <View
+      style={[
+        styles.bar,
+        { backgroundColor: theme.surface, borderTopColor: theme.border, paddingBottom: 12 + insets.bottom },
+      ]}
+    >
+      {TABS.map((tab) => {
+        const on = active === tab.id;
+        const color = on ? theme.accent : theme.textMuted;
+        const showBadge = tab.id === 'alarmes' && alarmCount > 0;
+        const filled = tab.icon === 'play';
         return (
-          <Pressable key={item.id} onPress={() => onChange(item.id)} style={styles.tab}>
-            <View>
-              <SvgIcon name={item.icon} size={22} color={active ? '#2563eb' : '#9ca3af'} />
+          <Pressable key={tab.id} style={styles.tab} onPress={() => onChange(tab.id)}>
+            <View style={styles.iconWrap}>
+              <Icon name={tab.icon} size={tab.icon === 'home' ? 23 : 22} color={color} fill={filled} />
               {showBadge ? (
-                <View style={styles.badge}>
+                <View style={[styles.badge, { backgroundColor: theme.danger, borderColor: theme.surface }]}>
                   <Text style={styles.badgeText}>{alarmCount > 9 ? '9+' : alarmCount}</Text>
                 </View>
               ) : null}
             </View>
-            <Text style={[styles.tabText, active && styles.tabTextActive]}>{item.label}</Text>
+            <Text style={[styles.label, { color }]}>{tab.label}</Text>
           </Pressable>
         );
       })}
@@ -42,10 +61,29 @@ export function BottomTabs({ activeTab, onChange, alarmCount = 0 }: BottomTabsPr
 }
 
 const styles = StyleSheet.create({
-  tabs: { position: 'absolute', left: 0, right: 0, bottom: 0, height: BOTTOM_SAFE + 84, backgroundColor: 'rgba(255,255,255,0.96)', borderTopWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 12, paddingTop: 10, paddingBottom: BOTTOM_SAFE + 10, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', gap: 4, shadowColor: '#111827', shadowOpacity: 0.14, shadowRadius: 28, elevation: 24 },
-  tab: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 4, gap: 4 },
-  tabText: { color: '#9ca3af', fontSize: 9, fontWeight: '900', letterSpacing: 0.35 },
-  tabTextActive: { color: '#2563eb' },
-  badge: { position: 'absolute', top: -5, right: -9, minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 4, backgroundColor: '#ef4444', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#ffffff' },
-  badgeText: { color: '#ffffff', fontSize: 9, fontWeight: '900' },
+  bar: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'flex-start',
+    paddingTop: 11,
+    paddingBottom: 14, // sobrescrito dinamicamente com navBarHeight
+    paddingHorizontal: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  tab: { flex: 1, alignItems: 'center', gap: 5 },
+  iconWrap: { height: 24, alignItems: 'center', justifyContent: 'center' },
+  label: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.2 },
+  badge: {
+    position: 'absolute',
+    top: -5,
+    right: -9,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+  },
+  badgeText: { color: '#fff', fontSize: 9, fontWeight: '800' },
 });

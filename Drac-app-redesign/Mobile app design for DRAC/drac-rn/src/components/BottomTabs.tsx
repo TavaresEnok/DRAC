@@ -1,0 +1,84 @@
+/**
+ * BottomTabs — navegação inferior com blur/translucidez e badge de alarmes.
+ * Espelha apps/mobile/src/components/BottomTabs.tsx, mas usa o tema dinâmico.
+ */
+import React from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useTheme } from '../theme/ThemeProvider';
+import type { Tab } from '../types';
+import { Icon, type IconName } from './Icon';
+
+interface BottomTabsProps {
+  active: Tab;
+  onChange: (tab: Tab) => void;
+  alarmCount?: number;
+}
+
+const TABS: Array<{ id: Tab; label: string; icon: IconName }> = [
+  { id: 'central', label: 'Central', icon: 'home' },
+  { id: 'mosaico', label: 'Mosaico', icon: 'grid' },
+  { id: 'reproducao', label: 'Reprodução', icon: 'play' },
+  { id: 'alarmes', label: 'Alarmes', icon: 'bell' },
+  { id: 'ajustes', label: 'Ajustes', icon: 'settings' },
+];
+
+export function BottomTabs({ active, onChange, alarmCount = 0 }: BottomTabsProps) {
+  const { theme } = useTheme();
+
+  return (
+    <View
+      style={[
+        styles.bar,
+        { backgroundColor: theme.surface, borderTopColor: theme.border },
+      ]}
+    >
+      {TABS.map((tab) => {
+        const on = active === tab.id;
+        const color = on ? theme.accent : theme.textMuted;
+        const showBadge = tab.id === 'alarmes' && alarmCount > 0;
+        const filled = tab.icon === 'play';
+        return (
+          <Pressable key={tab.id} style={styles.tab} onPress={() => onChange(tab.id)}>
+            <View style={styles.iconWrap}>
+              <Icon name={tab.icon} size={tab.icon === 'home' ? 23 : 22} color={color} fill={filled} />
+              {showBadge ? (
+                <View style={[styles.badge, { backgroundColor: theme.danger, borderColor: theme.surface }]}>
+                  <Text style={styles.badgeText}>{alarmCount > 9 ? '9+' : alarmCount}</Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={[styles.label, { color }]}>{tab.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  bar: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'flex-start',
+    paddingTop: 11,
+    paddingBottom: 26,
+    paddingHorizontal: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  tab: { flex: 1, alignItems: 'center', gap: 5 },
+  iconWrap: { height: 24, alignItems: 'center', justifyContent: 'center' },
+  label: { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.2 },
+  badge: {
+    position: 'absolute',
+    top: -5,
+    right: -9,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+  },
+  badgeText: { color: '#fff', fontSize: 9, fontWeight: '800' },
+});

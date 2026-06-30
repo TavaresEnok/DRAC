@@ -5,7 +5,7 @@ import {
   Camera, Settings,
   ChevronLeft, ChevronRight, LogOut, Keyboard, Shield,
   Server, Users, Radar, FolderKey, ShieldCheck, Search, Sun, Moon,
-  Bell, Crosshair, HardDrive, UserCircle,
+  Bell, Crosshair, HardDrive, UserCircle, Smartphone,
   type LucideIcon,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -58,6 +58,8 @@ const NAV_SECTIONS: NavSection[] = [
       { path: '/groups',  label: 'Grupos',      icon: FolderKey,   roles: ['admin'] },
       { path: '/roles',   label: 'Funções',     icon: ShieldCheck, roles: ['admin'] },
       { path: '/settings',label: 'Configurações',icon: Settings,   roles: ['admin'] },
+      // Geração de APK foi movida para a DRAC Central (painel mestre). Mantemos a
+      // rota /app-builder acessível por URL, mas fora do menu de cada instalação.
     ],
   },
 ];

@@ -1,364 +1,205 @@
-import { useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, Text, View } from 'react-native';
+/**
+ * PlaybackScreen — seleção de câmera, navegação por dia, player (expo-video) e
+ * lista de gravações reais com download. Visual do redesign sobre dados reais.
+ */
+import { LinearGradient } from 'expo-linear-gradient';
+import React, { useState } from 'react';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Icon } from '../components/Icon';
 import { PlaybackVideo } from '../components/VideoPlayers';
-import { SvgIcon } from '../components/SvgIcon';
-import { DateCarousel } from '../components/DateCarousel';
-import type { DateItem } from '../components/DateCarousel';
-import { styles } from '../styles/appStyles';
-import { C } from '../styles/colors';
+import { useTheme } from '../theme/ThemeProvider';
 import type { ActivePlayback, Camera, Recording } from '../types';
-import { formatBytes, formatDateLabel, formatDuration, formatTime, isOnline } from '../utils/format';
-
-type FilterType = 'all' | 'motion' | 'manual';
-
-const FILTERS: { key: FilterType; label: string }[] = [
-  { key: 'all',    label: 'Tudo' },
-  { key: 'motion', label: 'Movimento' },
-  { key: 'manual', label: 'Manual' },
-];
+import { areaLabel, isOnlineStatus, tintFor } from '../utils/camera-view';
+import { formatBytes, formatDateLabel, formatDuration, formatTime } from '../utils/format';
 
 interface PlaybackScreenProps {
   cameras: Camera[];
   selectedCamera: Camera | null;
-  streamPosters: Record<string, string | null>;
   recordings: Recording[];
   activePlayback: ActivePlayback | null;
+  recordingDate: string;
   onSelectCamera: (cameraId: string) => void;
   onOpenPlayback: (recording: Recording) => void;
   onClosePlayback: () => void;
   onDownloadRecording: (recording: Recording) => void;
-  recordingDate: string;
   onPreviousDate: () => void;
   onNextDate: () => void;
 }
 
 export function PlaybackScreen({
-  cameras,
-  selectedCamera,
-  streamPosters,
-  recordings,
-  activePlayback,
-  onSelectCamera,
-  onOpenPlayback,
-  onClosePlayback,
-  onDownloadRecording,
-  recordingDate,
-  onPreviousDate,
-  onNextDate,
+  cameras, selectedCamera, recordings, activePlayback, recordingDate,
+  onSelectCamera, onOpenPlayback, onClosePlayback, onDownloadRecording, onPreviousDate, onNextDate,
 }: PlaybackScreenProps) {
-  const [activeFilter, setActiveFilter] = useState<FilterType>('all');
-
-  // Build the 7-day carousel — selected = the currently loaded date
-  const dayCarousel = useMemo<DateItem[]>(() => {
-    const base = new Date(`${recordingDate}T12:00:00`);
-    return Array.from({ length: 7 }, (_, index) => {
-      const d = new Date(base);
-      d.setDate(base.getDate() - (6 - index));
-      const key = d.toISOString().slice(0, 10);
-      const isSelected = key === recordingDate;
-      return {
-        key,
-        day: d.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', ''),
-        date: d.getDate(),
-        hasRecordings: isSelected && recordings.length > 0,
-        selected: isSelected,
-      };
-    });
-  }, [recordingDate, recordings.length]);
-
-  // Navigate to a carousel date via available prev/next handlers
-  function handleSelectDate(key: string) {
-    const current = new Date(`${recordingDate}T12:00:00`);
-    const target  = new Date(`${key}T12:00:00`);
-    const diff    = Math.round((target.getTime() - current.getTime()) / 86_400_000);
-    if (diff < 0) for (let i = 0; i < -diff; i++) onPreviousDate();
-    else if (diff > 0) for (let i = 0; i < diff; i++) onNextDate();
-  }
-
-  const filtered = useMemo(
-    () => (activeFilter === 'all' ? recordings : recordings),
-    [recordings, activeFilter],
-  );
-
-  const thumbUri = selectedCamera ? (streamPosters[selectedCamera.id] ?? null) : null;
+  const { theme } = useTheme();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const isToday = recordingDate >= new Date().toISOString().slice(0, 10);
 
   return (
-    <View style={styles.page}>
+    <View style={{ flex: 1 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <Text style={[styles.title, { color: theme.text }]}>Reprodução</Text>
 
-      {/* ── Header ─────────────────────────────────────────── */}
-      <View>
-        <Text style={styles.recordingsTitle}>Gravações</Text>
-        <Text style={styles.recordingsSubtitle}>
-          Selecione uma câmera para ver os arquivos salvos e histórico.
-        </Text>
-      </View>
+        {/* Seletor de câmera */}
+        <Pressable
+          style={[styles.selector, { backgroundColor: theme.surface, borderColor: theme.border }]}
+          onPress={() => setPickerOpen(true)}
+        >
+          <View style={styles.selectorLeft}>
+            <View style={[styles.dot, { backgroundColor: selectedCamera && isOnlineStatus(selectedCamera.status) ? theme.success : theme.textMuted }]} />
+            <Text style={[styles.selectorText, { color: theme.text }]} numberOfLines={1}>
+              {selectedCamera?.name ?? 'Selecione uma câmera'}
+            </Text>
+          </View>
+          <Icon name="chevronDown" size={18} color={theme.textSub} strokeWidth={2} />
+        </Pressable>
 
-      {/* ── Camera selector chips (horizontal scroll) ───────── */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.cameraSelectorRow}
-      >
-        {cameras.map((camera) => {
-          const online = isOnline(camera);
-          const active = selectedCamera?.id === camera.id;
-          return (
-            <Pressable
-              key={camera.id}
-              onPress={() => onSelectCamera(camera.id)}
-              style={[styles.cameraSelectorChip, active && styles.cameraSelectorChipActive]}
-            >
-              <View
-                style={[
-                  styles.cameraSelectorDot,
-                  { backgroundColor: active ? '#fff' : online ? C.success : C.danger },
-                ]}
-              />
-              <Text style={[styles.cameraSelectorText, active && styles.cameraSelectorTextActive]}>
-                {camera.name}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
-
-      {/* ── DateCarousel ────────────────────────────────────── */}
-      <DateCarousel dates={dayCarousel} onSelect={handleSelectDate} />
-
-      {/* ── Timeline ruler ──────────────────────────────────── */}
-      {selectedCamera ? (
-        <View style={styles.replayTimelineRuler}>
-          <View style={styles.replayTimelineLabels}>
-            {['00:00', '06:00', '12:00', '18:00', '24:00'].map((label) => (
-              <Text key={label} style={styles.replayTimelineLabel}>{label}</Text>
-            ))}
-          </View>
-          <View style={styles.replayTicks}>
-            {Array.from({ length: 41 }).map((_, i) => (
-              <View key={i} style={[styles.replayTick, i % 10 === 0 && styles.replayTickMajor]} />
-            ))}
-          </View>
-          <View style={styles.replayTrack}>
-            <View style={[styles.replayTrackSegmentBlue,   { flex: 10 }]} />
-            <View style={styles.replayTrackGap} />
-            <View style={[styles.replayTrackSegmentOrange, { flex: 15 }]} />
-            <View style={[styles.replayTrackSegmentBlue,   { flex: 20 }]} />
-            <View style={styles.replayTrackGap} />
-            <View style={[styles.replayTrackSegmentOrange, { flex: 8  }]} />
-            <View style={[styles.replayTrackSegmentBlue,   { flex: 40 }]} />
-          </View>
-          <View style={styles.replayPlayhead}>
-            <View style={styles.replayPlayheadCap} />
-          </View>
-        </View>
-      ) : null}
-
-      {/* ── Playback player ─────────────────────────────────── */}
-      {activePlayback ? (
-        <View style={styles.playbackPlayerCard}>
-          <View style={styles.playbackHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.playbackTitle}>Reprodução</Text>
-              <Text style={{ color: C.textSub, fontSize: 12, fontWeight: '700', marginTop: 2 }}>
-                {formatTime(activePlayback.recording.startedAt)} → {formatTime(activePlayback.recording.endedAt)}
-              </Text>
-            </View>
-            <Pressable onPress={onClosePlayback} style={styles.closePlaybackButton}>
-              <Text style={styles.closePlaybackText}>Fechar</Text>
-            </Pressable>
-          </View>
-          <View style={styles.cloudReplayStage}>
-            <PlaybackVideo uri={activePlayback.url} style={styles.playbackVideo} />
-            <View style={styles.cloudReplayTopBar}>
-              <Text style={styles.cloudReplayBadge}>REPRODUÇÃO</Text>
-              <Text style={styles.cloudReplayTime}>
-                {formatDuration(activePlayback.recording.durationSeconds)}
-              </Text>
-            </View>
-          </View>
-          <View style={styles.rowButtons}>
-            <Pressable
-              onPress={() => onDownloadRecording(activePlayback.recording)}
-              style={styles.smallButton}
-            >
-              <Text style={styles.smallButtonText}>Baixar</Text>
-            </Pressable>
-            <Pressable onPress={onClosePlayback} style={styles.smallButtonDark}>
-              <Text style={styles.smallButtonDarkText}>Voltar para lista</Text>
-            </Pressable>
-          </View>
-        </View>
-      ) : null}
-
-      {/* ── Content when a camera is selected ───────────────── */}
-      {selectedCamera ? (
-        <>
-          {/* Filter chips */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.replayFilterRow}
-          >
-            {FILTERS.map((f) => (
-              <Pressable
-                key={f.key}
-                onPress={() => setActiveFilter(f.key)}
-                style={[
-                  styles.replayFilterChip,
-                  activeFilter === f.key && styles.replayFilterChipActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.replayFilterText,
-                    activeFilter === f.key && styles.replayFilterTextActive,
-                  ]}
-                >
-                  {f.label}
-                </Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-
-          {filtered.length > 0 ? (
+        {/* Player */}
+        <View style={[styles.player, { borderColor: theme.border }]}>
+          {activePlayback ? (
             <>
-              {/* Grid header */}
-              <View style={styles.replayGridHeader}>
-                <Text style={styles.replayGridDate}>{formatDateLabel(recordingDate)}</Text>
-                <Text style={styles.replayGridCount}>
-                  {filtered.length} evento{filtered.length !== 1 ? 's' : ''}
-                </Text>
-              </View>
-
-              {/* 3-column event grid (reference 2 style) */}
-              <View style={styles.replayEventGrid}>
-                {filtered.map((rec) => (
-                  <Pressable
-                    key={rec.id}
-                    onPress={() => onOpenPlayback(rec)}
-                    style={styles.replayEventCard}
-                  >
-                    <View style={styles.replayEventThumb}>
-                      {thumbUri ? (
-                        <Image
-                          source={{ uri: thumbUri }}
-                          style={styles.recordingPreviewImage}
-                        />
-                      ) : null}
-                      <View style={styles.recordingPreviewShade} />
-                      <View style={styles.replayEventIcon}>
-                        <SvgIcon name="move" size={12} color="#ffffff" />
-                      </View>
-                      <View style={styles.replayEventPlay}>
-                        <SvgIcon name="play" size={18} color="#ffffff" />
-                      </View>
-                    </View>
-                    <View style={styles.replayEventFooter}>
-                      <Text style={styles.replayEventTime}>{formatTime(rec.startedAt)}</Text>
-                      <Pressable
-                        onPress={() => onDownloadRecording(rec)}
-                        style={styles.replayEventDownload}
-                      >
-                        <SvgIcon name="download" size={13} color="#6b7280" />
-                      </Pressable>
-                    </View>
-                    <Text style={styles.replayEventMeta}>
-                      {formatDuration(rec.durationSeconds)} · {formatBytes(rec.sizeBytes)}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-
-              {/* Vertical event timeline (reference 1 style) */}
-              <View style={styles.eventTimeline}>
-                {filtered.map((rec, index) => {
-                  const isFirst = index === 0;
-                  const isLast  = index === filtered.length - 1;
-                  return (
-                    <Pressable
-                      key={`tl-${rec.id}`}
-                      onPress={() => onOpenPlayback(rec)}
-                      style={styles.eventTimelineItem}
-                    >
-                      {/* Time column */}
-                      <View style={styles.eventTimelineTime}>
-                        <Text style={styles.eventTimelineTimeText}>
-                          {formatTime(rec.startedAt)}
-                        </Text>
-                      </View>
-
-                      {/* Dot + connecting line column */}
-                      <View style={styles.eventTimelineLineCol}>
-                        {/* Line above dot (hidden for first item) */}
-                        {!isFirst && (
-                          <View style={[styles.eventTimelineLine, { bottom: '50%' }]} />
-                        )}
-                        {/* Line below dot (hidden for last item) */}
-                        {!isLast && (
-                          <View style={[styles.eventTimelineLine, { top: '50%' }]} />
-                        )}
-                        <View style={[styles.eventTimelineDot, styles.eventTimelineDotActive]} />
-                      </View>
-
-                      {/* Content column */}
-                      <View style={styles.eventTimelineContent}>
-                        <View style={styles.eventTimelineHeader}>
-                          <View style={styles.eventTimelineInfo}>
-                            <SvgIcon name="video" size={14} color={C.accent} />
-                            <Text style={[styles.eventTimelineTitle, styles.eventTimelineTitleActive]}>
-                              Gravação · {formatDuration(rec.durationSeconds)}
-                            </Text>
-                          </View>
-
-                          {/* Thumbnail */}
-                          <View style={styles.eventTimelineThumb}>
-                            {thumbUri ? (
-                              <Image
-                                source={{ uri: thumbUri }}
-                                style={styles.eventTimelineThumbImg}
-                              />
-                            ) : null}
-                            <View style={styles.eventTimelineThumbOverlay}>
-                              <View style={styles.eventTimelinePlayBadge}>
-                                <SvgIcon name="play" size={10} color="#fff" />
-                                <Text style={styles.eventTimelinePlayBadgeText}>PLAY</Text>
-                              </View>
-                            </View>
-                            <View style={styles.eventTimelineDuration}>
-                              <Text style={styles.eventTimelineDurationText}>
-                                {formatDuration(rec.durationSeconds)}
-                              </Text>
-                            </View>
-                          </View>
-                        </View>
-
-                        <Text style={styles.replayEventMeta}>
-                          {formatTime(rec.startedAt)} → {formatTime(rec.endedAt)} · {formatBytes(rec.sizeBytes)}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  );
-                })}
-              </View>
+              <PlaybackVideo uri={activePlayback.url} style={StyleSheet.absoluteFill} />
+              <Pressable style={styles.closePlayback} onPress={onClosePlayback} hitSlop={8}>
+                <Icon name="close" size={16} color="#fff" strokeWidth={2.2} />
+              </Pressable>
             </>
           ) : (
-            <View style={styles.emptyCard}>
-              <Text style={styles.emptyTitle}>Sem gravações</Text>
-              <Text style={styles.emptyText}>
-                Não há gravações para esta câmera no dia selecionado.
-              </Text>
-            </View>
+            <>
+              <LinearGradient colors={['#1f2937', '#0b1018']} start={{ x: 0.2, y: 0 }} end={{ x: 0.8, y: 1 }} style={StyleSheet.absoluteFill} />
+              <View style={styles.playerEmpty}>
+                <Icon name="play" size={26} color="rgba(255,255,255,0.5)" fill />
+                <Text style={styles.playerEmptyText}>Toque numa gravação para reproduzir</Text>
+              </View>
+            </>
           )}
-        </>
-      ) : (
-        <View style={styles.emptyCard}>
-          <Text style={styles.emptyTitle}>Selecione uma câmera</Text>
-          <Text style={styles.emptyText}>
-            Toque em uma câmera acima para ver gravações e histórico.
-          </Text>
         </View>
-      )}
 
+        {/* Navegação por dia */}
+        <View style={styles.daysRow}>
+          <Pressable style={[styles.dayNav, { backgroundColor: theme.surface, borderColor: theme.border }]} onPress={onPreviousDate}>
+            <Icon name="chevronLeft" size={16} color={theme.textSub} strokeWidth={2.2} />
+          </Pressable>
+          <View style={[styles.dayPill, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <Icon name="clock" size={14} color={theme.textSub} strokeWidth={2} />
+            <Text style={[styles.dayPillText, { color: theme.text }]}>{formatDateLabel(recordingDate)}</Text>
+          </View>
+          <Pressable
+            style={[styles.dayNav, { backgroundColor: theme.surface, borderColor: theme.border }, isToday && { opacity: 0.4 }]}
+            onPress={isToday ? undefined : onNextDate}
+            disabled={isToday}
+          >
+            <Icon name="chevronRight" size={16} color={theme.textSub} strokeWidth={2.2} />
+          </Pressable>
+        </View>
+
+        {/* Lista de gravações */}
+        <Text style={[styles.listTitle, { color: theme.text }]}>
+          Gravações · {recordings.length}
+        </Text>
+
+        {recordings.length === 0 ? (
+          <View style={[styles.empty, { borderColor: theme.border }]}>
+            <Text style={[styles.emptyText, { color: theme.textSub }]}>
+              {selectedCamera ? 'Nenhuma gravação neste dia.' : 'Selecione uma câmera para ver as gravações.'}
+            </Text>
+          </View>
+        ) : (
+          <View style={{ gap: 9 }}>
+            {recordings.map((rec) => {
+              const active = activePlayback?.recording.id === rec.id;
+              const usable = rec.fileUsable !== false && rec.fileExists !== false;
+              return (
+                <Pressable
+                  key={rec.id}
+                  onPress={() => usable && onOpenPlayback(rec)}
+                  style={[styles.recRow, { backgroundColor: active ? theme.accentBg : theme.surface, borderColor: active ? theme.accent : theme.border }, !usable && { opacity: 0.5 }]}
+                >
+                  <LinearGradient colors={selectedCamera ? tintFor(selectedCamera) : ['#243044', '#101826']} style={styles.recThumb}>
+                    <Icon name="play" size={16} color="#fff" fill />
+                  </LinearGradient>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.recRange, { color: theme.text }]}>
+                      {formatTime(rec.startedAt)} – {rec.endedAt ? formatTime(rec.endedAt) : 'agora'}
+                    </Text>
+                    <View style={styles.recMeta}>
+                      <Text style={[styles.recDuration, { color: theme.textSub }]}>{formatDuration(rec.durationSeconds)}</Text>
+                      <Text style={[styles.recDuration, { color: theme.textMuted }]}>{formatBytes(rec.sizeBytes)}</Text>
+                      {!usable ? <Text style={[styles.recTag, { color: theme.warning, backgroundColor: 'rgba(245,158,11,0.14)' }]}>indisponível</Text> : null}
+                    </View>
+                  </View>
+                  <Pressable onPress={() => onDownloadRecording(rec)} hitSlop={8} disabled={!usable}>
+                    <Icon name="download" size={19} color={theme.accent} strokeWidth={2} />
+                  </Pressable>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
+      </ScrollView>
+
+      {/* Picker de câmera */}
+      <Modal visible={pickerOpen} transparent animationType="slide" onRequestClose={() => setPickerOpen(false)}>
+        <View style={styles.pickerRoot}>
+          <Pressable style={styles.backdrop} onPress={() => setPickerOpen(false)} />
+          <View style={[styles.sheet, { backgroundColor: theme.bg, borderColor: theme.border }]}>
+            <View style={[styles.grabber, { backgroundColor: theme.border }]} />
+            <Text style={[styles.sheetTitle, { color: theme.text }]}>Selecionar câmera</Text>
+            <ScrollView style={{ maxHeight: 440 }} contentContainerStyle={{ gap: 8 }} showsVerticalScrollIndicator={false}>
+              {cameras.map((cam) => {
+                const on = cam.id === selectedCamera?.id;
+                return (
+                  <Pressable
+                    key={cam.id}
+                    onPress={() => { onSelectCamera(cam.id); setPickerOpen(false); }}
+                    style={[styles.pickRow, { backgroundColor: on ? theme.accentBg : theme.surface, borderColor: on ? theme.accent : theme.border }]}
+                  >
+                    <LinearGradient colors={tintFor(cam)} style={styles.pickThumb} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.pickName, { color: theme.text }]} numberOfLines={1}>{cam.name}</Text>
+                      <Text style={[styles.pickArea, { color: theme.textSub }]} numberOfLines={1}>{areaLabel(cam)}</Text>
+                    </View>
+                    {on ? <Icon name="check" size={18} color={theme.accent} strokeWidth={2.6} /> : null}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  content: { paddingHorizontal: 22, paddingTop: 6, paddingBottom: 24, gap: 14 },
+  title: { fontSize: 27, fontWeight: '800', letterSpacing: -0.5, marginTop: 10 },
+  selector: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 12, paddingHorizontal: 15 },
+  selectorLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  selectorText: { fontSize: 14, fontWeight: '700', flex: 1 },
+  player: { height: 200, borderRadius: 18, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, position: 'relative', backgroundColor: '#070809' },
+  playerEmpty: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', gap: 10 },
+  playerEmptyText: { color: 'rgba(255,255,255,0.6)', fontSize: 12.5, fontWeight: '600' },
+  closePlayback: { position: 'absolute', top: 10, right: 10, width: 30, height: 30, borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
+  daysRow: { flexDirection: 'row', gap: 8, alignItems: 'stretch' },
+  dayNav: { width: 46, height: 44, borderRadius: 13, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
+  dayPill: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 13, borderWidth: StyleSheet.hairlineWidth },
+  dayPillText: { fontSize: 14, fontWeight: '800' },
+  listTitle: { fontSize: 14, fontWeight: '800', marginTop: 2 },
+  empty: { borderWidth: 1, borderStyle: 'dashed', borderRadius: 16, paddingVertical: 28, paddingHorizontal: 20, alignItems: 'center' },
+  emptyText: { fontSize: 12.5, fontWeight: '600', textAlign: 'center' },
+  recRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 11, paddingHorizontal: 13 },
+  recThumb: { width: 44, height: 44, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  recRange: { fontSize: 13.5, fontWeight: '700' },
+  recMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3 },
+  recDuration: { fontSize: 11, fontWeight: '600' },
+  recTag: { fontSize: 9.5, fontWeight: '800', paddingVertical: 2, paddingHorizontal: 7, borderRadius: 6, overflow: 'hidden' },
+  pickerRoot: { flex: 1, justifyContent: 'flex-end' },
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)' },
+  sheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 22, paddingTop: 8, paddingBottom: 34 },
+  grabber: { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginTop: 6, marginBottom: 12 },
+  sheetTitle: { fontSize: 18, fontWeight: '800', marginBottom: 14 },
+  pickRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, padding: 10 },
+  pickThumb: { width: 42, height: 42, borderRadius: 11 },
+  pickName: { fontSize: 13.5, fontWeight: '700' },
+  pickArea: { fontSize: 11.5, fontWeight: '600', marginTop: 1 },
+});

@@ -1,0 +1,195 @@
+// build-agent.mjs — agente de build white-label, roda NO HOST (onde estão o
+// toolchain Android e o build-client.sh). A API (em container) NÃO consegue
+// buildar; ela faz proxy autenticado para este agente.
+//
+// Endpoints (header x-build-token obrigatório, exceto /health):
+//   GET  /health
+//   GET  /clients                 → lista clientes + status do último build
+//   POST /clients {slug,appName,apiUrl,packageId?,primaryColor?,logoBase64?}
+//   DELETE /clients/:slug         → apaga config + APK (local e nginx) + jobs
+//   POST /builds  {slug}          → enfileira build (serializado) → {jobId}
+//   GET  /builds                  → histórico (sem log completo)
+//   GET  /builds/:id              → job com log
+//
+// Variáveis: BUILD_AGENT_PORT (8780), BUILD_AGENT_TOKEN (obrigatório),
+//   PUBLIC_APK_BASE (http://168.194.13.70:5173), MIN_FREE_GB (6).
+import http from 'node:http';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MOBILE_DIR = path.resolve(__dirname, '..');
+const CLIENTS_DIR = path.join(MOBILE_DIR, 'clients');
+const BUILDS_DIR = path.join(MOBILE_DIR, 'builds');
+const STATE_FILE = path.join(BUILDS_DIR, 'agent-state.json');
+// Diretório do host servido pelo nginx em /apk (sobrevive a rebuilds do vms-web).
+const APK_PUBLISH_DIR = process.env.APK_PUBLISH_DIR || path.resolve(MOBILE_DIR, '../../infra/apk');
+
+const PORT = Number(process.env.BUILD_AGENT_PORT || 8780);
+const TOKEN = process.env.BUILD_AGENT_TOKEN || '';
+const PUBLIC_APK_BASE = (process.env.PUBLIC_APK_BASE || 'http://168.194.13.70:5173').replace(/\/+$/, '');
+const MIN_FREE_GB = process.env.MIN_FREE_GB || '6';
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}$/;
+const PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
+
+fs.mkdirSync(BUILDS_DIR, { recursive: true });
+
+let state = { jobs: [] };
+try { state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); } catch { /* primeiro start */ }
+const saveState = () => fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+
+// ── Fila serializada (1 build por vez) ─────────────────────────────────────
+let running = false;
+const queue = [];
+
+function processQueue() {
+  if (running || queue.length === 0) return;
+  const job = queue.shift();
+  running = true;
+  job.status = 'building';
+  job.startedAt = new Date().toISOString();
+  saveState();
+
+  const child = spawn('bash', [path.join(__dirname, 'build-client.sh'), job.slug], {
+    cwd: MOBILE_DIR,
+    env: { ...process.env, MIN_FREE_GB },
+  });
+  let log = '';
+  const append = (b) => { log = (log + b.toString()).slice(-8000); job.log = log; };
+  child.stdout.on('data', append);
+  child.stderr.on('data', append);
+  child.on('close', (code) => {
+    job.finishedAt = new Date().toISOString();
+    if (code === 0) {
+      job.status = 'done';
+      const ver = /OK_VERSION=(.+)/.exec(log);
+      const url = /OK_URL=(.+)/.exec(log);
+      job.version = ver ? ver[1].trim() : null;
+      job.url = url ? PUBLIC_APK_BASE + url[1].trim() : null;
+    } else {
+      job.status = 'failed';
+      job.error = `build saiu com código ${code}`;
+    }
+    saveState();
+    running = false;
+    processQueue();
+  });
+}
+
+// ── Helpers de clientes ────────────────────────────────────────────────────
+function listClients() {
+  let slugs = [];
+  try { slugs = fs.readdirSync(CLIENTS_DIR).filter((s) => s !== 'default'); } catch { /* vazio */ }
+  return slugs.map((slug) => {
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(path.join(CLIENTS_DIR, slug, 'config.json'), 'utf8')); } catch { /* */ }
+    const apk = path.join(APK_PUBLISH_DIR, `drac-${slug}.apk`);
+    const lastJob = [...state.jobs].reverse().find((j) => j.slug === slug);
+    return {
+      slug,
+      appName: cfg.appName ?? slug,
+      apiUrl: cfg.apiUrl ?? '',
+      packageId: cfg.packageId ?? '',
+      primaryColor: cfg.primaryColor ?? null,
+      hasLogo: fs.existsSync(path.join(CLIENTS_DIR, slug, 'logo.png')),
+      apkExists: fs.existsSync(apk),
+      apkUrl: fs.existsSync(apk) ? `${PUBLIC_APK_BASE}/apk/drac-${slug}.apk` : null,
+      lastBuild: lastJob ? { status: lastJob.status, version: lastJob.version ?? null, finishedAt: lastJob.finishedAt ?? null } : null,
+    };
+  });
+}
+
+function writeClient(body) {
+  const { slug, appName, apiUrl } = body;
+  if (!SLUG_RE.test(slug || '')) throw new Error('slug inválido (a-z 0-9 -)');
+  if (!appName || !apiUrl) throw new Error('appName e apiUrl são obrigatórios');
+  const packageId = body.packageId || `com.ajustconsulting.drac${String(slug).replace(/-/g, '')}`;
+  if (!PKG_RE.test(packageId)) throw new Error('packageId inválido');
+  const dir = path.join(CLIENTS_DIR, slug);
+  fs.mkdirSync(dir, { recursive: true });
+  const cfg = { appName, slug: `drac-${slug}`, packageId, apiUrl, primaryColor: body.primaryColor || '#3b82f6' };
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2) + '\n');
+  if (body.logoBase64) {
+    const data = String(body.logoBase64).replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(dir, 'logo.png'), Buffer.from(data, 'base64'));
+  }
+  return cfg;
+}
+
+function rmrf(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* ignore */ } }
+
+// Apaga um app: config do cliente, APK local e o publicado no nginx, e os jobs.
+// Mantém o keystore (~/toolchain/keystores/<slug>.jks) de propósito: se o mesmo
+// cliente for regerado depois, o app instala por cima do antigo (mesma assinatura).
+function deleteClient(slug) {
+  if (!SLUG_RE.test(slug)) throw new Error('slug inválido');
+  const dir = path.join(CLIENTS_DIR, slug);
+  if (slug === 'default' || !fs.existsSync(dir)) throw new Error('cliente não existe');
+  rmrf(dir);
+  rmrf(path.join(BUILDS_DIR, `drac-${slug}.apk`));
+  rmrf(path.join(BUILDS_DIR, `drac-${slug}.apk.idsig`));
+  rmrf(path.join(APK_PUBLISH_DIR, `drac-${slug}.apk`)); // remove do diretório servido
+  state.jobs = state.jobs.filter((j) => j.slug !== slug);
+  saveState();
+}
+
+// ── HTTP ───────────────────────────────────────────────────────────────────
+const send = (res, code, obj) => {
+  res.writeHead(code, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(obj));
+};
+const readBody = (req) => new Promise((resolve) => {
+  let d = ''; req.on('data', (c) => { d += c; }); req.on('end', () => { try { resolve(d ? JSON.parse(d) : {}); } catch { resolve(null); } });
+});
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  const p = url.pathname;
+
+  if (p === '/health') return send(res, 200, { ok: true });
+  if (!TOKEN || req.headers['x-build-token'] !== TOKEN) return send(res, 401, { error: 'unauthorized' });
+
+  try {
+    if (req.method === 'GET' && p === '/clients') return send(res, 200, { clients: listClients() });
+    if (req.method === 'POST' && p === '/clients') {
+      const body = await readBody(req);
+      if (!body) return send(res, 400, { error: 'json inválido' });
+      const cfg = writeClient(body);
+      return send(res, 200, { ok: true, client: cfg });
+    }
+    if (req.method === 'POST' && p === '/builds') {
+      const body = await readBody(req);
+      if (!body || !SLUG_RE.test(body.slug || '')) return send(res, 400, { error: 'slug inválido' });
+      if (!fs.existsSync(path.join(CLIENTS_DIR, body.slug, 'config.json'))) return send(res, 404, { error: 'cliente não existe' });
+      const job = { id: `${Date.now()}-${body.slug}`, slug: body.slug, status: 'queued', queuedAt: new Date().toISOString(), log: '' };
+      state.jobs.push(job);
+      if (state.jobs.length > 100) state.jobs = state.jobs.slice(-100);
+      saveState();
+      queue.push(job);
+      processQueue();
+      return send(res, 202, { jobId: job.id, status: job.status });
+    }
+    if (req.method === 'DELETE' && p.startsWith('/clients/')) {
+      const slug = decodeURIComponent(p.slice('/clients/'.length));
+      deleteClient(slug);
+      return send(res, 200, { ok: true, slug });
+    }
+    if (req.method === 'GET' && p === '/builds') {
+      const jobs = [...state.jobs].reverse().map(({ log, ...j }) => j);
+      return send(res, 200, { jobs });
+    }
+    if (req.method === 'GET' && p.startsWith('/builds/')) {
+      const id = decodeURIComponent(p.slice('/builds/'.length));
+      const job = state.jobs.find((j) => j.id === id);
+      return job ? send(res, 200, { job }) : send(res, 404, { error: 'job não encontrado' });
+    }
+    return send(res, 404, { error: 'rota não encontrada' });
+  } catch (e) {
+    return send(res, 400, { error: e instanceof Error ? e.message : 'erro' });
+  }
+});
+
+server.listen(PORT, () => console.log(`build-agent ouvindo em :${PORT}`));

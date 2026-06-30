@@ -1,5 +1,15 @@
 export type Direction = 'Up' | 'Down' | 'Left' | 'Right' | 'ZoomIn' | 'ZoomOut';
-export type Tab = 'dashboard' | 'live' | 'grid' | 'alarms' | 'playback' | 'profile';
+// Abas do redesign. "Live" deixou de ser aba: é um overlay em tela cheia aberto a
+// partir de uma câmera (ver App.tsx → liveCamera).
+export type Tab = 'central' | 'mosaico' | 'reproducao' | 'alarmes' | 'ajustes';
+
+// Grupo de câmeras criado pelo usuário no app (organização pessoal), persistido
+// localmente em AsyncStorage — mesma natureza das antigas "mosaic areas".
+export type CameraGroup = {
+  id: string;
+  name: string;
+  cameraIds: string[];
+};
 
 export type AlarmStatus = 'OPEN' | 'ACKED' | 'RESOLVED';
 

@@ -37,6 +37,8 @@ type LiveVideoProps = {
   emptyTitleStyle: StyleProp<TextStyle>;
   emptyTextStyle: StyleProp<TextStyle>;
   onStatusChange?: (status: LiveStatus) => void;
+  muted?: boolean;
+  contentFit?: 'contain' | 'cover';
 };
 
 /**
@@ -61,6 +63,8 @@ export function LiveVideo(props: LiveVideoProps) {
         posterStyle={props.posterStyle}
         emptyTextStyle={props.emptyTextStyle}
         onStatusChange={props.onStatusChange}
+        muted={props.muted}
+        contentFit={props.contentFit}
         onFailover={() => setWebrtcFailed(true)}
       />
     );
@@ -78,6 +82,8 @@ function HlsLiveVideo({
   emptyTitleStyle,
   emptyTextStyle,
   onStatusChange,
+  muted = false,
+  contentFit = 'contain',
 }: LiveVideoProps) {
   // Player criado uma única vez. A troca de câmera/reconexão usa player.replace(),
   // sem recriar a instância — recriar a cada render causaria piscar e vazamento.
@@ -100,6 +106,15 @@ function HlsLiveVideo({
     setStatus(next);
     onStatusChangeRef.current?.(next);
   }, []);
+
+  // Mudo/áudio sob demanda (botão "Áudio" do ao vivo).
+  useEffect(() => {
+    try {
+      player.muted = muted;
+    } catch {
+      // ignore
+    }
+  }, [muted, player]);
 
   useEffect(() => {
     if (!uri) {
@@ -260,7 +275,7 @@ function HlsLiveVideo({
   return (
     <View style={[videoStyle, local.container]}>
       {uri ? (
-        <VideoView player={player} style={StyleSheet.absoluteFill} nativeControls contentFit="contain" />
+        <VideoView player={player} style={StyleSheet.absoluteFill} nativeControls={false} contentFit={contentFit} />
       ) : null}
 
       {showPoster ? (
