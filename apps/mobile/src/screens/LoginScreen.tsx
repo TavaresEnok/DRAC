@@ -24,8 +24,10 @@ export function LoginScreen({
 }: LoginScreenProps) {
   const { theme, branding } = useTheme();
   const [show, setShow] = useState(false);
-  // Sem servidor definido (app genérico) → mostra o campo já aberto. Em apps
-  // white-label o servidor vem embutido, então fica oculto atrás do link.
+  // App white-label = servidor embutido no APK (BRANDING.apiUrl). Nesse caso o
+  // usuário final NÃO vê nada de servidor/URL (é info interna). Só o app
+  // genérico (sem servidor embutido) mostra o campo p/ digitar o endereço.
+  const hasBakedServer = !!(BRANDING.apiUrl && BRANDING.apiUrl.trim());
   const [showServer, setShowServer] = useState(!apiUrl);
 
   // Marca em runtime (do servidor) tem prioridade sobre a embutida no APK.
@@ -90,7 +92,7 @@ export function LoginScreen({
           </Pressable>
         </View>
 
-        {showServer ? (
+        {!hasBakedServer && showServer ? (
           <View style={[styles.field, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <Icon name="server" size={19} color={theme.textMuted} />
             <View style={{ flex: 1 }}>
@@ -110,9 +112,11 @@ export function LoginScreen({
         ) : null}
 
         <View style={styles.linksRow}>
-          <Pressable onPress={() => setShowServer((s) => !s)} hitSlop={8}>
-            <Text style={[styles.smallLink, { color: theme.textSub }]}>{showServer ? 'Ocultar servidor' : 'Servidor'}</Text>
-          </Pressable>
+          {!hasBakedServer ? (
+            <Pressable onPress={() => setShowServer((s) => !s)} hitSlop={8}>
+              <Text style={[styles.smallLink, { color: theme.textSub }]}>{showServer ? 'Ocultar servidor' : 'Servidor'}</Text>
+            </Pressable>
+          ) : <View />}
           <Pressable onPress={onForgotPassword} hitSlop={8}>
             <Text style={[styles.forgot, { color: theme.accent }]}>Esqueci minha senha</Text>
           </Pressable>
@@ -124,12 +128,14 @@ export function LoginScreen({
           </LinearGradient>
         </Pressable>
 
-        <View style={styles.serverRow}>
-          <View style={[styles.dot, { backgroundColor: apiUrl ? theme.success : theme.warning }]} />
-          <Text style={[styles.serverText, { color: theme.textSub }]} numberOfLines={1}>
-            {apiUrl ? `Servidor · ${apiUrl.replace(/^https?:\/\//, '')}` : 'Defina o servidor para continuar'}
-          </Text>
-        </View>
+        {!hasBakedServer ? (
+          <View style={styles.serverRow}>
+            <View style={[styles.dot, { backgroundColor: apiUrl ? theme.success : theme.warning }]} />
+            <Text style={[styles.serverText, { color: theme.textSub }]} numberOfLines={1}>
+              {apiUrl ? `Servidor · ${apiUrl.replace(/^https?:\/\//, '')}` : 'Defina o servidor para continuar'}
+            </Text>
+          </View>
+        ) : null}
       </View>
     </ScrollView>
   );
