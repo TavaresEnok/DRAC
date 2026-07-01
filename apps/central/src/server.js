@@ -978,16 +978,30 @@ function addrToApiUrl(addr) {
   return `http://${a}:5173/api`;
 }
 
-// Descobre a URL da API do cliente a partir do que a Central já sabe, em ordem
-// de confiança: URL reportada > endereço do provisionamento > IP observado no
-// heartbeat > IP embutido no id (ex.: drac-local-168-194-13-70).
+// Endereço privado/loopback/Docker — NÃO serve p/ um celular acessar.
+function isPrivateHost(addr) {
+  const h = String(addr || '').replace(/^https?:\/\//i, '').split(/[:/]/)[0].trim();
+  if (!h) return true;
+  if (h === 'localhost' || h === '::1') return true;
+  return /^(127\.|10\.|192\.168\.|169\.254\.|0\.0\.0\.0$)/.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h);
+}
+
+// Descobre a URL da API do cliente. PRIORIZA endereço PÚBLICO (alcançável pelo
+// celular). O IP de origem do heartbeat costuma ser interno do Docker
+// (172.17.0.1) — inútil p/ o app; por isso só entra como último recurso.
+// Override manual (definido na edição do app) sempre vence.
 function deriveClientApiUrl(item) {
-  if (item.reportedApiUrl) return addrToApiUrl(item.reportedApiUrl);
-  if (item.apiUrl) return addrToApiUrl(item.apiUrl);
-  if (item.provisionedServerAddress) return addrToApiUrl(item.provisionedServerAddress);
-  if (item.observedAddress) return addrToApiUrl(item.observedAddress);
+  const override = item.app && item.app.apiUrlOverride;
+  if (override) return addrToApiUrl(override);
+
+  const candidates = [item.reportedApiUrl, item.provisionedServerAddress, item.observedAddress].filter(Boolean);
   const m = String(item.id || '').match(/(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})$/);
-  if (m) return addrToApiUrl(`${m[1]}.${m[2]}.${m[3]}.${m[4]}`);
+  const idIp = m ? `${m[1]}.${m[2]}.${m[3]}.${m[4]}` : null;
+
+  for (const c of candidates) if (!isPrivateHost(c)) return addrToApiUrl(c); // público reportado
+  if (idIp && !isPrivateHost(idIp)) return addrToApiUrl(idIp);               // IP público do id
+  if (candidates.length) return addrToApiUrl(candidates[0]);                 // rede local (fallback)
+  if (idIp) return addrToApiUrl(idIp);
   return '';
 }
 
@@ -1073,15 +1087,20 @@ async function handlePatchApp(req, res, db, actor, installationId) {
   const body = await readBody(req);
   const appName = String(body.appName || '').trim();
   const packageId = String(body.packageId || '').trim();
+  const apiUrl = String(body.apiUrl || '').trim();
   if (packageId && !PKG_RE.test(packageId)) {
     return json(req, res, 400, { error: 'invalid_package', message: 'Pacote inválido. Use o formato com.empresa.app (letras, números, pontos).' });
+  }
+  if (apiUrl && !/^https?:\/\/.+/i.test(apiUrl) && !/^[a-z0-9.-]+(:\d+)?$/i.test(apiUrl)) {
+    return json(req, res, 400, { error: 'invalid_apiurl', message: 'Servidor inválido. Use um domínio/IP (ex.: 168.194.13.70) ou URL completa.' });
   }
   item.app = item.app || { slug: deriveAppSlug(item), apiUrl: deriveClientApiUrl(item) };
   if (appName) item.app.appName = appName;
   if (packageId) item.app.packageId = packageId;
+  if (apiUrl) item.app.apiUrlOverride = addrToApiUrl(apiUrl); // override manual do servidor
   addAuditEvent(db, req, { type: 'apk.app_edited', actor: actor.email, result: 'accepted', installationId });
   await saveDb(db);
-  return json(req, res, 200, { app: item.app, appName: effectiveAppName(item), packageId: effectiveAppPackageId(item) });
+  return json(req, res, 200, { app: item.app, appName: effectiveAppName(item), packageId: effectiveAppPackageId(item), apiUrl: deriveClientApiUrl(item) });
 }
 
 async function handleInstallationApp(req, res, db, installationId) {

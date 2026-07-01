@@ -675,9 +675,13 @@
           <label for="app-edit-name">Nome de exibição</label>
           <input id="app-edit-name" placeholder="Ex.: VIBE" />
         </div>
-        <div class="field">
+        <div class="field" style="margin-bottom:10px">
           <label for="app-edit-pkg">Pacote Android (Play Store)</label>
           <input id="app-edit-pkg" placeholder="com.ajustconsulting.exemplo" />
+        </div>
+        <div class="field">
+          <label for="app-edit-api">Servidor (URL da API)</label>
+          <input id="app-edit-api" placeholder="http://168.194.13.70:5173/api" />
         </div>
         <div class="subtext" style="margin-top:10px;color:#b45309">
           ⚠️ O pacote é a identidade permanente do app na Play Store. Defina antes da
@@ -1743,6 +1747,7 @@
           document.querySelector('#app-edit-id').value = id;
           document.querySelector('#app-edit-name').value = data.appName || '';
           document.querySelector('#app-edit-pkg').value = data.packageId || '';
+          document.querySelector('#app-edit-api').value = data.apiUrl || '';
           document.querySelector('#app-edit-dialog').showModal();
         } catch { showToast('Não foi possível carregar os dados do app.'); }
       }
@@ -1750,10 +1755,11 @@
         const id = document.querySelector('#app-edit-id').value;
         const appName = document.querySelector('#app-edit-name').value.trim();
         const packageId = document.querySelector('#app-edit-pkg').value.trim();
+        const apiUrl = document.querySelector('#app-edit-api').value.trim();
         try {
           const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/app`, {
             method: 'PATCH', credentials: 'include', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ appName, packageId }),
+            body: JSON.stringify({ appName, packageId, apiUrl }),
           });
           const data = await res.json();
           if (!res.ok) { showToast(data.message || data.error || 'Falha ao salvar.'); return; }
