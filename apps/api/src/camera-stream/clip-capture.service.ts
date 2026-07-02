@@ -13,7 +13,8 @@ type ClipState = {
   clipId: string;
   cameraId: string;
   userId: string;
-  filePath: string;
+  filePath: string;   // MP4 final servido no download
+  recordPath: string; // .ts onde o ffmpeg grava (sempre remuxado p/ MP4)
   proc: ChildProcess;
   startedAt: number;
   stderrTail: string;
@@ -81,25 +82,31 @@ export class ClipCaptureService {
     });
     const transport = camera.preferredRtspTransport ?? this.configService.get<string>('ffmpegRtspTransport') ?? 'tcp';
     const clipId = randomUUID();
-    const filePath = path.join(this.dir, `${clipId}.mp4`);
     const maxSeconds = Math.ceil(this.maxMs / 1000);
+    // SEM transcode (cópia do codec original) = instantâneo, CPU quase zero,
+    // qualidade máxima. SEMPRE gravamos em MPEG-TS (não MP4 direto) por 2 motivos:
+    //  1) HEVC: gravar direto em MP4 com `-c:v copy` gera arquivo QUEBRADO
+    //     (VPS/SPS/PPS não entram no hvcC ao conectar no meio do GOP) — testado.
+    //     No TS os parâmetros ficam in-band; o remux TS→MP4 os extrai p/ o hvcC.
+    //  2) O TS é formato de streaming: finaliza limpo com qualquer parada (q,
+    //     SIGINT, até SIGKILL), sem depender da 2ª passada do `+faststart` do MP4.
+    // O remux (rápido, sem re-encode) descobre o codec REAL do TS e só marca hvc1
+    // se for HEVC — assim não confiamos no rótulo do banco (que pode estar errado:
+    // câmera H.264 rotulada como h265 quebraria com -tag:v hvc1).
+    const filePath = path.join(this.dir, `${clipId}.mp4`);
+    const recordPath = path.join(this.dir, `${clipId}.ts`);
     const args = [
       '-hide_banner', '-loglevel', 'error',
       '-rtsp_transport', transport,
       '-i', rtsp,
       '-t', String(maxSeconds), // teto de segurança (auto-encerra)
-      // Vídeo → H.264 (yuv420p): compatível com QUALQUER celular/galeria. Câmeras
-      // H.265/HEVC gravadas com `-c:v copy` geram MP4 que muitos players do celular
-      // NÃO abrem (parâmetros VPS/SPS ausentes) — por isso o clipe "não tocava".
-      // `veryfast` mantém a CPU baixa. Áudio → AAC (PCM/G.711 não entra em MP4).
-      '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-crf', '23',
-      '-c:a', 'aac',
-      '-movflags', '+faststart',
-      '-f', 'mp4', '-y', filePath,
+      '-c:v', 'copy',
+      '-c:a', 'aac', // PCM/G.711 não entra em MP4/TS; AAC é barato e universal
+      '-f', 'mpegts', '-y', recordPath,
     ];
     const proc = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'] });
     const state: ClipState = {
-      clipId, cameraId, userId, filePath, proc,
+      clipId, cameraId, userId, filePath, recordPath, proc,
       startedAt: Date.now(), stderrTail: '', exited: false, exitCode: null,
       autoStop: setTimeout(() => { void this.stop(clipId, userId).catch(() => undefined); }, this.maxMs + 2000),
     };
@@ -122,6 +129,12 @@ export class ClipCaptureService {
       if (!closed) { try { st.proc.kill('SIGINT'); } catch { /* */ } await this.waitExit(st, 4000); }
       if (!st.exited) { try { st.proc.kill('SIGKILL'); } catch { /* */ } }
     }
+    // Remuxa o TS gravado → MP4 (cópia, sem transcode). É aqui que, no HEVC, os
+    // parâmetros do vídeo entram no hvcC, deixando o arquivo tocável no celular.
+    let tsBytes = 0;
+    try { tsBytes = fs.statSync(st.recordPath).size; } catch { /* */ }
+    if (tsBytes > 0) await this.remux(st.recordPath, st.filePath);
+    try { fs.rmSync(st.recordPath, { force: true }); } catch { /* */ }
     let sizeBytes = 0;
     try { sizeBytes = fs.statSync(st.filePath).size; } catch { /* */ }
     const durationMs = Date.now() - st.startedAt;
@@ -140,6 +153,34 @@ export class ClipCaptureService {
     });
   }
 
+  // Remux TS→MP4 SEM transcode (cópia). Rápido (~centenas de ms), não re-encoda.
+  // Descobre o codec REAL gravado (não confia no rótulo do banco): só o HEVC leva
+  // `-tag:v hvc1` (jeito que os players do celular abrem); H.264 usa o tag padrão
+  // (avc1) — forçar hvc1 num H.264 gera arquivo quebrado/vazio.
+  private remux(src: string, dest: string): Promise<boolean> {
+    let isHevc = false;
+    try {
+      const probe = spawnSync('ffprobe', [
+        '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', src,
+      ], { encoding: 'utf8' });
+      isHevc = /hevc|265/i.test(probe.stdout ?? '');
+    } catch { /* na dúvida, trata como H.264 (tag padrão) */ }
+    return new Promise((resolve) => {
+      const p = spawn('ffmpeg', [
+        '-hide_banner', '-loglevel', 'error',
+        '-i', src,
+        '-c:v', 'copy', '-c:a', 'copy',
+        ...(isHevc ? ['-tag:v', 'hvc1'] : []),
+        '-movflags', '+faststart',
+        '-f', 'mp4', '-y', dest,
+      ], { stdio: 'ignore' });
+      const t = setTimeout(() => { try { p.kill('SIGKILL'); } catch { /* */ } resolve(false); }, 15000);
+      p.on('close', (code) => { clearTimeout(t); resolve(code === 0); });
+      p.on('error', () => { clearTimeout(t); resolve(false); });
+    });
+  }
+
   /** Caminho do arquivo do clipe SE existir e for do usuário (para download). */
   getClipFile(clipId: string, userId: string): string {
     const st = this.clips.get(clipId);
@@ -153,6 +194,7 @@ export class ClipCaptureService {
     clearTimeout(st.autoStop);
     if (!st.exited) { try { st.proc.kill('SIGKILL'); } catch { /* */ } }
     try { fs.rmSync(st.filePath, { force: true }); } catch { /* */ }
+    if (st.recordPath !== st.filePath) { try { fs.rmSync(st.recordPath, { force: true }); } catch { /* */ } }
     this.clips.delete(clipId);
   }
 
