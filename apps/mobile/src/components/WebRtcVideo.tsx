@@ -27,6 +27,8 @@ type WebRtcVideoProps = {
   onFailover: () => void;
   muted?: boolean;
   contentFit?: 'contain' | 'cover';
+  /** Informa se o stream recebido tem faixa de áudio (câmeras sem microfone → false). */
+  onAudioAvailable?: (available: boolean) => void;
 };
 
 function waitIceGathering(pc: RTCPeerConnection): Promise<void> {
@@ -67,6 +69,7 @@ export function WebRtcVideo({
   onFailover,
   muted = false,
   contentFit = 'contain',
+  onAudioAvailable,
 }: WebRtcVideoProps) {
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<LiveStatus>('connecting');
@@ -91,6 +94,8 @@ export function WebRtcVideo({
   onStatusRef.current = onStatusChange;
   const onFailoverRef = useRef(onFailover);
   onFailoverRef.current = onFailover;
+  const onAudioRef = useRef(onAudioAvailable);
+  onAudioRef.current = onAudioAvailable;
 
   const apply = (next: LiveStatus) => {
     setStatus(next);
@@ -132,6 +137,11 @@ export function WebRtcVideo({
           if (state === 'connected') {
             if (timeout) clearTimeout(timeout);
             apply('live');
+            // Câmera sem microfone → o WHEP não entrega faixa de áudio. Avisa o
+            // pai para o botão "Áudio" poder alertar em vez de fingir que ligou.
+            try {
+              onAudioRef.current?.((streamRef.current?.getAudioTracks?.().length ?? 0) > 0);
+            } catch { /* ignore */ }
           } else if (state === 'failed') {
             failover();
           }

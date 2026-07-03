@@ -1,5 +1,5 @@
 import { formatBytes, formatDateLabel, formatDuration, formatResolution, formatTime, isOnline } from '../src/utils/format';
-import { normalizeServerUrl, request } from '../src/services/api';
+import { normalizeServerUrl, request, setUnauthorizedHandler } from '../src/services/api';
 import { computeDetectionRect } from '../src/utils/detection-geometry';
 import type { Camera } from '../src/types';
 
@@ -82,6 +82,42 @@ test('computeDetectionRect: mapeia bbox respeitando o letterbox do contain', () 
   // Caixa degenerada não deve sumir: largura/altura mínima de 2px.
   const tiny = computeDetectionRect([10, 10, 10, 10], 1000, 1000, 100, 100);
   assert(tiny.width >= 2 && tiny.height >= 2, 'caixa mínima deve ter ao menos 2px');
+});
+
+test('api 401: requisição AUTENTICADA dispara o handler de sessão expirada', async () => {
+  const originalFetch = global.fetch;
+  let fired = 0;
+  setUnauthorizedHandler(() => { fired += 1; });
+  global.fetch = (async () => ({
+    ok: false,
+    status: 401,
+    text: async () => JSON.stringify({ message: 'expired' }),
+  })) as unknown as typeof fetch;
+  try {
+    await request('http://x', '/cameras', 'a-token').catch(() => undefined);
+    assert(fired === 1, `handler deveria disparar 1x em 401 autenticado (got ${fired})`);
+  } finally {
+    global.fetch = originalFetch;
+    setUnauthorizedHandler(null);
+  }
+});
+
+test('api 401: SEM token (login) NÃO dispara o handler', async () => {
+  const originalFetch = global.fetch;
+  let fired = 0;
+  setUnauthorizedHandler(() => { fired += 1; });
+  global.fetch = (async () => ({
+    ok: false,
+    status: 401,
+    text: async () => JSON.stringify({ message: 'senha inválida' }),
+  })) as unknown as typeof fetch;
+  try {
+    await request('http://x', '/auth/login').catch(() => undefined);
+    assert(fired === 0, `handler NÃO deve disparar em 401 sem token (got ${fired})`);
+  } finally {
+    global.fetch = originalFetch;
+    setUnauthorizedHandler(null);
+  }
 });
 
 async function main() {

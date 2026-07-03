@@ -1571,14 +1571,20 @@ export function LiveStreamPlayer({
           <img
             src={posterUrl}
             alt=""
-            className="absolute inset-0 h-full w-full object-contain opacity-80"
+            className={`absolute inset-0 h-full w-full opacity-80 ${liveViewMode === 'grid' ? 'object-cover' : 'object-contain'}`}
             draggable={false}
           />
         )}
 
         <video
           ref={videoRef}
-          className={`relative z-10 h-full w-full object-contain pointer-events-none transition-opacity duration-300 ${
+          // Na GRADE preenche a célula (object-cover) — some a borda preta e as
+          // imagens encaixam melhor. Na câmera selecionada/1x1 mantém o frame
+          // inteiro (object-contain, sem cortar — requisito CCTV). O cálculo do
+          // overlay de IA lê o objectFit computado, então se adapta sozinho.
+          className={`relative z-10 h-full w-full pointer-events-none transition-opacity duration-300 ${
+            liveViewMode === 'grid' ? 'object-cover' : 'object-contain'
+          } ${
             posterUrl && !hasLiveFrame ? 'opacity-0' : 'opacity-100'
           }`}
           muted={isMuted}

@@ -14,8 +14,9 @@
 // Variáveis: BUILD_AGENT_PORT (8780), BUILD_AGENT_TOKEN (obrigatório),
 //   PUBLIC_APK_BASE (http://168.194.13.70:5173), MIN_FREE_GB (6).
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -102,21 +103,76 @@ function listClients() {
   });
 }
 
+// Roda ffmpeg lendo o arquivo pelo CONTEÚDO (não pela extensão) — o logo pode
+// chegar em qualquer formato (JPEG/WebP/etc) do endpoint /settings/branding.
+function ffmpegConvert(args) {
+  const r = spawnSync('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  return { ok: r.status === 0, stderr: r.stderr ? r.stderr.toString() : '' };
+}
+
+// Converte o logo do cliente em logo.png (tela de login) +
+// icon.png/adaptive-icon.png (ícone do launcher Android — app.config.js já
+// sabe usar esses arquivos se existirem, mas antes disso nada os gerava, então
+// o app instalado ficava com o ícone genérico mesmo com o logo aplicado na
+// tela de login).
+//
+// IMPORTANTE: gera tudo num diretório TEMPORÁRIO (staging) e devolve o caminho.
+// Quem chama só move para o diretório do cliente depois que TUDO deu certo —
+// assim um logo inválido NUNCA deixa um cliente pela metade no disco. Lança
+// erro (em vez de cair silenciosamente pro padrão) se o arquivo enviado não
+// for uma imagem decodificável — a Central mostra o problema na hora de gerar
+// o app, não só depois de instalar o APK.
+function stageClientBranding(logoBase64) {
+  const data = String(logoBase64).replace(/^data:image\/[\w.+-]+;base64,/, '');
+  const raw = Buffer.from(data, 'base64');
+  if (raw.length < 16) throw new Error('logo do cliente vazio ou inválido');
+  const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'drac-brand-'));
+  const srcPath = path.join(stage, 'src');
+  fs.writeFileSync(srcPath, raw);
+  try {
+    const logo = ffmpegConvert(['-y', '-loglevel', 'error', '-i', srcPath, '-pix_fmt', 'rgba', path.join(stage, 'logo.png')]);
+    if (!logo.ok) throw new Error(`logo do cliente não pôde ser decodificado (formato inválido): ${logo.stderr.trim().slice(0, 300)}`);
+    const icon = ffmpegConvert(['-y', '-loglevel', 'error', '-i', srcPath,
+      '-vf', 'scale=1024:1024:force_original_aspect_ratio=decrease,pad=1024:1024:(ow-iw)/2:(oh-ih)/2:color=0x071013',
+      '-pix_fmt', 'rgba', path.join(stage, 'icon.png')]);
+    if (!icon.ok) throw new Error(`falha ao gerar ícone do app a partir do logo: ${icon.stderr.trim().slice(0, 300)}`);
+    // Ícone adaptativo Android: o sistema recorta ~33% das bordas, então o
+    // conteúdo precisa ficar menor e centralizado (fundo transparente).
+    const adaptive = ffmpegConvert(['-y', '-loglevel', 'error', '-i', srcPath,
+      '-vf', 'scale=620:620:force_original_aspect_ratio=decrease,pad=1024:1024:(ow-iw)/2:(oh-ih)/2:color=0x00000000',
+      '-pix_fmt', 'rgba', path.join(stage, 'adaptive-icon.png')]);
+    if (!adaptive.ok) throw new Error(`falha ao gerar ícone adaptativo do app: ${adaptive.stderr.trim().slice(0, 300)}`);
+  } catch (e) {
+    fs.rmSync(stage, { recursive: true, force: true });
+    throw e;
+  }
+  fs.rmSync(srcPath, { force: true });
+  return stage; // contém logo.png, icon.png, adaptive-icon.png
+}
+
 function writeClient(body) {
   const { slug, appName, apiUrl } = body;
   if (!SLUG_RE.test(slug || '')) throw new Error('slug inválido (a-z 0-9 -)');
   if (!appName || !apiUrl) throw new Error('appName e apiUrl são obrigatórios');
   const packageId = body.packageId || `com.ajustconsulting.drac${String(slug).replace(/-/g, '')}`;
   if (!PKG_RE.test(packageId)) throw new Error('packageId inválido');
-  const dir = path.join(CLIENTS_DIR, slug);
-  fs.mkdirSync(dir, { recursive: true });
-  const cfg = { appName, slug: `drac-${slug}`, packageId, apiUrl, primaryColor: body.primaryColor || '#3b82f6' };
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2) + '\n');
-  if (body.logoBase64) {
-    const data = String(body.logoBase64).replace(/^data:image\/\w+;base64,/, '');
-    fs.writeFileSync(path.join(dir, 'logo.png'), Buffer.from(data, 'base64'));
+  // Converte o branding ANTES de tocar no diretório do cliente: se o logo for
+  // inválido, aborta aqui sem criar/alterar nada (evita cliente meia-boca).
+  const stage = body.logoBase64 ? stageClientBranding(body.logoBase64) : null;
+  try {
+    const dir = path.join(CLIENTS_DIR, slug);
+    fs.mkdirSync(dir, { recursive: true });
+    const cfg = { appName, slug: `drac-${slug}`, packageId, apiUrl, primaryColor: body.primaryColor || '#3b82f6' };
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2) + '\n');
+    if (stage) {
+      for (const name of ['logo.png', 'icon.png', 'adaptive-icon.png']) {
+        fs.copyFileSync(path.join(stage, name), path.join(dir, name));
+      }
+    }
+    return cfg;
+  } finally {
+    if (stage) fs.rmSync(stage, { recursive: true, force: true });
   }
-  return cfg;
 }
 
 function rmrf(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* ignore */ } }

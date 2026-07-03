@@ -39,6 +39,8 @@ type LiveVideoProps = {
   onStatusChange?: (status: LiveStatus) => void;
   muted?: boolean;
   contentFit?: 'contain' | 'cover';
+  /** Só no caminho WebRTC: informa se o stream tem faixa de áudio. */
+  onAudioAvailable?: (available: boolean) => void;
 };
 
 /**
@@ -65,6 +67,7 @@ export function LiveVideo(props: LiveVideoProps) {
         onStatusChange={props.onStatusChange}
         muted={props.muted}
         contentFit={props.contentFit}
+        onAudioAvailable={props.onAudioAvailable}
         onFailover={() => setWebrtcFailed(true)}
       />
     );

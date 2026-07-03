@@ -4,6 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Icon } from '../components/Icon';
 import { useTheme } from '../theme/ThemeProvider';
+import { withAlpha } from '../services/branding';
 import type { Alarm } from '../types';
 
 const SEGMENTS = ['Abertos', 'Reconhecidos', 'Todos'] as const;
@@ -138,9 +139,10 @@ function AlarmCard({
     );
   }
 
-  const borderColor = acked ? 'rgba(59,130,246,0.28)' : 'rgba(239,68,68,0.28)';
-  const accentColor = acked ? '#3b82f6' : '#ef4444';
-  const iconBg = acked ? 'rgba(59,130,246,0.14)' : 'rgba(239,68,68,0.12)';
+  // Reconhecido segue a cor principal da marca; aberto é vermelho (semântico).
+  const borderColor = acked ? (withAlpha(theme.accent, 0.28) ?? theme.border) : 'rgba(239,68,68,0.28)';
+  const accentColor = acked ? theme.accent : '#ef4444';
+  const iconBg = acked ? (withAlpha(theme.accent, 0.14) ?? theme.accentBg) : 'rgba(239,68,68,0.12)';
 
   return (
     <View style={[styles.card, { backgroundColor: theme.surface, borderColor }]}>

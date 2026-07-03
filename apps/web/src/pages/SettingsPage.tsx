@@ -51,6 +51,18 @@ type SystemSettings = {
   brandLogoDataUrl: string;
   brandPrimaryColor: string;
   brandBackgroundColor: string;
+  brandBackgroundColor2: string;
+  brandSecondaryColor: string;
+  brandPrimaryTextColor: string;
+  brandSecondaryTextColor: string;
+  brandBackgroundTextColor: string;
+  brandMenuColor: string;
+  brandMenuTextColor: string;
+  brandButtonTextColor: string;
+  brandBorderColor: string;
+  brandSuccessColor: string;
+  brandWarningColor: string;
+  brandDangerColor: string;
 };
 
 // ~400 KB de imagem (base64 fica ~33% maior). Acima disso o upload é recusado.
@@ -133,31 +145,42 @@ function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
   );
 }
 
-function ColorField({ value, onChange, fallback }: { value: string; onChange: (value: string) => void; fallback: string }) {
+// Seletor de cor COMPACTO: swatch pequeno + hex editável + limpar. Vários cabem
+// numa linha (grid), diferente do ColorField grande de 1 por linha.
+function CompactColor({ label, value, onChange, fallback }: { label: string; value: string; onChange: (value: string) => void; fallback: string }) {
   const isSet = /^#[0-9a-fA-F]{6}$/.test(value);
   const swatch = isSet ? value : fallback;
   return (
-    <div className="flex items-center gap-2 md:justify-end">
-      <label className="relative h-10 w-10 shrink-0 cursor-pointer overflow-hidden rounded-xl border border-border" style={{ background: swatch }}>
+    <div className="flex flex-col gap-1">
+      <span className="text-[11px] leading-tight text-muted-foreground">{label}</span>
+      <div className="flex h-9 items-center gap-1.5 rounded-lg border border-border bg-background/70 px-1.5">
+        <label className="relative h-5 w-5 shrink-0 cursor-pointer overflow-hidden rounded border border-border" style={{ background: swatch }} title="Escolher cor">
+          <input type="color" value={swatch} onChange={(e) => onChange(e.target.value)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
+        </label>
         <input
-          type="color"
-          value={swatch}
-          onChange={(e) => onChange(e.target.value)}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          type="text"
+          value={value}
+          placeholder="auto"
+          onChange={(e) => onChange(e.target.value.trim())}
+          className="w-full min-w-0 bg-transparent font-mono text-[11px] uppercase text-foreground outline-none placeholder:normal-case placeholder:text-muted-foreground"
         />
-      </label>
-      <input
-        type="text"
-        value={value}
-        placeholder={`${fallback} (padrão)`}
-        onChange={(e) => onChange(e.target.value.trim())}
-        className="h-10 w-32 rounded-xl border border-border bg-background/70 px-3 font-mono text-sm uppercase outline-none transition focus:border-[hsl(var(--primary)_/_0.6)]"
-      />
-      {isSet ? (
-        <button type="button" onClick={() => onChange('')} className="text-xs text-muted-foreground hover:text-foreground" title="Usar padrão do tema">
-          ✕
-        </button>
-      ) : null}
+        {isSet ? (
+          <button type="button" onClick={() => onChange('')} className="shrink-0 text-[11px] text-muted-foreground hover:text-foreground" title="Usar padrão do tema">✕</button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// Agrupa cores de uma mesma SUPERFÍCIE (ex.: card = cor + textos) num bloco.
+function ColorGroup({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-background/40 p-3">
+      <div className="mb-2">
+        <p className="text-xs font-semibold text-foreground">{title}</p>
+        {hint ? <p className="text-[10.5px] leading-tight text-muted-foreground">{hint}</p> : null}
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{children}</div>
     </div>
   );
 }
@@ -404,12 +427,35 @@ export default function ConfiguracoesPage() {
                           </div>
                         </div>
                       </SettingRow>
-                      <SettingRow label="Cor principal do app" description="Botões, links e destaques no aplicativo móvel.">
-                        <ColorField value={settings.brandPrimaryColor} onChange={(v) => update('brandPrimaryColor', v)} fallback="#0b6bd6" />
-                      </SettingRow>
-                      <SettingRow label="Cor de fundo do app" description="Fundo das telas no aplicativo móvel.">
-                        <ColorField value={settings.brandBackgroundColor} onChange={(v) => update('brandBackgroundColor', v)} fallback="#14161b" />
-                      </SettingRow>
+                    </Card>
+                    <Card className="space-y-3 p-3">
+                      <p className="text-xs text-muted-foreground">
+                        Cada <strong>superfície</strong> tem fundo e texto próprios — assim um texto escuro não fica ilegível sobre um card escuro. Deixe em <em>auto</em> (✕) para usar o padrão do tema.
+                      </p>
+                      <ColorGroup title="Destaque" hint="Botões, links e ícones ativos.">
+                        <CompactColor label="Cor principal" value={settings.brandPrimaryColor} onChange={(v) => update('brandPrimaryColor', v)} fallback="#0b6bd6" />
+                        <CompactColor label="Texto do botão" value={settings.brandButtonTextColor} onChange={(v) => update('brandButtonTextColor', v)} fallback="#ffffff" />
+                      </ColorGroup>
+                      <ColorGroup title="Fundo da tela" hint="Fundo e textos fora de cards. Defina a 2ª cor para o fundo virar gradiente; deixe em auto para fundo sólido.">
+                        <CompactColor label="Cor de fundo" value={settings.brandBackgroundColor} onChange={(v) => update('brandBackgroundColor', v)} fallback="#14161b" />
+                        <CompactColor label="Fundo 2 (gradiente)" value={settings.brandBackgroundColor2} onChange={(v) => update('brandBackgroundColor2', v)} fallback="#0b0d12" />
+                        <CompactColor label="Texto do fundo" value={settings.brandBackgroundTextColor} onChange={(v) => update('brandBackgroundTextColor', v)} fallback="#f4f6fa" />
+                      </ColorGroup>
+                      <ColorGroup title="Card / bloco" hint="Cards, painéis e campos, e o texto SOBRE eles.">
+                        <CompactColor label="Cor do card" value={settings.brandSecondaryColor} onChange={(v) => update('brandSecondaryColor', v)} fallback="#15181f" />
+                        <CompactColor label="Texto do card" value={settings.brandPrimaryTextColor} onChange={(v) => update('brandPrimaryTextColor', v)} fallback="#f4f6fa" />
+                        <CompactColor label="Subtexto do card" value={settings.brandSecondaryTextColor} onChange={(v) => update('brandSecondaryTextColor', v)} fallback="#9aa3af" />
+                      </ColorGroup>
+                      <ColorGroup title="Menu inferior" hint="Barra de navegação de baixo (separável do card).">
+                        <CompactColor label="Cor do menu" value={settings.brandMenuColor} onChange={(v) => update('brandMenuColor', v)} fallback="#15181f" />
+                        <CompactColor label="Texto do menu" value={settings.brandMenuTextColor} onChange={(v) => update('brandMenuTextColor', v)} fallback="#6b7484" />
+                      </ColorGroup>
+                      <ColorGroup title="Bordas e status" hint="Linhas divisórias e cores de sucesso/alerta/erro.">
+                        <CompactColor label="Borda" value={settings.brandBorderColor} onChange={(v) => update('brandBorderColor', v)} fallback="#2a2f3a" />
+                        <CompactColor label="Sucesso" value={settings.brandSuccessColor} onChange={(v) => update('brandSuccessColor', v)} fallback="#22c55e" />
+                        <CompactColor label="Alerta" value={settings.brandWarningColor} onChange={(v) => update('brandWarningColor', v)} fallback="#f59e0b" />
+                        <CompactColor label="Erro" value={settings.brandDangerColor} onChange={(v) => update('brandDangerColor', v)} fallback="#ef4444" />
+                      </ColorGroup>
                     </Card>
                     <p className="px-1 text-xs text-muted-foreground">
                       Estas configurações valem só para o <strong>aplicativo móvel</strong> dos clientes — o app lê o logo e as cores em tempo real ao abrir. A aparência deste sistema web não muda.

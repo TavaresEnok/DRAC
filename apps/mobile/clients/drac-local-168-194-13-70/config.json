@@ -1,7 +1,7 @@
 {
-  "appName": "IB Telecom",
+  "appName": "Grupo Flash",
   "slug": "drac-drac-local-168-194-13-70",
-  "packageId": "com.ibtelecom.app",
-  "apiUrl": "http://172.17.0.1:5173/api",
-  "primaryColor": "#d56d0b"
+  "packageId": "com.ajustconsulting.grupoflash",
+  "apiUrl": "http://168.194.13.70:5173/api",
+  "primaryColor": "#f97316"
 }

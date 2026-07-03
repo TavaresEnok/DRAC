@@ -8,7 +8,7 @@ import React from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import type { Camera } from '../types';
-import { areaLabel, isNoSignalStatus, isOnlineStatus, resolutionLabel, tintFor } from '../utils/camera-view';
+import { areaLabel, isNoSignalStatus, isOnlineStatus, tintFor } from '../utils/camera-view';
 import { Icon } from './Icon';
 
 interface CameraTileProps {
@@ -33,7 +33,6 @@ export function CameraTile({
   const offline = !online && !nosignal;
   const large = variant === 'large';
   const tint = tintFor(camera);
-  const res = resolutionLabel(camera);
 
   const Star = onToggleFavorite ? (
     <Pressable
@@ -61,6 +60,11 @@ export function CameraTile({
   return (
     <Pressable style={[styles.wrap, { height, borderColor: theme.border }]} onPress={onPress}>
       <LinearGradient colors={tint} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={StyleSheet.absoluteFill} />
+      {/* Marca d'água de câmera SEMPRE atrás: se o snapshot ainda não chegou (ou
+          falhar ao carregar), o tile continua identificável em vez de ficar liso. */}
+      <View style={styles.placeholder} pointerEvents="none">
+        <Icon name="camera" size={large ? 34 : 26} color="rgba(255,255,255,0.28)" strokeWidth={1.6} />
+      </View>
       {posterUrl ? <Image source={{ uri: posterUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
 
       {online ? (
@@ -78,7 +82,7 @@ export function CameraTile({
         <View style={styles.largeFooter}>
           <View style={{ flex: 1 }}>
             <Text style={styles.largeName} numberOfLines={1}>{camera.name}</Text>
-            <Text style={styles.largeMeta} numberOfLines={1}>{areaLabel(camera)}{res ? ` · ${res}` : ''}</Text>
+            <Text style={styles.largeMeta} numberOfLines={1}>{areaLabel(camera)}</Text>
           </View>
           {showPlay ? (
             <View style={styles.playFab}>
@@ -95,6 +99,7 @@ export function CameraTile({
 
 const styles = StyleSheet.create({
   wrap: { borderRadius: 18, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, position: 'relative' },
+  placeholder: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   liveBadge: {
     position: 'absolute', top: 10, left: 10, flexDirection: 'row', alignItems: 'center', gap: 5,
     backgroundColor: 'rgba(239,68,68,0.92)', paddingVertical: 3, paddingHorizontal: 7, borderRadius: 7,

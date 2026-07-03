@@ -13,6 +13,28 @@ export interface RuntimeBranding {
   logoDataUrl: string;
   primaryColor: string;
   backgroundColor: string;
+  /** 2ª cor de fundo — se definida, o fundo vira gradiente (theme.bg2). */
+  backgroundColor2: string;
+  /** Cor do card/bloco (theme.surface). */
+  secondaryColor: string;
+  /** Cor do texto do card (theme.text). */
+  primaryTextColor: string;
+  /** Cor do subtexto do card (theme.textSub). */
+  secondaryTextColor: string;
+  /** Cor do texto sobre o fundo da tela (theme.bgText). */
+  backgroundTextColor: string;
+  /** Cor do fundo do menu inferior (theme.menu). */
+  menuColor: string;
+  /** Cor do texto/ícone de item inativo do menu (theme.menuText). */
+  menuTextColor: string;
+  /** Cor do texto sobre botões de destaque (theme.textOnAccent). */
+  buttonTextColor: string;
+  /** Cor das bordas (theme.border). */
+  borderColor: string;
+  /** Cores de status (theme.success/warning/danger). */
+  successColor: string;
+  warningColor: string;
+  dangerColor: string;
 }
 
 type BrandingResponse = {
@@ -20,6 +42,18 @@ type BrandingResponse = {
   brandLogoDataUrl?: string;
   brandPrimaryColor?: string;
   brandBackgroundColor?: string;
+  brandBackgroundColor2?: string;
+  brandSecondaryColor?: string;
+  brandPrimaryTextColor?: string;
+  brandSecondaryTextColor?: string;
+  brandBackgroundTextColor?: string;
+  brandMenuColor?: string;
+  brandMenuTextColor?: string;
+  brandButtonTextColor?: string;
+  brandBorderColor?: string;
+  brandSuccessColor?: string;
+  brandWarningColor?: string;
+  brandDangerColor?: string;
 };
 
 export const EMPTY_BRANDING: RuntimeBranding = {
@@ -27,16 +61,41 @@ export const EMPTY_BRANDING: RuntimeBranding = {
   logoDataUrl: '',
   primaryColor: '',
   backgroundColor: '',
+  backgroundColor2: '',
+  secondaryColor: '',
+  primaryTextColor: '',
+  secondaryTextColor: '',
+  backgroundTextColor: '',
+  menuColor: '',
+  menuTextColor: '',
+  buttonTextColor: '',
+  borderColor: '',
+  successColor: '',
+  warningColor: '',
+  dangerColor: '',
 };
 
 export async function fetchBranding(apiUrl: string): Promise<RuntimeBranding> {
   if (!apiUrl) return EMPTY_BRANDING;
   const data = await request<BrandingResponse>(apiUrl, '/settings/branding');
+  const t = (v?: string) => (v ?? '').trim();
   return {
-    facilityName: (data.facilityName ?? '').trim(),
-    logoDataUrl: (data.brandLogoDataUrl ?? '').trim(),
-    primaryColor: (data.brandPrimaryColor ?? '').trim(),
-    backgroundColor: (data.brandBackgroundColor ?? '').trim(),
+    facilityName: t(data.facilityName),
+    logoDataUrl: t(data.brandLogoDataUrl),
+    primaryColor: t(data.brandPrimaryColor),
+    backgroundColor: t(data.brandBackgroundColor),
+    backgroundColor2: t(data.brandBackgroundColor2),
+    secondaryColor: t(data.brandSecondaryColor),
+    primaryTextColor: t(data.brandPrimaryTextColor),
+    secondaryTextColor: t(data.brandSecondaryTextColor),
+    backgroundTextColor: t(data.brandBackgroundTextColor),
+    menuColor: t(data.brandMenuColor),
+    menuTextColor: t(data.brandMenuTextColor),
+    buttonTextColor: t(data.brandButtonTextColor),
+    borderColor: t(data.brandBorderColor),
+    successColor: t(data.brandSuccessColor),
+    warningColor: t(data.brandWarningColor),
+    dangerColor: t(data.brandDangerColor),
   };
 }
 
@@ -56,6 +115,20 @@ export function darkenHex(hex: string, amount = 0.16): string | null {
   const f = 1 - amount;
   const to2 = (n: number) => Math.max(0, Math.min(255, Math.round(n * f))).toString(16).padStart(2, '0');
   return `#${to2(c.r)}${to2(c.g)}${to2(c.b)}`;
+}
+
+/**
+ * Desloca um hex em direção ao branco (amount > 0) ou ao preto (amount < 0).
+ * Usado para derivar tons próximos (ex.: surfaceAlt a partir da cor secundária:
+ * clareia um pouco no tema escuro, escurece um pouco no claro).
+ */
+export function shiftHex(hex: string, amount: number): string | null {
+  const c = parseHex(hex);
+  if (!c) return null;
+  const target = amount >= 0 ? 255 : 0;
+  const f = Math.abs(amount);
+  const mix = (n: number) => Math.max(0, Math.min(255, Math.round(n + (target - n) * f))).toString(16).padStart(2, '0');
+  return `#${mix(c.r)}${mix(c.g)}${mix(c.b)}`;
 }
 
 /** Versão com transparência (rgba) — usada para fundos suaves de chips/ícones. */

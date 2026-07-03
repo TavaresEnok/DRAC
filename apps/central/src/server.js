@@ -1052,15 +1052,19 @@ async function fetchClientBranding(apiUrl) {
 
 // Monta o cliente no build-agent a partir do cadastro do cliente + puxa logo/cor
 // do próprio sistema dele, e dispara o build. SEM digitação manual.
-async function handleGenerateApp(req, res, db, actor, installationId) {
-  const item = db.installations[installationId];
-  if (!item) return json(req, res, 404, { error: 'installation_not_found' });
+// Usada tanto pela geração inicial quanto pelo rebuild automático após edição
+// (ver handlePatchApp) — os dois caminhos precisam mandar o MESMO payload pro
+// build-agent, senão uma edição salva na Central nunca chega no APK.
+async function pushAppToBuildAgent(item, actor, req, db, installationId) {
   const apiUrl = deriveClientApiUrl(item);
   if (!apiUrl) {
-    return json(req, res, 400, {
-      error: 'no_server_address',
-      message: 'A Central ainda não conhece o servidor deste cliente. Provisione pela aba Instalação ou aguarde o primeiro heartbeat.',
-    });
+    return {
+      status: 400,
+      data: {
+        error: 'no_server_address',
+        message: 'A Central ainda não conhece o servidor deste cliente. Provisione pela aba Instalação ou aguarde o primeiro heartbeat.',
+      },
+    };
   }
   const slug = deriveAppSlug(item);
   const appName = effectiveAppName(item);
@@ -1072,15 +1076,25 @@ async function handleGenerateApp(req, res, db, actor, installationId) {
     if (branding.brandLogoDataUrl) payload.logoBase64 = branding.brandLogoDataUrl;
   }
   const created = await agentFetch('/clients', { method: 'POST', body: JSON.stringify(payload) });
-  if (created.status >= 400) return json(req, res, created.status, created.data);
+  if (created.status >= 400) return { status: created.status, data: created.data };
   const build = await agentFetch('/builds', { method: 'POST', body: JSON.stringify({ slug }) });
   addAuditEvent(db, req, { type: 'apk.build_started', actor: actor.email, result: build.status < 400 ? 'accepted' : 'denied', installationId });
   item.app = { ...(item.app || {}), slug, apiUrl, appName, packageId, brandingApplied: !!branding, lastBuildJobId: build.data?.jobId || null, lastBuildAt: new Date().toISOString() };
-  await saveDb(db);
-  return json(req, res, build.status, { slug, apiUrl, packageId, brandingApplied: !!branding, ...build.data });
+  return { status: build.status, data: { slug, apiUrl, packageId, brandingApplied: !!branding, ...build.data } };
 }
 
-// Edita nome de exibição e/ou package ID do app (antes de publicar). NÃO builda.
+async function handleGenerateApp(req, res, db, actor, installationId) {
+  const item = db.installations[installationId];
+  if (!item) return json(req, res, 404, { error: 'installation_not_found' });
+  const result = await pushAppToBuildAgent(item, actor, req, db, installationId);
+  await saveDb(db);
+  return json(req, res, result.status, result.data);
+}
+
+// Edita nome de exibição, package ID e/ou servidor do app. Se o app já tinha
+// sido gerado antes, dispara rebuild automaticamente — do contrário a edição
+// fica só no banco da Central e o APK instalado continua com o valor antigo
+// (bug relatado: servidor/nome/cor corrigidos na tela mas nunca aplicados).
 async function handlePatchApp(req, res, db, actor, installationId) {
   const item = db.installations[installationId];
   if (!item) return json(req, res, 404, { error: 'installation_not_found' });
@@ -1095,12 +1109,26 @@ async function handlePatchApp(req, res, db, actor, installationId) {
     return json(req, res, 400, { error: 'invalid_apiurl', message: 'Servidor inválido. Use um domínio/IP (ex.: 168.194.13.70) ou URL completa.' });
   }
   item.app = item.app || { slug: deriveAppSlug(item), apiUrl: deriveClientApiUrl(item) };
+  const hadBuild = !!item.app.lastBuildAt;
   if (appName) item.app.appName = appName;
   if (packageId) item.app.packageId = packageId;
   if (apiUrl) item.app.apiUrlOverride = addrToApiUrl(apiUrl); // override manual do servidor
   addAuditEvent(db, req, { type: 'apk.app_edited', actor: actor.email, result: 'accepted', installationId });
+
+  let rebuild = null;
+  if (hadBuild) rebuild = await pushAppToBuildAgent(item, actor, req, db, installationId);
   await saveDb(db);
-  return json(req, res, 200, { app: item.app, appName: effectiveAppName(item), packageId: effectiveAppPackageId(item), apiUrl: deriveClientApiUrl(item) });
+  if (rebuild && rebuild.status >= 400) {
+    return json(req, res, rebuild.status, { ...rebuild.data, appName: effectiveAppName(item), packageId: effectiveAppPackageId(item), apiUrl: deriveClientApiUrl(item) });
+  }
+  return json(req, res, 200, {
+    app: item.app,
+    appName: effectiveAppName(item),
+    packageId: effectiveAppPackageId(item),
+    apiUrl: deriveClientApiUrl(item),
+    rebuildTriggered: !!rebuild,
+    rebuild: rebuild ? rebuild.data : null,
+  });
 }
 
 async function handleInstallationApp(req, res, db, installationId) {
@@ -1380,9 +1408,19 @@ async function route(req, res) {
       if (req.method === 'DELETE' && apkDeleteMatch) {
         const slug = decodeURIComponent(apkDeleteMatch[1]);
         const r = await agentFetch(`/clients/${encodeURIComponent(slug)}`, { method: 'DELETE' });
-        // Limpa a referência ao app nas instalações que o usavam.
+        // Apaga o BUILD, mas PRESERVA as preferências do usuário (nome, pacote e
+        // servidor). Antes zerávamos `inst.app = null`, o que fazia o app voltar
+        // ao nome padrão do cliente (ex.: "DRAC Local") ao regenerar — perdendo
+        // o "Ibtelecom" que o usuário tinha definido. Agora só limpamos o estado
+        // de build; effectiveAppName/PackageId/deriveClientApiUrl continuam
+        // enxergando as escolhas salvas.
         for (const inst of Object.values(db.installations)) {
-          if (inst.app && inst.app.slug === slug) inst.app = null;
+          if (inst.app && inst.app.slug === slug) {
+            const { appName, packageId, apiUrlOverride } = inst.app;
+            inst.app = (appName || packageId || apiUrlOverride)
+              ? { appName, packageId, apiUrlOverride }
+              : null;
+          }
         }
         addAuditEvent(db, req, { type: 'apk.client_deleted', actor: actor.email, result: r.status < 400 ? 'accepted' : 'denied', installationId: slug });
         await saveDb(db);
@@ -1562,10 +1600,28 @@ process.on('unhandledRejection', (reason) => {
   console.error('[central] unhandledRejection:', reason && reason.stack ? reason.stack : reason);
 });
 
+// Serialização das rotas que tocam o banco. loadDb()/saveDb() fazem
+// read-modify-write do arquivo inteiro SEM lock; requests concorrentes (ex.: um
+// heartbeat chegando no meio de uma edição do app) se sobrescreviam — o nome do
+// app definido pelo usuário voltava ao padrão ("DRAC Local"), e saveDb atômico
+// batia `ENOENT` no rename por gravar `.tmp` concorrente. Como o painel é de
+// baixo tráfego e o Node é single-thread, serializar essas rotas elimina a
+// corrida sem custo perceptível. Estáticos (não tocam o DB) seguem em paralelo.
+let _dbGate = Promise.resolve();
+function runSerialized(task) {
+  const p = _dbGate.then(task, task);
+  _dbGate = p.then(() => {}, () => {});
+  return p;
+}
+
 http.createServer((req, res) => {
   // route() é async; sem este .catch, uma rejeição (ex.: loadDb) escapava como
   // unhandledRejection. Aqui garantimos uma resposta 500 e seguimos vivos.
-  Promise.resolve(route(req, res)).catch((error) => {
+  const url = req.url || '';
+  const touchesDb = url.startsWith('/api/') || url.startsWith('/install/');
+  const run = () => Promise.resolve(route(req, res));
+  const started = touchesDb ? runSerialized(run) : run();
+  started.catch((error) => {
     console.error('[central] erro não tratado na rota:', error && error.stack ? error.stack : error);
     try {
       if (!res.headersSent) json(req, res, 500, { error: 'internal_error' });

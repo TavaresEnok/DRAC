@@ -107,7 +107,7 @@ export interface Alarm {
 export interface SavedLayout {
   id: string;
   name: string;
-  gridSize: '1x1' | '2x2' | '3x3' | '4x4';
+  gridSize: `${number}x${number}`;
   cameraIds: string[];
   createdBy: string;
   lastUsed: string;

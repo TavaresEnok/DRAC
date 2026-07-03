@@ -1217,7 +1217,7 @@
             <td>${escapeHtml(item.version || '-')}</td>
             <td>${item.lastHeartbeatAt ? dtf.format(new Date(item.lastHeartbeatAt)) : '-'}</td>
             <td>
-              <button data-genapp="${escapeHtml(item.id)}">${item.app ? 'Atualizar app' : 'Gerar app'}</button>
+              <button data-genapp="${escapeHtml(item.id)}">${item.app && item.app.lastBuildAt ? 'Atualizar app' : 'Gerar app'}</button>
               <button data-editapp="${escapeHtml(item.id)}" style="margin-left:4px">Editar</button>
               ${item.app && item.app.packageId ? `<div class="subtext">${escapeHtml(item.app.packageId)}</div>` : ''}
             </td>
@@ -1764,8 +1764,9 @@
           const data = await res.json();
           if (!res.ok) { showToast(data.message || data.error || 'Falha ao salvar.'); return; }
           document.querySelector('#app-edit-dialog').close();
-          showToast('App atualizado. Gere o app novamente para aplicar.');
+          showToast(data.rebuildTriggered ? 'App atualizado. Rebuild iniciado automaticamente.' : 'App atualizado.');
           await load();
+          if (data.rebuildTriggered) { await loadApps(); startApkBuildPolling(); }
         } catch { showToast('Falha ao salvar.'); }
       }
       async function loadUsers() {

@@ -1,15 +1,23 @@
-/** CentralScreen — visão geral: status, alerta operacional e câmeras FAVORITAS. */
+/**
+ * CentralScreen — home do app: resumo do sistema (card em gradiente da marca),
+ * alerta operacional, câmera em DESTAQUE + grade de favoritas e um trilho
+ * horizontal com todas as câmeras. Hierarquia forte (padrão dos apps líderes:
+ * hero card → destaque → grade → trilho).
+ */
+import { LinearGradient } from 'expo-linear-gradient';
 import React, { useMemo, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CameraTile } from '../components/CameraTile';
 import { FavoritesSheet } from '../components/FavoritesSheet';
-import { Icon } from '../components/Icon';
+import { Icon, type IconName } from '../components/Icon';
 import { useLibrary } from '../state/LibraryProvider';
 import { useTheme } from '../theme/ThemeProvider';
 import type { Camera, User } from '../types';
 import { isOnlineStatus } from '../utils/camera-view';
 
 const STAR_GOLD = '#fbbf24';
+const WEEKDAYS = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+const MONTHS = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 
 interface CentralScreenProps {
   cameras: Camera[];
@@ -29,10 +37,15 @@ function initialsOf(name?: string): string {
   return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || 'DR';
 }
 
+function todayLabel(): string {
+  const d = new Date();
+  return `${WEEKDAYS[d.getDay()]}, ${d.getDate()} de ${MONTHS[d.getMonth()]}`;
+}
+
 export function CentralScreen({
   cameras, user, streamPosters, operationalMessages, alarmCount, refreshing, onRefresh, onOpenCamera, onOpenAlarms,
 }: CentralScreenProps) {
-  const { theme } = useTheme();
+  const { theme, branding } = useTheme();
   const { favorites, isFavorite, toggleFavorite } = useLibrary();
   const [sheetOpen, setSheetOpen] = useState(false);
 
@@ -45,16 +58,19 @@ export function CentralScreen({
     () => favorites.map((id) => cameras.find((c) => c.id === id)).filter(Boolean) as Camera[],
     [favorites, cameras],
   );
-  const favGrid = favCameras.slice(0, 4);
+  // 1 destaque grande + até 4 na grade.
+  const featured = favCameras[0] ?? null;
+  const favGrid = favCameras.slice(1, 5);
   const alert = operationalMessages[0] ?? null;
 
-  const StatCard = ({ label, value, color, glow }: { label: string; value: number; color: string; glow?: boolean }) => (
-    <View style={[styles.stat, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-      <View style={styles.statTop}>
-        <View style={[styles.statDot, { backgroundColor: color }, glow && { shadowColor: color, shadowOpacity: 0.6, shadowRadius: 4 }]} />
-        <Text style={[styles.statLabel, { color: theme.textSub }]}>{label}</Text>
+  // Stat com ícone dentro do hero card (texto branco sobre o gradiente da marca).
+  const HeroStat = ({ icon, label, value }: { icon: IconName; label: string; value: number }) => (
+    <View style={styles.heroStat}>
+      <View style={styles.heroStatIcon}>
+        <Icon name={icon} size={15} color="#fff" strokeWidth={2} />
       </View>
-      <Text style={[styles.statValue, { color: theme.text }]}>{value}</Text>
+      <Text style={styles.heroStatValue}>{value}</Text>
+      <Text style={styles.heroStatLabel}>{label}</Text>
     </View>
   );
 
@@ -65,28 +81,68 @@ export function CentralScreen({
       showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.textSub} />}
     >
+      {/* ── Header: saudação × logo/sino/avatar ── */}
       <View style={styles.header}>
-        <View>
-          <Text style={[styles.greeting, { color: theme.textSub }]}>Bem-vindo,</Text>
-          <Text style={[styles.title, { color: theme.text }]}>Central</Text>
+        <View style={{ flexShrink: 1 }}>
+          <Text style={[styles.greeting, { color: theme.textSub }]}>{todayLabel()}</Text>
+          <Text style={[styles.title, { color: theme.bgText }]} numberOfLines={1}>
+            Olá, {user?.name?.trim().split(/\s+/)[0] ?? 'Usuário'}
+          </Text>
         </View>
         <View style={styles.headerActions}>
-          <Pressable style={[styles.iconBtn, { backgroundColor: theme.surface, borderColor: theme.border }]} onPress={onOpenAlarms}>
-            <Icon name="bell" size={20} color={theme.text} strokeWidth={1.8} />
-            {alarmCount > 0 ? <View style={[styles.notifDot, { backgroundColor: theme.danger, borderColor: theme.surface }]} /> : null}
+          {branding.logoDataUrl ? (
+            <Image source={{ uri: branding.logoDataUrl }} style={styles.headerLogo} resizeMode="contain" />
+          ) : null}
+          <Pressable
+            style={[
+              styles.iconBtn,
+              alarmCount > 0
+                ? { backgroundColor: theme.dangerBg, borderColor: 'rgba(239,68,68,0.45)' }
+                : { backgroundColor: theme.surface, borderColor: theme.border },
+            ]}
+            onPress={onOpenAlarms}
+          >
+            <Icon name="bell" size={21} color={alarmCount > 0 ? theme.danger : theme.text} strokeWidth={2} />
+            {alarmCount > 0 ? (
+              <View style={[styles.notifBadge, { backgroundColor: theme.danger, borderColor: theme.surface }]}>
+                <Text style={styles.notifBadgeText}>{alarmCount > 99 ? '99+' : alarmCount}</Text>
+              </View>
+            ) : null}
           </Pressable>
           <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
-            <Text style={styles.avatarText}>{initialsOf(user?.name)}</Text>
+            <Text style={[styles.avatarText, { color: theme.textOnAccent }]}>{initialsOf(user?.name)}</Text>
           </View>
         </View>
       </View>
 
-      <View style={styles.statsRow}>
-        <StatCard label="Online" value={stats.online} color={theme.success} />
-        <StatCard label="Offline" value={stats.offline} color={theme.danger} />
-        <StatCard label="Total" value={stats.total} color={theme.accent} glow />
-      </View>
+      {/* ── Hero: resumo do sistema no gradiente da marca ── */}
+      <LinearGradient
+        colors={[theme.accent, theme.accentDark]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.hero}
+      >
+        <View style={styles.heroTop}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroKicker}>SISTEMA DE MONITORAMENTO</Text>
+            <Text style={styles.heroTitle} numberOfLines={1}>
+              {branding.facilityName || 'Minhas câmeras'}
+            </Text>
+          </View>
+          <View style={[styles.heroBadge, stats.offline > 0 ? styles.heroBadgeWarn : null]}>
+            <View style={[styles.heroBadgeDot, { backgroundColor: stats.offline > 0 ? '#fbbf24' : '#4ade80' }]} />
+            <Text style={styles.heroBadgeText}>{stats.offline > 0 ? 'Atenção' : 'Operacional'}</Text>
+          </View>
+        </View>
+        <View style={styles.heroDivider} />
+        <View style={styles.heroStats}>
+          <HeroStat icon="camera" label="Online" value={stats.online} />
+          <HeroStat icon="videoOff" label="Offline" value={stats.offline} />
+          <HeroStat icon="grid" label="Total" value={stats.total} />
+        </View>
+      </LinearGradient>
 
+      {/* ── Alerta operacional ── */}
       {alert ? (
         <View style={[styles.alert, { backgroundColor: 'rgba(245,158,11,0.1)', borderColor: 'rgba(245,158,11,0.28)' }]}>
           <View style={[styles.alertIcon, { backgroundColor: 'rgba(245,158,11,0.18)' }]}>
@@ -99,32 +155,47 @@ export function CentralScreen({
         </View>
       ) : null}
 
+      {/* ── Favoritas: 1 destaque grande + grade ── */}
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitleRow}>
           <Icon name="star" size={16} color={STAR_GOLD} fill strokeWidth={1.6} />
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>Favoritas</Text>
+          <Text style={[styles.sectionTitle, { color: theme.bgText }]}>Favoritas</Text>
         </View>
-        <Pressable style={styles.manageLink} onPress={() => setSheetOpen(true)}>
+        <Pressable style={styles.manageLink} onPress={() => setSheetOpen(true)} hitSlop={8}>
           <Icon name="plus" size={14} color={theme.accent} strokeWidth={2.2} />
           <Text style={[styles.sectionLink, { color: theme.accent }]}>Gerenciar</Text>
         </Pressable>
       </View>
 
-      {favGrid.length > 0 ? (
-        <View style={styles.grid}>
-          {favGrid.map((cam) => (
-            <View key={cam.id} style={styles.gridItem}>
-              <CameraTile
-                camera={cam}
-                posterUrl={streamPosters[cam.id]}
-                height={142}
-                onPress={() => onOpenCamera(cam)}
-                favorite={isFavorite(cam.id)}
-                onToggleFavorite={() => toggleFavorite(cam.id)}
-              />
+      {featured ? (
+        <>
+          <CameraTile
+            camera={featured}
+            posterUrl={streamPosters[featured.id]}
+            height={198}
+            variant="large"
+            showPlay
+            onPress={() => onOpenCamera(featured)}
+            favorite={isFavorite(featured.id)}
+            onToggleFavorite={() => toggleFavorite(featured.id)}
+          />
+          {favGrid.length > 0 ? (
+            <View style={styles.grid}>
+              {favGrid.map((cam) => (
+                <View key={cam.id} style={styles.gridItem}>
+                  <CameraTile
+                    camera={cam}
+                    posterUrl={streamPosters[cam.id]}
+                    height={124}
+                    onPress={() => onOpenCamera(cam)}
+                    favorite={isFavorite(cam.id)}
+                    onToggleFavorite={() => toggleFavorite(cam.id)}
+                  />
+                </View>
+              ))}
             </View>
-          ))}
-        </View>
+          ) : null}
+        </>
       ) : (
         <View style={[styles.empty, { borderColor: theme.border }]}>
           <View style={[styles.emptyIcon, { backgroundColor: theme.surface }]}>
@@ -133,10 +204,44 @@ export function CentralScreen({
           <Text style={[styles.emptyTitle, { color: theme.text }]}>Nenhuma câmera favorita</Text>
           <Text style={[styles.emptyText, { color: theme.textSub }]}>Toque na estrela de uma câmera para fixá-la aqui.</Text>
           <Pressable style={[styles.emptyBtn, { backgroundColor: theme.accent }]} onPress={() => setSheetOpen(true)}>
-            <Text style={styles.emptyBtnText}>Escolher favoritas</Text>
+            <Text style={[styles.emptyBtnText, { color: theme.textOnAccent }]}>Escolher favoritas</Text>
           </Pressable>
         </View>
       )}
+
+      {/* ── Todas as câmeras: trilho horizontal de acesso rápido ── */}
+      {cameras.length > 0 ? (
+        <>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionTitleRow}>
+              <Icon name="grid" size={15} color={theme.textSub} strokeWidth={2} />
+              <Text style={[styles.sectionTitle, { color: theme.bgText }]}>Todas as câmeras</Text>
+            </View>
+            <View style={[styles.countChip, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+              <Text style={[styles.countChipText, { color: theme.textSub }]}>{cameras.length}</Text>
+            </View>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.rail}
+            style={styles.railWrap}
+          >
+            {cameras.map((cam) => (
+              <View key={cam.id} style={styles.railItem}>
+                <CameraTile
+                  camera={cam}
+                  posterUrl={streamPosters[cam.id]}
+                  height={104}
+                  onPress={() => onOpenCamera(cam)}
+                  favorite={isFavorite(cam.id)}
+                  onToggleFavorite={() => toggleFavorite(cam.id)}
+                />
+              </View>
+            ))}
+          </ScrollView>
+        </>
+      ) : null}
 
       <FavoritesSheet visible={sheetOpen} cameras={cameras} onClose={() => setSheetOpen(false)} />
     </ScrollView>
@@ -144,36 +249,59 @@ export function CentralScreen({
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: 22, paddingTop: 6, paddingBottom: 24, gap: 14 },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, marginBottom: 4 },
-  greeting: { fontSize: 13, fontWeight: '600' },
-  title: { fontSize: 27, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
+  content: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 28, gap: 15 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, marginBottom: 2, gap: 12 },
+  greeting: { fontSize: 12, fontWeight: '600', textTransform: 'capitalize' },
+  title: { fontSize: 25, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerLogo: { height: 42, width: 48, borderRadius: 14 },
   iconBtn: { width: 42, height: 42, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
-  notifDot: { position: 'absolute', top: 9, right: 10, width: 8, height: 8, borderRadius: 4, borderWidth: 1.5 },
+  notifBadge: { position: 'absolute', top: -6, right: -6, minWidth: 19, height: 19, borderRadius: 10, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  notifBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
   avatar: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: '#fff', fontWeight: '800', fontSize: 15 },
-  statsRow: { flexDirection: 'row', gap: 11 },
-  stat: { flex: 1, borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 15, paddingHorizontal: 14 },
-  statTop: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  statDot: { width: 7, height: 7, borderRadius: 4 },
-  statLabel: { fontSize: 11, fontWeight: '700' },
-  statValue: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5, marginTop: 6 },
+  avatarText: { fontWeight: '800', fontSize: 15 },
+
+  // Hero (resumo no gradiente da marca)
+  hero: { borderRadius: 22, padding: 18, paddingBottom: 16 },
+  heroTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  heroKicker: { color: 'rgba(255,255,255,0.72)', fontSize: 9.5, fontWeight: '800', letterSpacing: 1.2 },
+  heroTitle: { color: '#fff', fontSize: 18.5, fontWeight: '800', letterSpacing: -0.3, marginTop: 2 },
+  heroBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.16)', borderRadius: 999, paddingVertical: 6, paddingHorizontal: 11 },
+  heroBadgeWarn: { backgroundColor: 'rgba(0,0,0,0.18)' },
+  heroBadgeDot: { width: 7, height: 7, borderRadius: 4 },
+  heroBadgeText: { color: '#fff', fontSize: 11, fontWeight: '800' },
+  heroDivider: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.25)', marginVertical: 14 },
+  heroStats: { flexDirection: 'row', alignItems: 'stretch' },
+  heroStat: { flex: 1, alignItems: 'center', gap: 3 },
+  heroStatIcon: { width: 30, height: 30, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center', marginBottom: 3 },
+  heroStatValue: { color: '#fff', fontSize: 21, fontWeight: '800', letterSpacing: -0.5 },
+  heroStatLabel: { color: 'rgba(255,255,255,0.75)', fontSize: 10.5, fontWeight: '700' },
+
   alert: { flexDirection: 'row', gap: 12, alignItems: 'flex-start', borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, padding: 14 },
   alertIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   alertTitle: { fontSize: 13.5, fontWeight: '700' },
   alertText: { fontSize: 12.5, fontWeight: '500', lineHeight: 18, marginTop: 2 },
+
   sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   sectionTitle: { fontSize: 16, fontWeight: '800', letterSpacing: -0.2 },
   manageLink: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   sectionLink: { fontSize: 12.5, fontWeight: '700' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 13 },
+  countChip: { borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 3, paddingHorizontal: 10 },
+  countChipText: { fontSize: 11.5, fontWeight: '800' },
+
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   gridItem: { width: '47%', flexGrow: 1 },
+
+  // Trilho horizontal "todas as câmeras" — sangra até as bordas da tela.
+  railWrap: { marginHorizontal: -20 },
+  rail: { paddingHorizontal: 20, gap: 11 },
+  railItem: { width: 158 },
+
   empty: { borderWidth: 1, borderStyle: 'dashed', borderRadius: 20, paddingVertical: 30, paddingHorizontal: 22, alignItems: 'center', gap: 12 },
   emptyIcon: { width: 50, height: 50, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { fontSize: 14.5, fontWeight: '800' },
   emptyText: { fontSize: 12.5, fontWeight: '500', textAlign: 'center', marginTop: -6 },
   emptyBtn: { borderRadius: 12, paddingVertical: 11, paddingHorizontal: 20 },
-  emptyBtnText: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  emptyBtnText: { fontSize: 13, fontWeight: '800' },
 });

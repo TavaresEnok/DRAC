@@ -34,12 +34,12 @@ export function BottomTabs({ active, onChange, alarmCount = 0 }: BottomTabsProps
     <View
       style={[
         styles.bar,
-        { backgroundColor: theme.surface, borderTopColor: theme.border, paddingBottom: 12 + insets.bottom },
+        { backgroundColor: theme.menu, borderTopColor: theme.border, paddingBottom: 12 + insets.bottom },
       ]}
     >
       {TABS.map((tab) => {
         const on = active === tab.id;
-        const color = on ? theme.accent : theme.textMuted;
+        const color = on ? theme.accent : theme.menuText;
         const showBadge = tab.id === 'alarmes' && alarmCount > 0;
         const filled = tab.icon === 'play';
         return (
@@ -47,7 +47,7 @@ export function BottomTabs({ active, onChange, alarmCount = 0 }: BottomTabsProps
             <View style={styles.iconWrap}>
               <Icon name={tab.icon} size={tab.icon === 'home' ? 23 : 22} color={color} fill={filled} />
               {showBadge ? (
-                <View style={[styles.badge, { backgroundColor: theme.danger, borderColor: theme.surface }]}>
+                <View style={[styles.badge, { backgroundColor: theme.danger, borderColor: theme.menu }]}>
                   <Text style={styles.badgeText}>{alarmCount > 9 ? '9+' : alarmCount}</Text>
                 </View>
               ) : null}

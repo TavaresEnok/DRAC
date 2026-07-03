@@ -10,15 +10,17 @@
  */
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useState } from 'react';
-import { type LayoutChangeEvent, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Alert, type LayoutChangeEvent, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DetectionOverlay } from '../components/DetectionOverlay';
 import { Icon, type IconName } from '../components/Icon';
 import { LiveVideo, PlaybackVideo, type LiveStatus } from '../components/VideoPlayers';
 import { useTheme } from '../theme/ThemeProvider';
 import type { Theme } from '../theme/theme';
+import { withAlpha } from '../services/branding';
+import type { SavedClip } from '../services/clips';
 import type { ActivePlayback, Camera, Direction, LiveDetection, Recording } from '../types';
-import { areaLabel, resolutionLabel } from '../utils/camera-view';
+import { areaLabel } from '../utils/camera-view';
 import { formatBytes, formatDateLabel, formatDuration, formatTime } from '../utils/format';
 
 interface LiveScreenProps {
@@ -27,10 +29,18 @@ interface LiveScreenProps {
   streamUrl: string | null;
   whepUrl: string | null;
   posterUrl: string | null;
+  /** URL HLS de máxima qualidade (passthrough H.265); null até o usuário pedir. */
+  hdUrl: string | null;
+  onRequestHd: () => void;
+  onExitHd: () => void;
   detections: LiveDetection[];
   ptzActive: Direction | null;
   ptzFeedback: string | null;
   recordings: Recording[];
+  /** "Minhas gravações" — clipes gravados pelo app (locais), desta câmera. */
+  myRecordings: SavedClip[];
+  onPlayLocal: (clip: SavedClip) => void;
+  onDeleteLocal: (clip: SavedClip) => void;
   recordingDate: string;
   activePlayback: ActivePlayback | null;
   recordingActive: boolean;
@@ -60,25 +70,31 @@ const STATUS_LABEL: Record<LiveStatus, string> = {
 type ControlTokens = {
   text: string; sub: string; surface: string; border: string;
   padBg: string; padBorder: string; barBg: string; barBorder: string;
+  // Destaque (segue a cor principal da marca) — usado em PTZ, mira e estados ativos.
+  accent: string; accentDark: string;
 };
 
 function tokensFor(glass: boolean, theme: Theme): ControlTokens {
+  // O accent segue a marca nos dois modos (glass sobre vídeo e claro/escuro).
+  const accent = { accent: theme.accent, accentDark: theme.accentDark };
   if (glass) {
     return {
       text: VIDEO_TEXT, sub: 'rgba(255,255,255,0.7)', surface: GLASS_SURFACE, border: GLASS_BORDER,
       padBg: 'rgba(255,255,255,0.05)', padBorder: 'rgba(255,255,255,0.12)',
       barBg: 'rgba(255,255,255,0.06)', barBorder: 'rgba(255,255,255,0.1)',
+      ...accent,
     };
   }
   return {
     text: theme.text, sub: theme.textSub, surface: theme.surfaceAlt, border: theme.border,
     padBg: theme.surfaceAlt, padBorder: theme.border, barBg: theme.surfaceAlt, barBorder: theme.border,
+    ...accent,
   };
 }
 
 export function LiveScreen({
-  camera, topInset = 0, streamUrl, whepUrl, posterUrl, detections, ptzActive, ptzFeedback,
-  recordings, recordingDate, activePlayback, recordingActive,
+  camera, topInset = 0, streamUrl, whepUrl, posterUrl, hdUrl, onRequestHd, onExitHd, detections, ptzActive, ptzFeedback,
+  recordings, myRecordings, onPlayLocal, onDeleteLocal, recordingDate, activePlayback, recordingActive,
   onBack, onSendPtz, onToggleRecording, onSnapshot,
   onOpenPlayback, onClosePlayback, onDownloadRecording, onPreviousDate, onNextDate,
 }: LiveScreenProps) {
@@ -86,13 +102,27 @@ export function LiveScreen({
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('idle');
   const [videoSize, setVideoSize] = useState({ width: 0, height: 0 });
   const [muted, setMuted] = useState(true); // CCTV abre mudo por padrão
+  // null = ainda não sabemos (conectando/HLS); false = stream sem faixa de áudio.
+  const [audioAvailable, setAudioAvailable] = useState<boolean | null>(null);
+  // Máxima qualidade (HLS H.265 passthrough). hdUrl chega do App sob demanda.
+  const [hdMode, setHdMode] = useState(false);
+  const hdActive = hdMode && !!hdUrl;
+  useEffect(() => { setHdMode(false); }, [camera.id]); // reseta ao trocar de câmera
+  const toggleHd = () => {
+    if (hdMode) { setHdMode(false); onExitHd(); }
+    else { setHdMode(true); onRequestHd(); }
+  };
   const [fullscreen, setFullscreen] = useState(false);
   const [lowerMode, setLowerMode] = useState<'timeline' | 'ptz'>('timeline');
+  const [recTab, setRecTab] = useState<'system' | 'mine'>('system');
 
   const { width: winW, height: winH } = useWindowDimensions();
   const landscape = winW > winH;
   const insets = useSafeAreaInsets();
   const immersive = fullscreen || landscape;
+  // Piso de segurança: em alguns aparelhos o inset inferior vem 0 mesmo com a
+  // barra de navegação do Android presente, deixando os controles ATRÁS dela.
+  const safeBottom = Math.max(insets.bottom, 36);
 
   const [panelHidden, setPanelHidden] = useState(false);
   useEffect(() => { setPanelHidden(landscape); }, [landscape]);
@@ -104,8 +134,19 @@ export function LiveScreen({
   const playing = !!activePlayback;
   const isLive = liveStatus === 'live';
   const canControl = !!camera.canControl;
-  const canRecord = !!camera.canRecord;
-  const res = resolutionLabel(camera);
+  // Gravar (clipe no celular) = captura LOCAL do que está sendo visto, igual à
+  // Foto. Não exige a permissão de gravação do NVR (canRecord) — senão ficaria
+  // cinza/morto para clientes VIEWER, que são justamente quem mais usa.
+  // PTZ: `ptzCapable === false` = a câmera não tem PTZ (mostra aviso). Permissão
+  // (canControl) é separado. Só controla de fato quando tem PTZ E permissão.
+  const ptzSupported = camera.ptzCapable !== false;
+  const canPtz = canControl && ptzSupported;
+  const ptzHint = !ptzSupported
+    ? 'Atenção: esta câmera não suporta PTZ'
+    : !canControl
+      ? 'Sem permissão para PTZ'
+      : 'Controle PTZ ativo';
+  const ptzWarn = !ptzSupported || !canControl;
   const isToday = recordingDate >= new Date().toISOString().slice(0, 10);
 
   const onVideoLayout = (event: LayoutChangeEvent) => {
@@ -114,10 +155,35 @@ export function LiveScreen({
   };
 
   // Player real: ao vivo (WHEP→HLS) OU a gravação selecionada (mesmo palco).
+  // Botão "Áudio": se o stream conectou SEM faixa de áudio, avisa em vez de
+  // fingir que ligou o som (câmeras sem microfone são comuns em CCTV).
+  const toggleAudio = () => {
+    if (audioAvailable === false) {
+      Alert.alert('Áudio', 'Atenção: esta câmera não possui áudio.');
+      return;
+    }
+    setMuted((m) => !m);
+  };
+
   const videoEl = (
     <>
       {playing ? (
         <PlaybackVideo uri={activePlayback!.url} style={StyleSheet.absoluteFill} />
+      ) : hdActive ? (
+        // Máxima qualidade: HLS H.265 puro (whepUri=null força o caminho HLS).
+        <LiveVideo
+          uri={hdUrl}
+          whepUri={null}
+          posterUri={posterUrl}
+          videoStyle={styles.videoFill}
+          muted={muted}
+          contentFit="contain"
+          emptyStyle={styles.videoEmpty}
+          posterStyle={StyleSheet.absoluteFill}
+          emptyTitleStyle={styles.videoEmptyTitle}
+          emptyTextStyle={styles.videoEmptyText}
+          onStatusChange={setLiveStatus}
+        />
       ) : (
         <LiveVideo
           uri={streamUrl}
@@ -131,6 +197,7 @@ export function LiveScreen({
           emptyTitleStyle={styles.videoEmptyTitle}
           emptyTextStyle={styles.videoEmptyText}
           onStatusChange={setLiveStatus}
+          onAudioAvailable={setAudioAvailable}
         />
       )}
       {!playing && isLive ? (
@@ -146,7 +213,7 @@ export function LiveScreen({
   );
 
   const badge = playing ? (
-    <Pressable style={[styles.liveBadge, styles.recBadge]} onPress={onClosePlayback} hitSlop={6}>
+    <Pressable style={[styles.liveBadge, styles.recBadge, { backgroundColor: theme.accentDark }]} onPress={onClosePlayback} hitSlop={6}>
       <Icon name="play" size={9} color="#fff" fill />
       <Text style={styles.liveText}>GRAVAÇÃO</Text>
     </Pressable>
@@ -157,14 +224,27 @@ export function LiveScreen({
     </View>
   );
 
+  // Marca d'água CLICÁVEL de máxima qualidade no canto superior direito do vídeo
+  // (fora da fileira de botões, pra não confundir com "Foto"). Toca = liga/desliga.
+  const hdPill = !playing ? (
+    <Pressable
+      onPress={toggleHd}
+      hitSlop={8}
+      style={[styles.hdPill, hdMode ? { backgroundColor: theme.accent, borderColor: theme.accent } : null]}
+    >
+      <Icon name="aperture" size={11} color="#fff" strokeWidth={2.4} />
+      <Text style={styles.hdPillText}>{hdActive ? 'HD · H.265' : hdMode ? 'HD…' : 'Máx HD'}</Text>
+    </Pressable>
+  ) : null;
+
   const PtzArrow = ({ icon, dir, style, c }: { icon: IconName; dir: Direction; style: object; c: ControlTokens }) => (
     <Pressable
-      disabled={!canControl}
-      style={[styles.ptzArrow, style, ptzActive === dir && styles.ptzArrowActive]}
+      disabled={!canPtz}
+      style={[styles.ptzArrow, style, ptzActive === dir && { backgroundColor: withAlpha(c.accent, 0.4) ?? undefined }]}
       onPress={() => onSendPtz(dir)}
       hitSlop={6}
     >
-      <Icon name={icon} size={20} color={canControl ? c.text : c.sub} strokeWidth={2.2} />
+      <Icon name={icon} size={20} color={canPtz ? c.text : c.sub} strokeWidth={2.2} />
     </Pressable>
   );
 
@@ -176,25 +256,25 @@ export function LiveScreen({
         <PtzArrow icon="arrowDown" dir="Down" c={c} style={{ bottom: 9, alignSelf: 'center' }} />
         <PtzArrow icon="arrowLeft" dir="Left" c={c} style={{ left: 9, top: '50%', marginTop: -16 }} />
         <PtzArrow icon="arrowRight" dir="Right" c={c} style={{ right: 9, top: '50%', marginTop: -16 }} />
-        <LinearGradient colors={['#3b82f6', '#2563eb']} style={styles.ptzCenter}>
+        <LinearGradient colors={[c.accent, c.accentDark]} style={styles.ptzCenter}>
           <Icon name="crosshair" size={18} color="#fff" strokeWidth={2} />
         </LinearGradient>
       </View>
       <View style={styles.ptzSide}>
-        <View style={[styles.zoomBar, { backgroundColor: c.barBg, borderColor: c.barBorder }, !canControl && { opacity: 0.5 }]}>
+        <View style={[styles.zoomBar, { backgroundColor: c.barBg, borderColor: c.barBorder }, !canPtz && { opacity: 0.5 }]}>
           <Text style={[styles.zoomLabel, { color: c.text }]}>Zoom</Text>
           <View style={styles.zoomCtrls}>
-            <Pressable disabled={!canControl} style={[styles.zoomBtn, { backgroundColor: c.surface }, ptzActive === 'ZoomOut' && styles.zoomBtnActive]} onPress={() => onSendPtz('ZoomOut')} hitSlop={6}>
+            <Pressable disabled={!canPtz} style={[styles.zoomBtn, { backgroundColor: c.surface }, ptzActive === 'ZoomOut' && { backgroundColor: withAlpha(c.accent, 0.5) ?? undefined }]} onPress={() => onSendPtz('ZoomOut')} hitSlop={6}>
               <Icon name="minus" size={16} color={c.text} />
             </Pressable>
-            <Pressable disabled={!canControl} style={[styles.zoomBtn, { backgroundColor: c.surface }, ptzActive === 'ZoomIn' && styles.zoomBtnActive]} onPress={() => onSendPtz('ZoomIn')} hitSlop={6}>
+            <Pressable disabled={!canPtz} style={[styles.zoomBtn, { backgroundColor: c.surface }, ptzActive === 'ZoomIn' && { backgroundColor: withAlpha(c.accent, 0.5) ?? undefined }]} onPress={() => onSendPtz('ZoomIn')} hitSlop={6}>
               <Icon name="plus" size={16} color={c.text} />
             </Pressable>
           </View>
         </View>
         <View style={[styles.hintBar, { backgroundColor: c.barBg, borderColor: c.barBorder }]}>
-          <Icon name="crosshair" size={16} color="#60a5fa" />
-          <Text style={[styles.hintText, { color: c.text }]}>{canControl ? 'Controle PTZ ativo' : 'Sem permissão PTZ'}</Text>
+          <Icon name={ptzWarn ? 'alert' : 'crosshair'} size={16} color={ptzWarn ? '#f59e0b' : c.accent} />
+          <Text style={[styles.hintText, { color: ptzWarn ? '#f59e0b' : c.text }]}>{ptzHint}</Text>
         </View>
       </View>
     </View>
@@ -208,40 +288,51 @@ export function LiveScreen({
         <View style={styles.stage} onLayout={onVideoLayout}>
           {videoEl}
           <LinearGradient colors={['rgba(0,0,0,0.55)', 'transparent']} style={styles.topShade} pointerEvents="none" />
-          <View style={[styles.topBar, { paddingTop: topInset + 10 }]}>
+          <View style={[styles.topBar, { paddingTop: topInset + 10, paddingLeft: 20 + insets.left, paddingRight: 20 + insets.right }]}>
             <View style={styles.topLeft}>
               <Pressable style={styles.backGlass} onPress={onBack} hitSlop={8}>
                 <Icon name="chevronLeft" size={20} color="#fff" strokeWidth={2.1} />
               </Pressable>
               <View style={{ flexShrink: 1 }}>
                 <Text style={styles.camNameGlass} numberOfLines={1}>{camera.name}</Text>
-                <Text style={styles.camMetaGlass} numberOfLines={1}>{areaLabel(camera)}{res ? ` · ${res}` : ''}</Text>
+                <Text style={styles.camMetaGlass} numberOfLines={1}>{areaLabel(camera)}</Text>
               </View>
             </View>
-            {badge}
+            <View style={styles.topRightGroup}>
+              {hdPill}
+              {badge}
+            </View>
           </View>
 
           {panelHidden ? (
-            <Pressable style={[styles.restoreBtn, { bottom: 20 + insets.bottom }]} onPress={() => setPanelHidden(false)} hitSlop={8}>
+            <Pressable style={[styles.restoreBtn, { bottom: 20 + safeBottom }]} onPress={() => setPanelHidden(false)} hitSlop={8}>
               <Icon name="arrowUp" size={18} color="#fff" strokeWidth={2.2} />
               <Text style={styles.restoreText}>Controles</Text>
             </Pressable>
           ) : (
-            <View style={[styles.panel, { bottom: 18 + insets.bottom }, landscape && styles.panelLandscape]}>
+            <View style={[
+              styles.panel,
+              landscape
+                // Paisagem: painel à direita, mas AFASTADO da barra de navegação
+                // do Android (que em paisagem fica no lado → usa insets.right) e
+                // do rodapé (insets.bottom).
+                ? { left: undefined, right: 14 + insets.right, bottom: 14 + insets.bottom, width: 300 }
+                : { bottom: 18 + safeBottom },
+            ]}>
               <Pressable style={styles.minimizeHandle} onPress={() => setPanelHidden(true)} hitSlop={10}>
                 <View style={styles.minimizeGrabber} />
                 <Icon name="chevronDown" size={18} color="rgba(255,255,255,0.55)" strokeWidth={2.2} />
               </Pressable>
               {ptzFeedback ? (
-                <View style={[styles.feedback, { backgroundColor: 'rgba(96,165,250,0.14)' }]}>
-                  <Icon name="crosshair" size={14} color="#60a5fa" />
-                  <Text style={styles.feedbackText}>{ptzFeedback}</Text>
+                <View style={[styles.feedback, { backgroundColor: withAlpha(c.accent, 0.14) ?? undefined }]}>
+                  <Icon name="crosshair" size={14} color={c.accent} />
+                  <Text style={[styles.feedbackText, { color: c.accent }]}>{ptzFeedback}</Text>
                 </View>
               ) : null}
               <View style={styles.ctrlRow}>
-                <RecordButton recording={recordingActive} c={c} disabled={!canRecord} onPress={() => onToggleRecording(camera)} />
+                <RecordButton recording={recordingActive} c={c} onPress={() => onToggleRecording(camera)} />
                 <ControlButton label="Foto" icon="camera" c={c} onPress={() => onSnapshot(camera)} />
-                <ControlButton label="Áudio" icon="mic" c={c} active={!muted} onPress={() => setMuted((m) => !m)} />
+                <ControlButton label="Áudio" icon="mic" c={c} active={!muted && audioAvailable !== false} onPress={toggleAudio} />
                 <ControlButton label="Tela" icon="expand" c={c} active onPress={() => setFullscreen(false)} />
               </View>
               <PtzControls c={c} />
@@ -263,7 +354,7 @@ export function LiveScreen({
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.headerName, { color: theme.text }]} numberOfLines={1}>{camera.name}</Text>
           <Text style={[styles.headerMeta, { color: theme.textSub }]} numberOfLines={1}>
-            {areaLabel(camera)}{res ? ` · ${res}` : ''}
+            {areaLabel(camera)}
           </Text>
         </View>
         {badge}
@@ -271,6 +362,7 @@ export function LiveScreen({
 
       <View style={[styles.videoFlush, { aspectRatio: aspect }]} onLayout={onVideoLayout}>
         {videoEl}
+        {hdPill ? <View style={styles.hdPillTopRight}>{hdPill}</View> : null}
         {playing ? (
           <Pressable style={styles.closePlayback} onPress={onClosePlayback} hitSlop={8}>
             <Icon name="close" size={16} color="#fff" strokeWidth={2.2} />
@@ -279,10 +371,10 @@ export function LiveScreen({
       </View>
 
       <View style={styles.actionRow}>
-        <RecordButton recording={recordingActive} c={c} disabled={!canRecord} onPress={() => onToggleRecording(camera)} />
+        <RecordButton recording={recordingActive} c={c} onPress={() => onToggleRecording(camera)} />
         <ControlButton label="Foto" icon="camera" c={c} onPress={() => onSnapshot(camera)} />
-        <ControlButton label="Áudio" icon="mic" c={c} active={!muted} onPress={() => setMuted((m) => !m)} />
-        <ControlButton label="PTZ" icon="crosshair" c={c} active={lowerMode === 'ptz'} disabled={!canControl || playing} onPress={() => setLowerMode((m) => (m === 'ptz' ? 'timeline' : 'ptz'))} />
+        <ControlButton label="Áudio" icon="mic" c={c} active={!muted && audioAvailable !== false} onPress={toggleAudio} />
+        <ControlButton label="PTZ" icon="crosshair" c={c} active={lowerMode === 'ptz'} disabled={playing} onPress={() => setLowerMode((m) => (m === 'ptz' ? 'timeline' : 'ptz'))} />
         <ControlButton label="Tela" icon="expand" c={c} onPress={() => setFullscreen(true)} />
       </View>
 
@@ -299,6 +391,55 @@ export function LiveScreen({
           </View>
         ) : (
           <View style={{ flex: 1 }}>
+            {/* Seletor: gravações do SISTEMA (NVR) x MINHAS (clipes do app). */}
+            <View style={[styles.recTabs, { backgroundColor: theme.surfaceAlt, borderColor: theme.border }]}>
+              {(['system', 'mine'] as const).map((tab) => (
+                <Pressable
+                  key={tab}
+                  style={[styles.recTab, recTab === tab && { backgroundColor: theme.surface }]}
+                  onPress={() => setRecTab(tab)}
+                >
+                  <Text style={[styles.recTabText, { color: recTab === tab ? theme.text : theme.textSub }]}>
+                    {tab === 'system' ? 'Do sistema' : `Minhas${myRecordings.length ? ` · ${myRecordings.length}` : ''}`}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {recTab === 'mine' ? (
+              // ── Minhas gravações (clipes locais do app) ──
+              myRecordings.length === 0 ? (
+                <View style={[styles.empty, { borderColor: theme.border }]}>
+                  <Icon name="play" size={22} color={theme.textMuted} strokeWidth={1.8} />
+                  <Text style={[styles.emptyText, { color: theme.textSub }]}>Nenhum clipe gravado por você nesta câmera. Use o botão Gravar.</Text>
+                </View>
+              ) : (
+                <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.listContent, { paddingBottom: 14 + insets.bottom }]} showsVerticalScrollIndicator={false}>
+                  {myRecordings.map((clip) => {
+                    const active = activePlayback?.recording.id === clip.id;
+                    return (
+                      <Pressable
+                        key={clip.id}
+                        onPress={() => onPlayLocal(clip)}
+                        style={[styles.recRow, { backgroundColor: active ? theme.accentBg : theme.surface, borderColor: active ? theme.accent : theme.border }]}
+                      >
+                        <View style={[styles.recThumb, { backgroundColor: active ? theme.accent : theme.surfaceAlt }]}>
+                          <Icon name="play" size={15} color={active ? '#fff' : theme.textSub} fill={active} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.recRange, { color: theme.text }]}>{formatDateLabel(clip.createdAt.slice(0, 10))} · {formatTime(clip.createdAt)}</Text>
+                          <Text style={[styles.recDuration, { color: theme.textSub }]}>Clipe salvo no celular</Text>
+                        </View>
+                        <Pressable onPress={() => onDeleteLocal(clip)} hitSlop={8}>
+                          <Icon name="trash" size={18} color={theme.danger} strokeWidth={2} />
+                        </Pressable>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              )
+            ) : (
+            <>
             <View style={styles.daysRow}>
               <Pressable style={[styles.dayNav, { backgroundColor: theme.surface, borderColor: theme.border }]} onPress={onPreviousDate} hitSlop={4}>
                 <Icon name="chevronLeft" size={16} color={theme.textSub} strokeWidth={2.2} />
@@ -316,8 +457,6 @@ export function LiveScreen({
                 <Icon name="chevronRight" size={16} color={theme.textSub} strokeWidth={2.2} />
               </Pressable>
             </View>
-
-            <Text style={[styles.listTitle, { color: theme.text }]}>Linha do tempo · {recordings.length}</Text>
 
             {recordings.length === 0 ? (
               <View style={[styles.empty, { borderColor: theme.border }]}>
@@ -355,6 +494,8 @@ export function LiveScreen({
                   );
                 })}
               </ScrollView>
+            )}
+            </>
             )}
           </View>
         )}
@@ -394,11 +535,11 @@ function ControlButton({ label, icon, danger, active, disabled, onPress, c }: {
         styles.ctrlCircle,
         { backgroundColor: c.surface, borderColor: c.border },
         danger && styles.ctrlDanger,
-        active && styles.ctrlActive,
+        active && { backgroundColor: withAlpha(c.accent, 0.28) ?? undefined, borderColor: withAlpha(c.accent, 0.6) ?? undefined },
       ]}>
         {danger ? <View style={styles.recDot} /> : icon ? <Icon name={icon} size={22} color={active ? '#fff' : c.text} /> : null}
       </View>
-      <Text style={[styles.ctrlLabel, { color: active ? '#60a5fa' : c.sub }]}>{label}</Text>
+      <Text style={[styles.ctrlLabel, { color: active ? c.accent : c.sub }]}>{label}</Text>
     </Pressable>
   );
 }
@@ -414,6 +555,10 @@ const styles = StyleSheet.create({
   recBadge: { backgroundColor: '#2563eb' },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' },
   liveText: { color: '#fff', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  hdPillTopRight: { position: 'absolute', top: 10, right: 10 },
+  topRightGroup: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  hdPill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 999, paddingVertical: 5, paddingHorizontal: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.28)' },
+  hdPillText: { color: '#fff', fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
 
   // Imersivo
   root: { flex: 1, backgroundColor: '#070809' },
@@ -425,7 +570,6 @@ const styles = StyleSheet.create({
   camNameGlass: { color: '#fff', fontSize: 16, fontWeight: '800' },
   camMetaGlass: { color: 'rgba(255,255,255,0.65)', fontSize: 11.5, fontWeight: '600' },
   panel: { position: 'absolute', left: 18, right: 18, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 18, borderRadius: 26, backgroundColor: 'rgba(20,24,31,0.86)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
-  panelLandscape: { left: undefined, right: 14, bottom: 14, width: 300 },
   minimizeHandle: { alignItems: 'center', justifyContent: 'center', paddingBottom: 6, gap: 1 },
   minimizeGrabber: { width: 38, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.18)' },
   restoreBtn: { position: 'absolute', alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: 'rgba(20,24,31,0.86)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', borderRadius: 999, paddingVertical: 9, paddingHorizontal: 16 },
@@ -447,7 +591,6 @@ const styles = StyleSheet.create({
   ctrl: { alignItems: 'center', gap: 6 },
   ctrlCircle: { width: 52, height: 52, borderRadius: 26, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   ctrlDanger: { backgroundColor: 'rgba(239,68,68,0.16)', borderColor: 'rgba(239,68,68,0.4)' },
-  ctrlActive: { backgroundColor: 'rgba(59,130,246,0.28)', borderColor: 'rgba(59,130,246,0.6)' },
   recDot: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#ef4444' },
   recStop: { width: 16, height: 16, borderRadius: 4, backgroundColor: '#fff' },
   ctrlLabel: { fontSize: 10, fontWeight: '700' },
@@ -459,18 +602,19 @@ const styles = StyleSheet.create({
   ptzRowCentered: { justifyContent: 'center' },
   ptzPad: { width: 124, height: 124, borderRadius: 62, borderWidth: 1, position: 'relative' },
   ptzArrow: { position: 'absolute', width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-  ptzArrowActive: { backgroundColor: 'rgba(59,130,246,0.4)' },
   ptzCenter: { position: 'absolute', top: 39, left: 39, width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
   ptzSide: { flex: 1, gap: 9, maxWidth: 200 },
   zoomBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderRadius: 14, paddingVertical: 11, paddingHorizontal: 14 },
   zoomLabel: { fontSize: 13, fontWeight: '700' },
   zoomCtrls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   zoomBtn: { width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  zoomBtnActive: { backgroundColor: 'rgba(59,130,246,0.5)' },
   hintBar: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 14, paddingVertical: 11, paddingHorizontal: 14 },
   hintText: { fontSize: 12.5, fontWeight: '700' },
 
   // Timeline / gravações
+  recTabs: { flexDirection: 'row', borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, padding: 3, marginBottom: 12, gap: 3 },
+  recTab: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 9 },
+  recTabText: { fontSize: 12.5, fontWeight: '800' },
   daysRow: { flexDirection: 'row', gap: 8, alignItems: 'stretch', marginBottom: 12 },
   dayNav: { width: 44, height: 42, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
   dayPill: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth },

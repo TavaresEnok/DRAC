@@ -11,6 +11,7 @@ import {
   FolderOpen,
   Grid2X2,
   Grid3X3,
+  LayoutGrid,
   Maximize2,
   Monitor,
   PanelRightClose,
@@ -52,12 +53,30 @@ import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
 import { useToast } from '../hooks/use-toast';
 
-const GRID_CONFIGS: Record<GridSize, { cols: number; rows: number; label: string; icon: ReactNode }> = {
-  '1x1': { cols: 1, rows: 1, label: '1x1', icon: <Monitor className="w-3.5 h-3.5" /> },
-  '2x2': { cols: 2, rows: 2, label: '2x2', icon: <Grid2X2 className="w-3.5 h-3.5" /> },
-  '3x3': { cols: 3, rows: 3, label: '3x3', icon: <Grid3X3 className="w-3.5 h-3.5" /> },
-  '4x4': { cols: 4, rows: 4, label: '4x4', icon: <Grid3X3 className="w-3.5 h-3.5" /> },
-};
+// Presets (atalhos rápidos). Qualquer CxL livre também é aceito via campo custom.
+const GRID_PRESETS: { size: GridSize; icon: ReactNode }[] = [
+  { size: '1x1', icon: <Monitor className="w-3.5 h-3.5" /> },
+  { size: '2x2', icon: <Grid2X2 className="w-3.5 h-3.5" /> },
+  { size: '3x3', icon: <Grid3X3 className="w-3.5 h-3.5" /> },
+  { size: '4x4', icon: <Grid3X3 className="w-3.5 h-3.5" /> },
+  { size: '5x5', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
+];
+
+const GRID_MIN = 1;
+const GRID_MAX = 8; // limite por dimensão
+const GRID_CELL_WARN = 16; // acima disso, avisa sobre CPU (transcode H.265)
+
+/** Colunas × linhas de uma grade "CxL", com limites (1..8). */
+function gridDims(size: string): { cols: number; rows: number } {
+  const m = /^(\d+)x(\d+)$/.exec(String(size));
+  const clamp = (n: number) => Math.min(GRID_MAX, Math.max(GRID_MIN, n || GRID_MIN));
+  return { cols: clamp(m ? parseInt(m[1], 10) : 2), rows: clamp(m ? parseInt(m[2], 10) : 2) };
+}
+function makeGridSize(cols: number, rows: number): GridSize {
+  const c = Math.min(GRID_MAX, Math.max(GRID_MIN, Math.round(cols) || GRID_MIN));
+  const r = Math.min(GRID_MAX, Math.max(GRID_MIN, Math.round(rows) || GRID_MIN));
+  return `${c}x${r}`;
+}
 
 const STATUS_FILTERS = ['all', 'online', 'recording', 'motion', 'alarm', 'offline', 'no_signal', 'maintenance'] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
@@ -158,14 +177,25 @@ export default function LiveViewPage() {
     });
   }, [cameras]);
 
-  const cfg = GRID_CONFIGS[gridSize];
-  const count = cfg.cols * cfg.rows;
+  const { cols: gridCols, rows: gridRows } = gridDims(gridSize);
+  const count = gridCols * gridRows;
   const cameraById = useMemo(() => new Map(cameras.map((camera) => [camera.id, camera])), [cameras]);
   const displayedCams = useMemo<(Camera | null)[]>(() => {
     const slots: (Camera | null)[] = cameraIds.slice(0, count).map((id) => cameraById.get(id) ?? null);
     while (slots.length < count) slots.push(null);
     return slots;
   }, [cameraIds, count, cameraById]);
+
+  // "Preencher": escolhe a MENOR grade que cabe todas as câmeras (até 5x5) e
+  // preenche os quadros — online primeiro. Otimiza o espaço automaticamente.
+  const fillGrid = useCallback(() => {
+    const ordered = [...cameras].sort((a, b) => Number(b.isOnline) - Number(a.isOnline));
+    const n = ordered.length;
+    const size: GridSize = n <= 1 ? '1x1' : n <= 4 ? '2x2' : n <= 9 ? '3x3' : n <= 16 ? '4x4' : n <= 25 ? '5x5' : '6x6';
+    const { cols, rows } = gridDims(size);
+    setGridSize(size);
+    setCameraIds(ordered.slice(0, cols * rows).map((c) => c.id));
+  }, [cameras, setGridSize, setCameraIds]);
 
   const onlineCount = useMemo(() => cameras.filter((c) => c.isOnline).length, [cameras]);
   const recordingCount = useMemo(() => cameras.filter((c) => c.status === 'recording').length, [cameras]);
@@ -239,7 +269,7 @@ export default function LiveViewPage() {
     setLayoutSelectValue('');
     if (!layout) return;
     setGridSize(layout.gridSize);
-    setCameraIds(layout.cameraIds.slice(0, GRID_CONFIGS[layout.gridSize].cols * GRID_CONFIGS[layout.gridSize].rows));
+    setCameraIds(layout.cameraIds.slice(0, (() => { const d = gridDims(layout.gridSize); return d.cols * d.rows; })()));
     setSelectedSlotIndex(null);
   };
 
@@ -368,7 +398,7 @@ export default function LiveViewPage() {
         </div>
         <div
           className="h-full w-full grid gap-0.5 p-0.5"
-          style={{ gridTemplateColumns: `repeat(${cfg.cols}, 1fr)`, gridTemplateRows: `repeat(${cfg.rows}, 1fr)` }}
+          style={{ gridTemplateColumns: `repeat(${gridCols}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)` }}
         >
           {displayedCams.map((cam, i) => (
             <div key={cam ? cam.id : `empty-${i}`} className="relative min-h-0">
@@ -412,7 +442,7 @@ export default function LiveViewPage() {
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <div className="toolbar">
           <div className="segment">
-            {(Object.entries(GRID_CONFIGS) as [GridSize, typeof GRID_CONFIGS[GridSize]][]).map(([size, item]) => (
+            {GRID_PRESETS.map(({ size, icon }) => (
               <Tooltip key={size} delayDuration={0}>
                 <TooltipTrigger asChild>
                   <button
@@ -420,14 +450,63 @@ export default function LiveViewPage() {
                     className={`seg-btn ${gridSize === size ? 'active' : ''}`}
                     data-testid={`button-grid-${size}`}
                   >
-                    {item.icon}
-                    {item.label}
+                    {icon}
+                    {size}
                   </button>
                 </TooltipTrigger>
-                <TooltipContent className="text-xs">Grade {item.label}</TooltipContent>
+                <TooltipContent className="text-xs">Grade {size}</TooltipContent>
               </Tooltip>
             ))}
           </div>
+
+          {/* Grade LIVRE: colunas × linhas (ex.: 4x6, 6x4). Aplica ao digitar. */}
+          <Tooltip delayDuration={0}>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-1 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-1.5 py-0.5" data-testid="grid-custom">
+                <input
+                  type="number"
+                  min={GRID_MIN}
+                  max={GRID_MAX}
+                  value={gridCols}
+                  onChange={(e) => setGridSize(makeGridSize(Number(e.target.value), gridRows))}
+                  className="w-9 bg-transparent text-center text-xs outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                  aria-label="Colunas"
+                />
+                <span className="text-[10px] text-[hsl(var(--muted-foreground))]">×</span>
+                <input
+                  type="number"
+                  min={GRID_MIN}
+                  max={GRID_MAX}
+                  value={gridRows}
+                  onChange={(e) => setGridSize(makeGridSize(gridCols, Number(e.target.value)))}
+                  className="w-9 bg-transparent text-center text-xs outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+                  aria-label="Linhas"
+                />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent className="text-xs">Grade livre: colunas × linhas (1 a {GRID_MAX})</TooltipContent>
+          </Tooltip>
+
+          {count > GRID_CELL_WARN ? (
+            <Tooltip delayDuration={0}>
+              <TooltipTrigger asChild>
+                <span className="hidden sm:inline-flex items-center gap-1 rounded-md bg-[hsl(var(--status-warning)_/_0.14)] px-2 py-1 text-[10px] font-semibold text-[hsl(var(--status-warning))]" data-testid="grid-cpu-warn">
+                  ⚠ {count} câmeras
+                </span>
+              </TooltipTrigger>
+              <TooltipContent className="text-xs max-w-56">Muitas câmeras ao vivo ao mesmo tempo podem sobrecarregar a CPU do servidor (transcode). Reduza a grade se ficar lento.</TooltipContent>
+            </Tooltip>
+          ) : null}
+
+          <Tooltip delayDuration={0}>
+            <TooltipTrigger asChild>
+              <button onClick={fillGrid} className="btn btn-secondary btn-sm" data-testid="button-fill-grid">
+                <LayoutGrid className="w-3.5 h-3.5" />
+                Preencher
+              </button>
+            </TooltipTrigger>
+            <TooltipContent className="text-xs">Preenche a grade com todas as câmeras (ajusta o tamanho)</TooltipContent>
+          </Tooltip>
 
           <div className="hidden xl:flex items-center gap-2">
             <Select value={layoutSelectValue} onValueChange={loadLayout}>
@@ -555,8 +634,8 @@ export default function LiveViewPage() {
         </div>
 
         <div
-          className="cam-grid-bg flex-1 p-2 grid gap-2 min-h-0"
-          style={{ gridTemplateColumns: `repeat(${cfg.cols}, 1fr)`, gridTemplateRows: `repeat(${cfg.rows}, 1fr)` }}
+          className="cam-grid-bg flex-1 p-1 grid gap-1 min-h-0"
+          style={{ gridTemplateColumns: `repeat(${gridCols}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)` }}
         >
           {displayedCams.map((cam, i) => (
             <div

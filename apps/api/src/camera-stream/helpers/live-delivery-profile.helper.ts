@@ -1,11 +1,17 @@
-export type LiveViewMode = 'selected' | 'grid';
+// 'original' = "máxima qualidade": serve o stream PRINCIPAL da câmera em
+// PASSTHROUGH (sem transcode, inclusive H.265) via HLS. Custo ~0 de CPU no
+// servidor; o celular decodifica o HEVC no hardware. Latência maior que WebRTC.
+export type LiveViewMode = 'selected' | 'grid' | 'original';
 
 export const GRID_LIVE_MAX_WIDTH = 1280;
 export const GRID_LIVE_MAX_HEIGHT = 720;
 export const GRID_LIVE_TARGET_FPS = 20;
 
 export function normalizeLiveViewMode(value?: string | null): LiveViewMode {
-  return String(value ?? '').trim().toLowerCase() === 'grid' ? 'grid' : 'selected';
+  const v = String(value ?? '').trim().toLowerCase();
+  if (v === 'grid') return 'grid';
+  if (v === 'original') return 'original';
+  return 'selected';
 }
 
 export function resolveGridLiveProfile(input?: {

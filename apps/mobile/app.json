@@ -18,6 +18,7 @@
     "android": {
       "package": "com.ajustconsulting.dracmobile",
       "versionCode": 6,
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#071013"
@@ -31,6 +32,20 @@
     "plugins": [
       "expo-video",
       [
+        "expo-notifications",
+        {
+          "color": "#EF4444"
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Permite salvar fotos e clipes das câmeras na galeria.",
+          "savePhotosPermission": "Permite salvar fotos e clipes das câmeras na galeria.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {
@@ -38,6 +53,11 @@
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "c5d88e7a-5932-4bf2-998e-97d989a2e15f"
+      }
+    }
   }
 }

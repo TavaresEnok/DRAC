@@ -1,9 +1,9 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import * as Sharing from 'expo-sharing';
 import * as ScreenOrientation from 'expo-screen-orientation';
+import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { Alert, SafeAreaView, StyleSheet, View } from 'react-native';
+import { Alert, SafeAreaView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { DEFAULT_API_URL, TOP_SAFE } from './src/config';
 import { BottomTabs } from './src/components/BottomTabs';
@@ -14,10 +14,13 @@ import { LoginScreen } from './src/screens/LoginScreen';
 import { MosaicScreen } from './src/screens/MosaicScreen';
 import { PlaybackScreen } from './src/screens/PlaybackScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
-import { request, normalizeServerUrl } from './src/services/api';
+import { request, normalizeServerUrl, setUnauthorizedHandler } from './src/services/api';
 import { fetchBranding } from './src/services/branding';
 import { requestCachedStreamUrls } from './src/services/stream-urls-cache';
+import { saveToGallery, addClip, listClips, removeClip, type SavedClip } from './src/services/clips';
 import { cleanApiUrl, clearStoredSession, loadStoredSession, saveStoredSession } from './src/services/sessionStore';
+import { registerForPush, subscribeToNotificationTaps, unregisterFromPush } from './src/services/push';
+import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { useAlarms } from './src/hooks/useAlarms';
 import { useLiveDetections } from './src/hooks/useLiveDetections';
 import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
@@ -26,18 +29,21 @@ import type { ActivePlayback, Camera, Direction, Recording, Session, StreamUrls,
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <ThemeProvider>
-        <LibraryProvider>
-          <AppInner />
-        </LibraryProvider>
-      </ThemeProvider>
-    </SafeAreaProvider>
+    <ErrorBoundary>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <LibraryProvider>
+            <AppInner />
+          </LibraryProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </ErrorBoundary>
   );
 }
 
 function AppInner() {
-  const { theme, mode, applyBranding } = useTheme();
+  const { theme, applyBranding } = useTheme();
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
   const [session, setSession] = useState<Session | null>(null);
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
   const [email, setEmail] = useState('');
@@ -51,11 +57,19 @@ function AppInner() {
   const [streamUrls, setStreamUrls] = useState<Record<string, string | null>>({});
   const [streamWhep, setStreamWhep] = useState<Record<string, string | null>>({});
   const [streamPosters, setStreamPosters] = useState<Record<string, string | null>>({});
+  // URL HLS de MÁXIMA QUALIDADE (passthrough H.265, sem transcode) da câmera ao
+  // vivo aberta. Buscada sob demanda quando o usuário liga o modo HD.
+  const [hdUrl, setHdUrl] = useState<string | null>(null);
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [activePlayback, setActivePlayback] = useState<ActivePlayback | null>(null);
   const [ptzActive, setPtzActive] = useState<Direction | null>(null);
   const [ptzFeedback, setPtzFeedback] = useState<string | null>(null);
   const [recordingActive, setRecordingActive] = useState(false);
+  // Id do clipe em gravação no servidor (gravação "no celular": o servidor grava
+  // o trecho EXATO start→stop e o app baixa o arquivo ao parar).
+  const [clipId, setClipId] = useState<string | null>(null);
+  // "Minhas gravações" — índice local dos clipes gravados pelo app.
+  const [savedClips, setSavedClips] = useState<SavedClip[]>([]);
   const [recordingDate, setRecordingDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [lastSyncError, setLastSyncError] = useState<string | null>(null);
   const previewLimit = 8;
@@ -69,7 +83,9 @@ function AppInner() {
     const offline = cameras.filter((camera) => camera.status !== 'ONLINE').length;
     if (lastSyncError) messages.push(lastSyncError);
     if (offline > 0) messages.push(`${offline} câmera(s) offline ou sem comunicação.`);
-    if (session?.user.role === 'VIEWER') messages.push('Seu perfil é somente visualização. Gravação e PTZ podem estar bloqueados.');
+    // NÃO expor o perfil do usuário (ex.: "somente visualização") — é informação
+    // interna que o cliente/grupo não deve ver no app. As permissões continuam
+    // valendo silenciosamente (gravação/PTZ bloqueados quando for o caso).
     return messages.slice(0, 3);
   })();
 
@@ -105,6 +121,23 @@ function AppInner() {
     if (session) void loadAll();
   }, [session?.token]);
 
+  // Push de alarmes + sessão expirada. Ao autenticar: registra o handler de 401
+  // (logout gracioso quando o token morre) e o aparelho para push; ao tocar na
+  // notificação, abre Alarmes e recarrega. Falha de push nunca quebra o app.
+  useEffect(() => {
+    if (!session) return;
+    setUnauthorizedHandler(() => { void logout(); });
+    void registerForPush(session.apiUrl, session.token);
+    const unsubscribe = subscribeToNotificationTaps(() => {
+      setTab('alarmes');
+      void reloadAlarms();
+    });
+    return () => {
+      setUnauthorizedHandler(null);
+      unsubscribe();
+    };
+  }, [session?.token]);
+
   // Orientação: o app é retrato; SÓ a tela ao vivo libera paisagem (gira ao deitar
   // o aparelho) e volta a travar em retrato ao sair.
   useEffect(() => {
@@ -122,16 +155,29 @@ function AppInner() {
     }
   }, [selectedCamera?.id, session?.token, recordingDate]);
 
-  // Ao abrir o ao vivo, busca o estado real de gravação e revalida a cada 15s.
+  // Ao trocar/sair do ao vivo, zera indicador de gravação e o modo HD (a URL de
+  // máxima qualidade é por câmera; não vaza entre telas).
   useEffect(() => {
-    if (!liveCamera || !session) {
-      setRecordingActive(false);
-      return;
+    setHdUrl(null);
+    if (!liveCamera) { setRecordingActive(false); setClipId(null); }
+  }, [liveCamera?.id]);
+
+  // Carrega "Minhas gravações" (índice local) ao iniciar.
+  useEffect(() => { void listClips().then(setSavedClips); }, []);
+
+  // Máxima qualidade: busca o HLS passthrough (H.265) sob demanda.
+  const loadHdStream = async (cameraId: string) => {
+    if (!session) return;
+    try {
+      const data = await requestCachedStreamUrls<StreamUrls>(session.apiUrl, cameraId, session.token, undefined, 'original');
+      const hls = normalizeServerUrl(data.protocols?.hlsUrl, session.apiUrl);
+      if (!hls) throw new Error('sem HLS');
+      setHdUrl(hls);
+    } catch {
+      setHdUrl(null);
+      Alert.alert('Máxima qualidade', 'Não foi possível abrir a máxima qualidade desta câmera agora.');
     }
-    void refreshRecordingStatus(liveCamera.id);
-    const timer = setInterval(() => void refreshRecordingStatus(liveCamera.id), 15000);
-    return () => clearInterval(timer);
-  }, [liveCamera?.id, session?.token]);
+  };
 
   const login = async () => {
     setLoading(true);
@@ -182,6 +228,7 @@ function AppInner() {
   };
 
   const logout = async () => {
+    if (session) await unregisterFromPush(session.apiUrl, session.token);
     await clearStoredSession();
     setSession(null);
     setCameras([]);
@@ -201,6 +248,8 @@ function AppInner() {
       setSelectedCameraId((current) => current ?? data[0]?.id ?? null);
       void reloadAlarms();
       void Promise.all(data.slice(0, previewLimit).map((camera) => loadStream(camera.id)));
+      // Posters para a grade inteira (barato: só token + 1 frame com cache).
+      void loadAllPosters(data);
     } catch (error) {
       const status = (error as { status?: number })?.status;
       const message = error instanceof Error ? error.message : 'Não foi possível carregar câmeras.';
@@ -226,9 +275,10 @@ function AppInner() {
         data.protocols?.whepUrl
         ?? (data.protocols?.webrtcUrl ? `${data.protocols.webrtcUrl.replace(/\/+$/, '')}/whep` : null);
       const whepUrl = normalizeServerUrl(whepRaw, session.apiUrl);
-      const posterBaseUrl = normalizeServerUrl(data.protocols?.posterUrl, session.apiUrl);
-      const posterUrl = posterBaseUrl && data.streamToken
-        ? `${posterBaseUrl}${posterBaseUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(data.streamToken)}&v=${Date.now()}`
+      // Poster montado a partir do session.apiUrl (alcançável pelo celular), não
+      // do host que a API devolve (pode ser interno do Docker atrás do nginx).
+      const posterUrl = data.streamToken
+        ? `${session.apiUrl.replace(/\/+$/, '')}/camera-stream/${encodeURIComponent(cameraId)}/poster?token=${encodeURIComponent(data.streamToken)}&v=${Date.now()}`
         : null;
       setStreamUrls((current) => ({ ...current, [cameraId]: hlsUrl }));
       setStreamWhep((current) => ({ ...current, [cameraId]: whepUrl }));
@@ -237,6 +287,40 @@ function AppInner() {
       setStreamUrls((current) => ({ ...current, [cameraId]: null }));
       setStreamWhep((current) => ({ ...current, [cameraId]: null }));
       setStreamPosters((current) => ({ ...current, [cameraId]: null }));
+    }
+  };
+
+  // Snapshot (poster) em TODOS os tiles, não só nos que abrem o stream. Usa o
+  // endpoint em lote /camera-stream/poster-tokens (só emite token, NÃO inicia
+  // restream) e publica os posters em lotes escalonados para não disparar muitos
+  // frames ffmpeg de uma vez no servidor. Best-effort: falha = tiles com gradiente.
+  const loadAllPosters = async (cams: Camera[]) => {
+    if (!session || cams.length === 0) return;
+    try {
+      const { items } = await request<{ items: { cameraId: string; streamToken: string }[] }>(
+        session.apiUrl,
+        '/camera-stream/poster-tokens',
+        session.token,
+        { method: 'POST', body: JSON.stringify({ cameraIds: cams.map((c) => c.id) }) },
+      );
+      // Monta a URL do poster a partir do session.apiUrl (SEMPRE alcançável pelo
+      // celular). NÃO usa o host que a API devolve — atrás do nginx/Docker ele
+      // pode vir interno (ex.: vms-api:3000), que o celular não acessa → tile preto.
+      const apiBase = session.apiUrl.replace(/\/+$/, '');
+      const CHUNK = 6;
+      for (let i = 0; i < items.length; i += CHUNK) {
+        const slice = items.slice(i, i + CHUNK);
+        setStreamPosters((current) => {
+          const next = { ...current };
+          for (const it of slice) {
+            next[it.cameraId] = `${apiBase}/camera-stream/${encodeURIComponent(it.cameraId)}/poster?token=${encodeURIComponent(it.streamToken)}&v=${Date.now()}`;
+          }
+          return next;
+        });
+        if (i + CHUNK < items.length) await new Promise((resolve) => setTimeout(resolve, 120));
+      }
+    } catch {
+      // sem posters: os tiles caem no gradiente placeholder.
     }
   };
 
@@ -272,57 +356,110 @@ function AppInner() {
     if (!session || !target?.canControl) return;
     setPtzActive(direction);
     setPtzFeedback(direction);
-    try {
-      await request(session.apiUrl, `/ptz/${target.id}/move`, session.token, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'step', direction, durationMs: 450, speed: 5 }),
-      });
-      setTimeout(() => setPtzFeedback(null), 650);
-    } catch (error) {
+    // Mensagem SEMPRE limpa (nunca o erro técnico cru): o PTZ falha tanto com
+    // HTTP 200 { status:'error' } (câmera recusa) quanto lançando exceção
+    // (ONVIF indisponível). Nos dois casos o usuário só precisa saber isto:
+    const ptzFail = () => {
       setPtzFeedback(null);
-      Alert.alert('PTZ', error instanceof Error ? error.message : 'Comando não aceito.');
+      Alert.alert('PTZ', 'Não foi possível movimentar. Esta câmera pode não ter suporte a PTZ.');
+    };
+    try {
+      const data = await request<{ status?: string; message?: string }>(
+        session.apiUrl,
+        `/ptz/${target.id}/move`,
+        session.token,
+        { method: 'POST', body: JSON.stringify({ action: 'step', direction, durationMs: 450, speed: 5 }) },
+      );
+      if (data?.status === 'error') { ptzFail(); return; }
+      setTimeout(() => setPtzFeedback(null), 650);
+    } catch {
+      ptzFail();
     } finally {
       setTimeout(() => setPtzActive(null), 220);
     }
   };
 
-  // Estado REAL de gravação da câmera (intendedRecording do backend). O botão
-  // do ao vivo reflete isso (vermelho = gravando), em vez de só dar um alerta.
-  const refreshRecordingStatus = async (cameraId: string) => {
+  // Botão Gravar (SÓ celular): grava no servidor o trecho EXATO start→stop e,
+  // ao parar, baixa o arquivo pro aparelho (galeria/arquivos). Sem opção de
+  // "gravar no servidor" — o app é dedicado à gravação no celular.
+  const toggleRecording = async (camera: Camera) => {
+    // Clipe no celular = salvar o que o usuário JÁ está vendo (como a Foto).
+    // Não depende de canRecord (permissão de gravação do NVR) — senão o botão
+    // fica morto para usuários VIEWER dos clientes.
     if (!session) return;
-    try {
-      const data = await request<{ isRecording?: boolean; intendedRecording?: boolean }>(
-        session.apiUrl,
-        `/cameras/${cameraId}/recording/status`,
-        session.token,
-      );
-      setRecordingActive(Boolean(data.intendedRecording ?? data.isRecording));
-    } catch {
-      // mantém o estado atual em caso de falha de rede
+    if (recordingActive) {
+      await stopClip(camera);
+    } else {
+      await startClip(camera);
     }
   };
 
-  const toggleRecording = async (camera: Camera) => {
-    if (!session || !camera.canRecord) return;
-    const start = !recordingActive;
-    setRecordingActive(start); // otimista; confirma com o status real abaixo
+  const startClip = async (camera: Camera) => {
+    if (!session) return;
+    setRecordingActive(true); // otimista
     try {
-      await request(session.apiUrl, `/cameras/${camera.id}/recording/${start ? 'start' : 'stop'}`, session.token, {
+      const data = await request<{ clipId: string }>(
+        session.apiUrl,
+        `/camera-stream/${camera.id}/clip/start`,
+        session.token,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      setClipId(data.clipId);
+    } catch (error) {
+      setRecordingActive(false);
+      setClipId(null);
+      Alert.alert('Gravação', error instanceof Error ? error.message : 'Não foi possível iniciar a gravação.');
+    }
+  };
+
+  const stopClip = async (camera: Camera) => {
+    if (!session) return;
+    const id = clipId;
+    setRecordingActive(false);
+    setClipId(null);
+    if (!id) return;
+    try {
+      await request(session.apiUrl, `/camera-stream/clip/${id}/stop`, session.token, {
         method: 'POST',
         body: JSON.stringify({}),
       });
-      await refreshRecordingStatus(camera.id);
-      Alert.alert(
-        'Gravação',
-        start
-          ? 'Gravação iniciada. O trecho aparece na linha do tempo quando o segmento fecha.'
-          : 'Gravação parada.',
-      );
-      void loadRecordings(camera.id, recordingDate);
+      // Baixa o arquivo do clipe pro celular (compartilhar → salvar em galeria/arquivos).
+      const target = `${FileSystem.documentDirectory}clip-${camera.id}-${Date.now()}.mp4`;
+      const url = `${session.apiUrl.replace(/\/+$/, '')}/camera-stream/clip/${encodeURIComponent(id)}/download`;
+      const result = await FileSystem.downloadAsync(url, target, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      if (result.status && result.status >= 400) throw new Error('Falha ao baixar o clipe.');
+      // Salva DIRETO na galeria (sem folha de compartilhamento) + registra em
+      // "Minhas gravações". O arquivo local (documentDirectory) fica p/ tocar in-app.
+      const savedToGallery = await saveToGallery(result.uri);
+      const next = await addClip({
+        id: id,
+        cameraId: camera.id,
+        cameraName: camera.name,
+        uri: result.uri,
+        createdAt: new Date().toISOString(),
+      });
+      setSavedClips(next);
+      Alert.alert('Gravação salva', savedToGallery
+        ? 'Clipe salvo na galeria e em "Minhas gravações".'
+        : 'Clipe salvo em "Minhas gravações". (Permissão de galeria negada — dá pra ver o vídeo aqui no app.)');
     } catch (error) {
-      await refreshRecordingStatus(camera.id); // reverte para o estado real
-      Alert.alert('Gravação', error instanceof Error ? error.message : 'Não foi possível alterar a gravação.');
+      Alert.alert('Gravação', error instanceof Error ? error.message : 'Não foi possível salvar o clipe.');
     }
+  };
+
+  // Reproduz um clipe local ("Minhas gravações") no mesmo player, sem servidor.
+  const playLocalClip = (clip: SavedClip) => {
+    setActivePlayback({
+      recording: { id: clip.id, cameraId: clip.cameraId, startedAt: clip.createdAt },
+      url: clip.uri,
+    });
+  };
+
+  const deleteLocalClip = async (clip: SavedClip) => {
+    try { await FileSystem.deleteAsync(clip.uri, { idempotent: true }); } catch { /* já pode não existir */ }
+    setSavedClips(await removeClip(clip.id));
   };
 
   const openPlayback = async (recording: Recording) => {
@@ -346,11 +483,8 @@ function AppInner() {
       const result = await FileSystem.downloadAsync(url, target, {
         headers: { Authorization: `Bearer ${session.token}` },
       });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(result.uri, { mimeType: 'video/mp4', dialogTitle: 'Compartilhar gravação' });
-      } else {
-        Alert.alert('Download concluido', result.uri);
-      }
+      const ok = await saveToGallery(result.uri);
+      Alert.alert('Download', ok ? 'Gravação salva na galeria.' : 'Não foi possível salvar (permissão de galeria negada).');
     } catch (error) {
       Alert.alert('Download', error instanceof Error ? error.message : 'Não foi possível baixar.');
     }
@@ -369,11 +503,8 @@ function AppInner() {
       // O poster já carrega o token na query — baixa direto, sem header de auth.
       const fresh = `${poster}${poster.includes('?') ? '&' : '?'}snap=${Date.now()}`;
       const result = await FileSystem.downloadAsync(fresh, target);
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(result.uri, { mimeType: 'image/jpeg', dialogTitle: 'Compartilhar foto' });
-      } else {
-        Alert.alert('Foto salva', result.uri);
-      }
+      const ok = await saveToGallery(result.uri);
+      Alert.alert('Foto', ok ? 'Foto salva na galeria.' : 'Não foi possível salvar (permissão de galeria negada).');
     } catch (error) {
       Alert.alert('Foto', error instanceof Error ? error.message : 'Não foi possível capturar a imagem.');
     }
@@ -387,7 +518,7 @@ function AppInner() {
   if (!session) {
     return (
       <SafeAreaView style={[styles.screen, { backgroundColor: theme.bg }]}>
-        <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+        <StatusBar style="light" />
         <LoginScreen
           apiUrl={apiUrl}
           email={email}
@@ -415,10 +546,16 @@ function AppInner() {
           streamUrl={streamUrls[live.id] ?? null}
           whepUrl={streamWhep[live.id] ?? null}
           posterUrl={streamPosters[live.id] ?? null}
+          hdUrl={hdUrl}
+          onRequestHd={() => loadHdStream(live.id)}
+          onExitHd={() => setHdUrl(null)}
           detections={liveDetections}
           ptzActive={ptzActive}
           ptzFeedback={ptzFeedback}
           recordings={recordings}
+          myRecordings={savedClips.filter((c) => c.cameraId === live.id)}
+          onPlayLocal={playLocalClip}
+          onDeleteLocal={deleteLocalClip}
           recordingDate={recordingDate}
           activePlayback={activePlayback}
           recordingActive={recordingActive}
@@ -432,13 +569,28 @@ function AppInner() {
           onPreviousDate={() => shiftRecordingDate(-1)}
           onNextDate={() => shiftRecordingDate(1)}
         />
+        {/* Menu inferior também na câmera aberta — tocar numa aba sai do vídeo e
+            vai pra ela. Escondido em paisagem (vídeo em tela cheia usa a área). */}
+        {winWidth <= winHeight ? (
+          <BottomTabs
+            active={tab}
+            alarmCount={openAlarmCount}
+            onChange={(next) => { setActivePlayback(null); setLiveCamera(null); setTab(next); }}
+          />
+        ) : null}
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: theme.bg }]}>
-      <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+      <StatusBar style="light" />
+      {/* Fundo em GRADIENTE quando o branding define 2 cores (bg != bg2); senão
+          o backgroundColor sólido do SafeAreaView aparece. As telas são
+          transparentes, então o gradiente é visível atrás delas. */}
+      {theme.bg2 !== theme.bg ? (
+        <LinearGradient colors={[theme.bg, theme.bg2]} style={StyleSheet.absoluteFill} pointerEvents="none" />
+      ) : null}
       <View style={[styles.body, { paddingTop: TOP_SAFE }]}>
         {tab === 'central' && (
           <CentralScreen

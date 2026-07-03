@@ -36,12 +36,19 @@ module.exports = () => ({
   expo: {
     ...base,
     name: c.appName || base.name,
-    slug: c.slug || base.slug,
+    // SLUG fixo (= projeto Expo compartilhado): todos os clientes usam o mesmo
+    // projeto Expo (mesmo projectId p/ push/EAS). Só o PACOTE muda por cliente.
+    // (Antes trocava o slug por cliente, o que conflita com o projectId do EAS.)
+    slug: base.slug,
     icon: asset('icon.png', base.icon),
     splash: { ...base.splash, image: asset('splash.png', base.splash && base.splash.image) },
     android: {
       ...base.android,
       package: c.packageId || base.android.package,
+      // FCM/push por cliente: cada cliente tem seu próprio pacote → seu próprio
+      // google-services.json (registrado no MESMO projeto Firebase). Se o cliente
+      // tiver o arquivo, usa o dele; senão cai no padrão (app principal).
+      googleServicesFile: asset('google-services.json', base.android.googleServicesFile),
       adaptiveIcon: {
         ...(base.android && base.android.adaptiveIcon),
         foregroundImage: asset('adaptive-icon.png', base.android && base.android.adaptiveIcon && base.android.adaptiveIcon.foregroundImage),

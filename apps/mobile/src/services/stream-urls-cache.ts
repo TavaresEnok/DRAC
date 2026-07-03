@@ -15,9 +15,12 @@ export async function requestCachedStreamUrls<T>(
   cameraId: string,
   token?: string,
   init?: RequestInit,
+  viewMode?: 'selected' | 'grid' | 'original',
 ): Promise<T> {
-  // Check cache first
-  const cached = streamUrlsCache.get(cameraId);
+  // A chave inclui o modo — 'original' (máxima qualidade/H.265) usa outro caminho
+  // no MediaMTX e não pode compartilhar cache com o modo normal (WebRTC/H.264).
+  const cacheKey = viewMode && viewMode !== 'selected' ? `${cameraId}::${viewMode}` : cameraId;
+  const cached = streamUrlsCache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.data as T;
   }
@@ -25,9 +28,10 @@ export async function requestCachedStreamUrls<T>(
   // Make actual request
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
+  const query = viewMode ? `?viewMode=${encodeURIComponent(viewMode)}` : '';
 
   try {
-    const response = await fetch(`${apiUrl}/camera-stream/${cameraId}/urls`, {
+    const response = await fetch(`${apiUrl}/camera-stream/${cameraId}/urls${query}`, {
       ...init,
       signal: init?.signal ?? controller.signal,
       headers: {
@@ -43,7 +47,7 @@ export async function requestCachedStreamUrls<T>(
     }
 
     // Cache the successful response
-    streamUrlsCache.set(cameraId, {
+    streamUrlsCache.set(cacheKey, {
       data: data as T,
       expiresAt: Date.now() + CACHE_TTL_MS,
     });

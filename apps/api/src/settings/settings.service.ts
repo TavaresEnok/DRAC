@@ -17,7 +17,25 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
 // Chaves de marca (branding) expostas publicamente — a tela de login precisa
 // lê-las antes de autenticar.
-const BRANDING_KEYS = ['facilityName', 'brandLogoDataUrl', 'brandPrimaryColor', 'brandBackgroundColor'] as const;
+const BRANDING_KEYS = [
+  'facilityName',
+  'brandLogoDataUrl',
+  'brandPrimaryColor',
+  'brandBackgroundColor',
+  'brandSecondaryColor',
+  'brandPrimaryTextColor',
+  'brandSecondaryTextColor',
+  // Pacote completo por superfície + bordas/status (app móvel).
+  'brandBackgroundColor2',
+  'brandBackgroundTextColor',
+  'brandMenuColor',
+  'brandMenuTextColor',
+  'brandButtonTextColor',
+  'brandBorderColor',
+  'brandSuccessColor',
+  'brandWarningColor',
+  'brandDangerColor',
+] as const;
 
 // Apenas configurações que produzem efeito real no sistema são expostas aqui.
 // Cada chave abaixo é lida por algum subsistema (ver SettingsService.* getters).
@@ -45,6 +63,29 @@ const SETTING_SPECS: Record<string, SettingSpec> = {
   brandPrimaryColor: { type: 'color', default: '' },
   // Cor de fundo (#RRGGBB). Vazio = usa a cor do tema.
   brandBackgroundColor: { type: 'color', default: '' },
+  // 2ª cor de fundo (#RRGGBB) — se definida, o fundo vira GRADIENTE (cor1→cor2);
+  // vazio = fundo sólido (brandBackgroundColor).
+  brandBackgroundColor2: { type: 'color', default: '' },
+  // Cor do card/bloco (#RRGGBB) — superfície de cards, campos e painéis. Vazio = tema.
+  brandSecondaryColor: { type: 'color', default: '' },
+  // Cor do texto do card (#RRGGBB) — títulos/labels SOBRE cards. Vazio = tema.
+  brandPrimaryTextColor: { type: 'color', default: '' },
+  // Cor do subtexto do card (#RRGGBB) — descrições SOBRE cards. Vazio = tema.
+  brandSecondaryTextColor: { type: 'color', default: '' },
+  // Cor do texto sobre o FUNDO da tela (#RRGGBB) — cabeçalhos fora de cards. Vazio = tema.
+  brandBackgroundTextColor: { type: 'color', default: '' },
+  // Cor do menu inferior (#RRGGBB). Vazio = usa a cor do card.
+  brandMenuColor: { type: 'color', default: '' },
+  // Cor do texto/ícones do menu inferior (itens inativos) (#RRGGBB). Vazio = tema.
+  brandMenuTextColor: { type: 'color', default: '' },
+  // Cor do texto SOBRE botões de destaque (#RRGGBB). Vazio = branco/tema.
+  brandButtonTextColor: { type: 'color', default: '' },
+  // Cor das bordas (#RRGGBB). Vazio = tema.
+  brandBorderColor: { type: 'color', default: '' },
+  // Cores de status (#RRGGBB). Vazio = tema.
+  brandSuccessColor: { type: 'color', default: '' },
+  brandWarningColor: { type: 'color', default: '' },
+  brandDangerColor: { type: 'color', default: '' },
 };
 
 export type SettingsMap = Record<string, string | number | boolean>;

@@ -10,6 +10,8 @@ import { Public } from '../auth/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { type AuthUser } from '../common/types/auth-user.type';
 import { RequirePermission } from '../role-permissions/require-permission.decorator';
+import { createReadStream } from 'node:fs';
+import { ClipCaptureService } from './clip-capture.service';
 import { FfmpegMjpegService } from './ffmpeg-mjpeg.service';
 import { MediamtxProxyService } from './mediamtx-proxy.service';
 import { StreamResourceAdvisorService } from './stream-resource-advisor.service';
@@ -36,6 +38,7 @@ type LiveProtocol = 'auto' | 'flv' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
 export class CameraStreamController {
   constructor(
     private readonly ffmpegMjpegService: FfmpegMjpegService,
+    private readonly clipCaptureService: ClipCaptureService,
     private readonly mediamtxProxyService: MediamtxProxyService,
     private readonly camerasService: CamerasService,
     private readonly authService: AuthService,
@@ -312,6 +315,83 @@ export class CameraStreamController {
         ...safeMediaBridge,
       },
     };
+  }
+
+  // Emite tokens de poster em LOTE, SEM iniciar path MediaMTX (diferente de
+  // /urls, que chama ensurePathForCamera e sobe um restream por câmera). Serve
+  // p/ os tiles da grade mostrarem um snapshot de TODAS as câmeras sem custo de
+  // stream: o /poster gera 1 frame (cache 15s) puxando direto do RTSP quando
+  // não há path live. Câmeras sem acesso são apenas omitidas do resultado.
+  @Roles(UserRole.VIEWER)
+  @RequirePermission('liveView')
+  @Post('poster-tokens')
+  async getPosterTokens(
+    @CurrentUser() user: AuthUser,
+    @Body() body: { cameraIds?: unknown },
+    @Req() req: Request,
+  ) {
+    await this.commercialPolicy.assertFeature('localLive', user);
+    const ids = Array.isArray(body?.cameraIds)
+      ? (body.cameraIds.filter((v) => typeof v === 'string' && v.length > 0) as string[]).slice(0, 200)
+      : [];
+    const hostHeader = (req.headers['x-forwarded-host'] as string | undefined) ?? req.headers.host ?? 'localhost:3000';
+    const apiHost = hostHeader.split(',')[0].trim();
+    const reqProto = ((req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol ?? 'http')
+      .split(',')[0]
+      .trim();
+    const items: { cameraId: string; streamToken: string; posterUrl: string }[] = [];
+    for (const cameraId of ids) {
+      try {
+        await this.accessControlService.assertCanViewCamera(user, cameraId);
+        const token = await this.authService.createStreamToken(user.id, cameraId);
+        items.push({
+          cameraId,
+          streamToken: token.streamToken,
+          posterUrl: `${reqProto}://${apiHost}/camera-stream/${cameraId}/poster`,
+        });
+      } catch {
+        // Sem acesso / câmera inexistente: omite do lote, não derruba o resto.
+      }
+    }
+    return { items };
+  }
+
+  // ── Gravação de CLIPE sob demanda (exato start→stop) para "salvar no celular"
+  // O app inicia, o servidor grava com `-c copy`, o app para e baixa o arquivo.
+  // Permissão: VER a câmera basta (é o "salvar o que já estou vendo", como a
+  // Foto) — NÃO exige permissão de gravação do NVR, senão usuários VIEWER dos
+  // clientes ficam com o botão morto.
+  @Roles(UserRole.VIEWER)
+  @RequirePermission('liveView')
+  @Post(':cameraId/clip/start')
+  async startClip(@CurrentUser() user: AuthUser, @Param('cameraId') cameraId: string) {
+    await this.accessControlService.assertCanViewCamera(user, cameraId);
+    await this.commercialPolicy.assertFeature('localLive', user);
+    return this.clipCaptureService.start(cameraId, user.id);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Post('clip/:clipId/stop')
+  async stopClip(@CurrentUser() user: AuthUser, @Param('clipId') clipId: string) {
+    return this.clipCaptureService.stop(clipId, user.id);
+  }
+
+  @Roles(UserRole.VIEWER)
+  @Get('clip/:clipId/download')
+  async downloadClip(
+    @CurrentUser() user: AuthUser,
+    @Param('clipId') clipId: string,
+    @Res() res: Response,
+  ) {
+    const filePath = this.clipCaptureService.getClipFile(clipId, user.id);
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Disposition', `attachment; filename="clip-${clipId}.mp4"`);
+    const stream = createReadStream(filePath);
+    stream.pipe(res);
+    // Apaga o arquivo temporário quando o download termina (ou falha).
+    const done = () => this.clipCaptureService.cleanup(clipId);
+    res.on('close', done);
+    stream.on('error', () => { try { res.end(); } catch { /* */ } this.clipCaptureService.cleanup(clipId); });
   }
 
   @Public()
