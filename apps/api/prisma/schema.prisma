@@ -245,6 +245,22 @@ model User {
   auditLogs          AuditLog[]
   cameraPermissions  CameraPermission[]
   investigations     Investigation[]
+  pushDevices        PushDevice[]
+}
+
+/// Dispositivo móvel registrado para receber push de alarmes (Expo Push).
+model PushDevice {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token      String   @unique // Expo push token: ExponentPushToken[...]
+  platform   String? // ios | android
+  deviceName String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  lastSeenAt DateTime @default(now())
+
+  @@index([userId])
 }
 
 model AiSettings {

@@ -27,11 +27,13 @@ export class AlarmNotificationsService {
 
   private resolveChannelPlan(priority: string) {
     const policyRaw = this.configService.get<string>('alarmNotificationPolicyJson') ?? '';
-    const defaultPlan: Record<string, Array<'webhook' | 'email'>> = {
-      P1: ['webhook', 'email'],
-      P2: ['webhook', 'email'],
-      P3: ['webhook'],
-      P4: ['webhook'],
+    // 'push' (app móvel) entra em TODA prioridade: é o canal que avisa o usuário
+    // com o celular no bolso. Webhook/email seguem a política por severidade.
+    const defaultPlan: Record<string, Array<'webhook' | 'email' | 'push'>> = {
+      P1: ['webhook', 'email', 'push'],
+      P2: ['webhook', 'email', 'push'],
+      P3: ['webhook', 'push'],
+      P4: ['webhook', 'push'],
     };
     if (!policyRaw.trim()) {
       return defaultPlan[priority] ?? defaultPlan.P4;
@@ -41,7 +43,9 @@ export class AlarmNotificationsService {
       const channels = parsed[priority] ?? parsed.P4 ?? defaultPlan.P4;
       const normalized = channels
         .map((c) => c.toLowerCase().trim())
-        .filter((c): c is 'webhook' | 'email' => c === 'webhook' || c === 'email');
+        .filter((c): c is 'webhook' | 'email' | 'push' => c === 'webhook' || c === 'email' || c === 'push');
+      // Push sempre presente, mesmo que a política custom não o liste.
+      if (!normalized.includes('push')) normalized.push('push');
       return normalized.length ? normalized : defaultPlan.P4;
     } catch {
       return defaultPlan[priority] ?? defaultPlan.P4;

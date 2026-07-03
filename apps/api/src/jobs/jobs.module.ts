@@ -19,6 +19,7 @@ import { CameraStreamModule } from '../camera-stream/camera-stream.module';
 import { AuditModule } from '../audit/audit.module';
 import { EvidenceModule } from '../evidence/evidence.module';
 import { RecordingsModule } from '../recordings/recordings.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { RecordingsModule } from '../recordings/recordings.module';
     AuditModule,
     EvidenceModule,
     RecordingsModule,
+    NotificationsModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({

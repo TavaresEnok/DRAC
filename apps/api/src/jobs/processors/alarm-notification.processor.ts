@@ -10,11 +10,15 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuditService } from '../../audit/audit.service';
 import { isAllowedHost, isPrivateOrReservedIp, resolveHostIps } from '../../common/network/safe-url.helper';
 import { ALARM_NOTIFICATION_QUEUE } from '../queues/alarm-notification.queue';
+import { PushService } from '../../notifications/push.service';
+import { PushDevicesService } from '../../notifications/push-devices.service';
+
+type NotificationChannel = 'webhook' | 'email' | 'push';
 
 type AlarmNotificationJob = {
   alarmId: string;
   ruleId?: string | null;
-  channels?: Array<'webhook' | 'email'>;
+  channels?: NotificationChannel[];
 };
 
 @Injectable()
@@ -26,6 +30,8 @@ export class AlarmNotificationProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly auditService: AuditService,
+    private readonly pushService: PushService,
+    private readonly pushDevices: PushDevicesService,
   ) {
     super();
   }
@@ -175,20 +181,46 @@ export class AlarmNotificationProcessor extends WorkerHost {
     return { skipped: false };
   }
 
+  // Push para os apps móveis dos usuários que podem VER a câmera do alarme.
+  private async notifyPush(alarm: AlarmInstance) {
+    const tokens = await this.pushDevices.getTokensForCamera(alarm.cameraId);
+    if (!tokens.length) {
+      return { skipped: true, reason: 'no_registered_devices' } as const;
+    }
+    const { invalidTokens } = await this.pushService.sendToTokens(tokens, {
+      title: `${alarm.priority} · ${alarm.title}`,
+      body: alarm.message,
+      data: {
+        alarmId: alarm.id,
+        cameraId: alarm.cameraId,
+        type: alarm.type,
+        priority: alarm.priority,
+      },
+      channelId: 'alarms',
+      priority: 'high',
+    });
+    if (invalidTokens.length) {
+      await this.pushDevices.pruneInvalid(invalidTokens);
+    }
+    return { skipped: false } as const;
+  }
+
   async process(job: Job<AlarmNotificationJob>) {
     const alarm = await this.prisma.alarmInstance.findUnique({ where: { id: job.data.alarmId } });
     if (!alarm) return;
     const rule = job.data.ruleId ? await this.prisma.alarmRule.findUnique({ where: { id: job.data.ruleId } }) : null;
     const payload = this.buildPayload(alarm);
 
-    const channels: Array<'webhook' | 'email'> = Array.isArray(job.data.channels) && job.data.channels.length
+    const channels: NotificationChannel[] = Array.isArray(job.data.channels) && job.data.channels.length
       ? job.data.channels
-      : ['webhook', 'email'];
+      : ['webhook', 'email', 'push'];
     for (const channel of channels) {
       try {
         const result = channel === 'webhook'
           ? await this.notifyWebhook(alarm, rule, payload)
-          : await this.notifyEmail(alarm, rule, payload);
+          : channel === 'email'
+            ? await this.notifyEmail(alarm, rule, payload)
+            : await this.notifyPush(alarm);
         await this.appendDelivery(alarm.id, {
           at: new Date().toISOString(),
           channel,
