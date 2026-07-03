@@ -300,13 +300,18 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
       subtype: configuredProfile.subtype,
     });
     const cacheKey = `${cameraId}:${configuredProfile.channel}:${configuredProfile.subtype}:${updatedAt}`;
-    // getStatus() detects the configured Live profile, so this value is the
-    // source codec we need here. Reusing it avoids an ffprobe before every
-    // first live after API restart.
+    // Passthrough vs transcode. Confiamos no rótulo detectado SÓ quando ele diz
+    // HEVC: a decisão vira "transcodar" e, se o rótulo estiver errado (fonte já é
+    // H.264), o pior caso é custo de CPU — nunca tela preta. Quando o rótulo diz
+    // H.264 (ou está vazio) a decisão seria PASSTHROUGH; aí errar = passar HEVC
+    // cru pro WebRTC = TELA PRETA. E o codec da câmera muda na prática (operador
+    // reconfigura, o rótulo fica velho). Por isso, antes de fazer passthrough,
+    // confirmamos o codec real com um probe cacheado (barato, TTL curto).
     const detectedCodec = String(camera.detectedVideoCodec ?? '').trim().toLowerCase();
-    const isHevc = detectedCodec
-      ? isHevcCodec(detectedCodec)
-      : await this.resolveLiveStreamIsHevc(cacheKey, sourceUrl, transport);
+    const isHevc =
+      detectedCodec && isHevcCodec(detectedCodec)
+        ? true
+        : await this.resolveLiveStreamIsHevc(cacheKey, sourceUrl, transport);
 
     // A fonte Live e uma escolha operacional explicita. HEVC e convertido
     // para o navegador, mas nunca trocado silenciosamente por outro subtype.
@@ -606,7 +611,12 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
     // H.264 — sub-stream OU principal — é entregue ao navegador via PASSTHROUGH
     // (sem ffmpeg, sem CPU), abrindo praticamente instantâneo. Antes a grade
     // SEMPRE transcodificava (era a causa principal da lentidão ao abrir o mosaico).
-    const needsPublisher = isHevc || transcodeAudioForWebrtc;
+    //
+    // Modo 'original' (máxima qualidade): NUNCA transcoda — passa o stream
+    // principal como está (H.265 inclusive) direto pro HLS. O custo de CPU no
+    // servidor é ~0; o celular decodifica o HEVC no hardware. Só HLS (WebRTC não
+    // reproduz H.265), com latência maior — é o trade-off assumido pelo usuário.
+    const needsPublisher = deliveryMode === 'original' ? false : (isHevc || transcodeAudioForWebrtc);
     const gpuAccel = needsPublisher && (await this.settingsService.isGpuAccelerationEnabled());
 
     const desiredPath: any = {

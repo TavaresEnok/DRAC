@@ -152,7 +152,10 @@ export class CamerasService {
         streamHeight: normalizedProfile.streamHeight,
         streamFps: normalizedProfile.streamFps,
         streamBitrateKbps: normalizedProfile.streamBitrateKbps,
-        recordingVideoCodec: 'h265',
+        // Codec de origem: descoberto pelo health-check (probe REAL do stream).
+        // Não cravar aqui — chutar 'h265' rotulava errado câmeras H.264 e
+        // quebrava consumidores que confiavam no rótulo (ex.: clipe).
+        recordingVideoCodec: null,
         recordingWidth: normalizedProfile.recordingWidth,
         recordingHeight: normalizedProfile.recordingHeight,
         recordingFps: normalizedProfile.recordingFps,
@@ -230,7 +233,8 @@ export class CamerasService {
         streamHeight: normalizedProfile.streamHeight,
         streamFps: normalizedProfile.streamFps,
         streamBitrateKbps: normalizedProfile.streamBitrateKbps,
-        recordingVideoCodec: 'h265',
+        // recordingVideoCodec NÃO é sobrescrito ao editar: o health-check o mantém
+        // sincronizado com o codec REAL. Cravar constante aqui re-corrompia o rótulo.
         recordingWidth: normalizedProfile.recordingWidth,
         recordingHeight: normalizedProfile.recordingHeight,
         recordingFps: normalizedProfile.recordingFps,
@@ -1279,11 +1283,26 @@ export class CamerasService {
         status = CameraStatus.ONLINE;
       }
 
+      // O probe acima leu o perfil de LIVE. Se a gravação usa o MESMO stream
+      // (mesmo canal/subtipo), o codec é idêntico — então sincronizamos também o
+      // recordingVideoCodec com o real detectado. Isso AUTO-CURA o rótulo (antes
+      // cravado 'h265' no create/update, errado p/ câmeras H.264). Se os perfis
+      // diferem (ex.: live no sub, gravação no main), não chutamos: preserva.
+      const recProfile = resolveRecordingRtspProfile(camera);
+      const liveProfileForCodec = resolveDeliveryRtspProfile(camera);
+      const recordingCodecSynced =
+        detectedStream?.codec &&
+        recProfile.channel === liveProfileForCodec.channel &&
+        recProfile.subtype === liveProfileForCodec.subtype
+          ? detectedStream.codec
+          : camera.recordingVideoCodec;
+
       await this.prisma.camera.update({
         where: { id },
         data: {
           rtspPath: detectedRtspPath ?? camera.rtspPath,
           detectedVideoCodec: detectedStream?.codec ?? camera.detectedVideoCodec,
+          recordingVideoCodec: recordingCodecSynced,
           detectedWidth: detectedStream?.width ?? camera.detectedWidth,
           detectedHeight: detectedStream?.height ?? camera.detectedHeight,
           detectedFps: detectedStream?.fps ?? camera.detectedFps,
