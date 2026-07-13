@@ -1,4 +1,4 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { User, UserRole } from '@prisma/client';
 import { JwtService } from '@nestjs/jwt';
@@ -45,6 +45,14 @@ export class AuthService {
     };
   }
 
+  private async assertPasswordStrength(password: string) {
+    if (!(await this.settingsService.isStrongPasswordRequired().catch(() => false))) return;
+    const strong = password.length >= 12 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password);
+    if (!strong) {
+      throw new BadRequestException('Senha fraca: exige no mínimo 12 caracteres, com maiúscula, minúscula e número.');
+    }
+  }
+
   async login(email: string, password: string) {
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -74,6 +82,7 @@ export class AuthService {
       sub: user.id,
       email: user.email,
       role: user.role,
+      ver: user.authVersion,
       type: 'access',
     };
 
@@ -93,7 +102,7 @@ export class AuthService {
     }
 
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || payload.ver !== user.authVersion) {
       throw new UnauthorizedException('Usuário inativo ou inexistente.');
     }
 
@@ -180,10 +189,23 @@ export class AuthService {
       throw new UnauthorizedException('Token de redefinição inválido ou expirado.');
     }
 
+    await this.assertPasswordStrength(newPassword);
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await this.prisma.user.update({
       where: { id: user.id },
-      data: { passwordHash, resetTokenHash: null, resetTokenExpiresAt: null },
+      data: {
+        passwordHash,
+        resetTokenHash: null,
+        resetTokenExpiresAt: null,
+        authVersion: { increment: 1 },
+      },
+    });
+  }
+
+  async logout(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { authVersion: { increment: 1 } },
     });
   }
 

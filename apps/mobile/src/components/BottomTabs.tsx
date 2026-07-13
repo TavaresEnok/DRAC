@@ -43,7 +43,14 @@ export function BottomTabs({ active, onChange, alarmCount = 0 }: BottomTabsProps
         const showBadge = tab.id === 'alarmes' && alarmCount > 0;
         const filled = tab.icon === 'play';
         return (
-          <Pressable key={tab.id} style={styles.tab} onPress={() => onChange(tab.id)}>
+          <Pressable
+            key={tab.id}
+            style={styles.tab}
+            onPress={() => onChange(tab.id)}
+            accessibilityRole="tab"
+            accessibilityLabel={tab.label}
+            accessibilityState={{ selected: on }}
+          >
             <View style={styles.iconWrap}>
               <Icon name={tab.icon} size={tab.icon === 'home' ? 23 : 22} color={color} fill={filled} />
               {showBadge ? (

@@ -51,6 +51,30 @@ export class AlarmsService {
     private readonly muteService: AlarmMuteService,
   ) {}
 
+  async resolveStaleMotionAlarms(now = new Date()) {
+    const rule = await this.getRule(AlarmSource.MOTION, 'MOTION_DETECTED');
+    const configuredQuietSeconds = Number(process.env.MOTION_ALARM_QUIET_SECONDS ?? 90);
+    const quietSeconds = Math.max(30, configuredQuietSeconds, rule?.dedupWindowSeconds ?? 0);
+    const quietBefore = new Date(now.getTime() - quietSeconds * 1000);
+
+    const result = await this.prisma.alarmInstance.updateMany({
+      where: {
+        source: AlarmSource.MOTION,
+        type: 'MOTION_DETECTED',
+        status: { in: [AlarmStatus.OPEN, AlarmStatus.ACKED] },
+        lastOccurredAt: { lte: quietBefore },
+      },
+      data: {
+        status: AlarmStatus.RESOLVED,
+        resolvedAt: now,
+        resolvedByUserName: 'SYSTEM_MOTION_QUIET',
+        note: `Resolvido automaticamente após ${quietSeconds}s sem novo movimento.`,
+      },
+    });
+
+    return { resolved: result.count, quietSeconds, quietBefore };
+  }
+
   private getWebhookAllowlist() {
     const explicit = String(this.configService.get<string>('alarmWebhookAllowedHosts') ?? '')
       .split(',')
@@ -146,6 +170,10 @@ export class AlarmsService {
   }) {
     const source = inferSource(input.type);
     if (!source) return null;
+
+    if (input.type === 'MOTION_DETECTED') {
+      await this.resolveStaleMotionAlarms(input.occurredAt);
+    }
 
     if (isRecoveryEvent(input.type)) {
       return this.autoResolveForCamera(input.cameraId, source, input.eventId, input.occurredAt, input.message);

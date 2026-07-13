@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert } from 'react-native';
+import { AppState } from 'react-native';
 import { request } from '../services/api';
 import type { Alarm, Session } from '../types';
 
@@ -20,6 +21,12 @@ export type UseAlarms = {
  */
 export function useAlarms(session: Session | null): UseAlarms {
   const [alarms, setAlarms] = useState<Alarm[]>([]);
+  const [foreground, setForeground] = useState(AppState.currentState === 'active');
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => setForeground(state === 'active'));
+    return () => sub.remove();
+  }, []);
 
   const reload = useCallback(async () => {
     if (!session) return;
@@ -63,9 +70,10 @@ export function useAlarms(session: Session | null): UseAlarms {
       setAlarms([]);
       return;
     }
+    if (!foreground) return;
     const interval = setInterval(() => { void reload(); }, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [session?.token, reload]);
+  }, [session?.token, reload, foreground]);
 
   const openAlarmCount = useMemo(() => alarms.filter((alarm) => alarm.status === 'OPEN').length, [alarms]);
 

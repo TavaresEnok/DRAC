@@ -4,6 +4,8 @@ import {
   AppState,
   Image,
   type ImageStyle,
+  PanResponder,
+  Pressable,
   StyleSheet,
   type StyleProp,
   Text,
@@ -11,8 +13,11 @@ import {
   View,
   type ViewStyle,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useVideoPlayer, VideoView, type VideoSource } from 'expo-video';
 import { WebRtcVideo } from './WebRtcVideo';
+import { Icon } from './Icon';
+import { useTheme } from '../theme/ThemeProvider';
 
 export type LiveStatus = 'idle' | 'connecting' | 'live' | 'reconnecting' | 'offline';
 
@@ -41,6 +46,8 @@ type LiveVideoProps = {
   contentFit?: 'contain' | 'cover';
   /** Só no caminho WebRTC: informa se o stream tem faixa de áudio. */
   onAudioAvailable?: (available: boolean) => void;
+  /** Solicita ao pai URLs/tokens novos antes de uma reconexão. */
+  onNeedRefresh?: () => void;
 };
 
 /**
@@ -51,10 +58,22 @@ type LiveVideoProps = {
 export function LiveVideo(props: LiveVideoProps) {
   const { whepUri } = props;
   const [webrtcFailed, setWebrtcFailed] = useState(false);
+  let whepIdentity = whepUri;
+  try {
+    if (whepUri) {
+      const parsed = new URL(whepUri);
+      parsed.search = '';
+      parsed.hash = '';
+      whepIdentity = parsed.toString();
+    }
+  } catch { /* mantém a string original */ }
 
   useEffect(() => {
     setWebrtcFailed(false);
-  }, [whepUri]);
+  // Renovar apenas o token/query não deve reiniciar um WHEP que já falhou; isso
+  // criaria um loop WHEP→token novo→WHEP e impediria o HLS de permanecer ativo.
+  // Uma câmera/path realmente diferente ainda ganha uma nova tentativa WebRTC.
+  }, [whepIdentity]);
 
   if (whepUri && !webrtcFailed) {
     return (
@@ -68,6 +87,7 @@ export function LiveVideo(props: LiveVideoProps) {
         muted={props.muted}
         contentFit={props.contentFit}
         onAudioAvailable={props.onAudioAvailable}
+        onNeedRefresh={props.onNeedRefresh}
         onFailover={() => setWebrtcFailed(true)}
       />
     );
@@ -87,6 +107,7 @@ function HlsLiveVideo({
   onStatusChange,
   muted = false,
   contentFit = 'contain',
+  onNeedRefresh,
 }: LiveVideoProps) {
   // Player criado uma única vez. A troca de câmera/reconexão usa player.replace(),
   // sem recriar a instância — recriar a cada render causaria piscar e vazamento.
@@ -102,6 +123,8 @@ function HlsLiveVideo({
   const statusRef = useRef<LiveStatus>('idle');
   const onStatusChangeRef = useRef(onStatusChange);
   onStatusChangeRef.current = onStatusChange;
+  const onNeedRefreshRef = useRef(onNeedRefresh);
+  onNeedRefreshRef.current = onNeedRefresh;
 
   const applyStatus = useCallback((next: LiveStatus) => {
     if (statusRef.current === next) return;
@@ -138,6 +161,7 @@ function HlsLiveVideo({
     let lastTime = 0;
     let lastLive = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let appActive = AppState.currentState === 'active';
 
     const buildSource = (): VideoSource => {
       const sep = uri.includes('?') ? '&' : '?';
@@ -147,7 +171,7 @@ function HlsLiveVideo({
     };
 
     const load = () => {
-      if (cancelled) return;
+      if (cancelled || !appActive) return;
       startedAt = Date.now();
       lastProgressAt = Date.now();
       lastTime = 0;
@@ -161,8 +185,9 @@ function HlsLiveVideo({
     };
 
     const reconnect = () => {
-      if (cancelled || reconnectTimer) return;
+      if (cancelled || !appActive || reconnectTimer) return;
       applyStatus('reconnecting');
+      onNeedRefreshRef.current?.();
       const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * Math.max(1, 2 ** attempt));
       attempt += 1;
       reconnectTimer = setTimeout(() => {
@@ -187,7 +212,7 @@ function HlsLiveVideo({
     load();
 
     const statusSub = player.addListener('statusChange', (payload: { status?: string }) => {
-      if (cancelled) return;
+      if (cancelled || !appActive) return;
       const s = payload?.status;
       if (s === 'readyToPlay') {
         // Reproduzindo: marca ao vivo já (badge imediato). O watchdog abaixo ainda
@@ -210,7 +235,7 @@ function HlsLiveVideo({
     const timeSub = player.addListener(
       'timeUpdate',
       (payload: { currentTime?: number; currentLiveTimestamp?: number | null }) => {
-        if (cancelled) return;
+        if (cancelled || !appActive) return;
         const t = typeof payload?.currentTime === 'number' ? payload.currentTime : player.currentTime;
         const live = typeof payload?.currentLiveTimestamp === 'number' ? payload.currentLiveTimestamp : 0;
         markProgress(t, live);
@@ -218,7 +243,7 @@ function HlsLiveVideo({
     );
 
     const watchdog = setInterval(() => {
-      if (cancelled) return;
+      if (cancelled || !appActive) return;
       const now = Date.now();
       if (player.status === 'error') {
         reconnect();
@@ -239,16 +264,12 @@ function HlsLiveVideo({
     const appSub = AppState.addEventListener('change', (next) => {
       if (cancelled) return;
       if (next === 'active') {
-        if (player.status === 'readyToPlay') {
-          try {
-            player.play();
-          } catch {
-            // ignore
-          }
-        } else {
-          reconnect();
-        }
+        appActive = true;
+        onNeedRefreshRef.current?.();
+        load();
       } else {
+        appActive = false;
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         try {
           player.pause();
         } catch {
@@ -306,14 +327,282 @@ function HlsLiveVideo({
   );
 }
 
-export function PlaybackVideo({ uri, style }: { uri: string; style: StyleProp<ViewStyle> }) {
-  const player = useVideoPlayer({ uri }, (instance) => {
+function formatTime(sec: number): string {
+  if (!Number.isFinite(sec) || sec < 0) sec = 0;
+  const s = Math.floor(sec % 60);
+  const m = Math.floor((sec / 60) % 60);
+  const h = Math.floor(sec / 3600);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+const PLAYBACK_RATES = [1, 1.5, 2, 0.5];
+
+/**
+ * Player de reprodução com controles PRÓPRIOS (não usa os nativos do sistema):
+ * play/pause central, avançar/retroceder 10s, barra de progresso arrastável
+ * (scrubbing), velocidade e tempo. Toque mostra/esconde; auto-esconde tocando.
+ */
+export function PlaybackVideo({ uri, posterUri, style, onRetry }: {
+  uri: string;
+  posterUri?: string | null;
+  style: StyleProp<ViewStyle>;
+  onRetry?: () => void;
+}) {
+  const { theme } = useTheme();
+  const player = useVideoPlayer(null, (instance) => {
     instance.loop = false;
+    instance.timeUpdateEventInterval = 0.25;
     instance.play();
   });
 
-  return <VideoView player={player} style={style} nativeControls contentFit="contain" />;
+  const [playing, setPlaying] = useState(true);
+  const [position, setPosition] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [buffering, setBuffering] = useState(true);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [rate, setRate] = useState(1);
+  const [playbackError, setPlaybackError] = useState(false);
+  const [barWidth, setBarWidth] = useState(1);
+  const [scrubPos, setScrubPos] = useState(0);
+
+  const scrubbingRef = useRef(false);
+  const barWidthRef = useRef(1);
+  const durationRef = useRef(0);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resumeAfterForegroundRef = useRef(false);
+
+  // Troca de gravação: a tela reusa este componente, então ao mudar a uri
+  // recarregamos a fonte (sem recriar o player) e resetamos o estado.
+  useEffect(() => {
+    try {
+      setBuffering(true);
+      setPosition(0);
+      setDuration(0);
+      durationRef.current = 0;
+      setPlaying(true);
+      setRate(1);
+      setPlaybackError(false);
+      player.replace({ uri });
+      player.playbackRate = 1;
+      player.play();
+    } catch {
+      // ignore
+    }
+  }, [uri, player]);
+
+  useEffect(() => {
+    const timeSub = player.addListener('timeUpdate', (p: { currentTime?: number }) => {
+      if (scrubbingRef.current) return;
+      const cur = typeof p?.currentTime === 'number' ? p.currentTime : player.currentTime;
+      if (Number.isFinite(cur)) setPosition(cur);
+      const d = player.duration;
+      if (Number.isFinite(d) && d > 0) { durationRef.current = d; setDuration(d); }
+    });
+    const statusSub = player.addListener('statusChange', (p: { status?: string }) => {
+      setBuffering(p?.status === 'loading');
+      if (p?.status === 'error') setPlaybackError(true);
+      if (p?.status === 'readyToPlay') {
+        setPlaybackError(false);
+        const d = player.duration;
+        if (Number.isFinite(d) && d > 0) { durationRef.current = d; setDuration(d); }
+      }
+    });
+    const playSub = player.addListener('playingChange', (p: { isPlaying?: boolean }) => {
+      setPlaying(typeof p?.isPlaying === 'boolean' ? p.isPlaying : player.playing);
+    });
+    return () => { timeSub.remove(); statusSub.remove(); playSub.remove(); };
+  }, [player]);
+
+  // Evita decodificação/banda em segundo plano. Só retoma automaticamente se o
+  // vídeo estava tocando quando o app perdeu o foco.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      try {
+        if (next === 'active') {
+          if (resumeAfterForegroundRef.current) player.play();
+          resumeAfterForegroundRef.current = false;
+        } else {
+          resumeAfterForegroundRef.current = player.playing;
+          player.pause();
+        }
+      } catch { /* player pode estar sendo desmontado */ }
+    });
+    return () => sub.remove();
+  }, [player]);
+
+  const scheduleHide = useCallback(() => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setControlsVisible(false), 3800);
+  }, []);
+  const showControls = useCallback(() => {
+    setControlsVisible(true);
+    if (player.playing) scheduleHide();
+  }, [player, scheduleHide]);
+
+  useEffect(() => {
+    if (controlsVisible && playing) scheduleHide();
+    return () => { if (hideTimer.current) clearTimeout(hideTimer.current); };
+  }, [controlsVisible, playing, scheduleHide]);
+
+  const togglePlay = useCallback(() => {
+    try { if (player.playing) player.pause(); else player.play(); } catch { /* ignore */ }
+    showControls();
+  }, [player, showControls]);
+
+  const seekBy = useCallback((delta: number) => {
+    try {
+      const d = durationRef.current || player.duration || 0;
+      const next = Math.max(0, Math.min(d > 0 ? d : Number.MAX_SAFE_INTEGER, (player.currentTime || 0) + delta));
+      player.currentTime = next;
+      setPosition(next);
+    } catch { /* ignore */ }
+    showControls();
+  }, [player, showControls]);
+
+  const cycleRate = useCallback(() => {
+    setRate((r) => {
+      const next = PLAYBACK_RATES[(PLAYBACK_RATES.indexOf(r) + 1) % PLAYBACK_RATES.length];
+      try { player.playbackRate = next; } catch { /* ignore */ }
+      return next;
+    });
+    showControls();
+  }, [player, showControls]);
+
+  const posFromX = useCallback((x: number) => {
+    const w = barWidthRef.current || 1;
+    const ratio = Math.max(0, Math.min(1, x / w));
+    return ratio * (durationRef.current || 0);
+  }, []);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => {
+        scrubbingRef.current = true;
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        setControlsVisible(true);
+        setScrubPos(posFromX(e.nativeEvent.locationX));
+      },
+      onPanResponderMove: (e) => setScrubPos(posFromX(e.nativeEvent.locationX)),
+      onPanResponderRelease: (e) => {
+        const t = posFromX(e.nativeEvent.locationX);
+        try { player.currentTime = t; } catch { /* ignore */ }
+        setPosition(t);
+        scrubbingRef.current = false;
+        showControls();
+      },
+      onPanResponderTerminate: () => { scrubbingRef.current = false; showControls(); },
+    }),
+  ).current;
+
+  const shownPos = scrubbingRef.current ? scrubPos : position;
+  const progress = duration > 0 ? Math.max(0, Math.min(1, shownPos / duration)) : 0;
+
+  return (
+    <View style={[style, playerLocal.root]}>
+      <VideoView player={player} style={StyleSheet.absoluteFill} nativeControls={false} contentFit="contain" />
+
+      {buffering && posterUri ? (
+        <Image source={{ uri: posterUri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
+      ) : null}
+
+      {/* Camada de toque: mostra/esconde os controles (fica ATRÁS dos botões). */}
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onPress={() => (controlsVisible ? setControlsVisible(false) : showControls())}
+      />
+
+      {buffering ? (
+        <View style={[StyleSheet.absoluteFill, playerLocal.center]} pointerEvents="none">
+          <ActivityIndicator color="#fff" size="large" />
+        </View>
+      ) : null}
+
+      {playbackError ? (
+        <View style={[StyleSheet.absoluteFill, playerLocal.error]}>
+          <Text style={playerLocal.errorText}>Não foi possível reproduzir.</Text>
+          {onRetry ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="Tentar reproduzir novamente" style={playerLocal.retry} onPress={onRetry}>
+              <Text style={playerLocal.retryText}>Tentar novamente</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
+      {controlsVisible ? (
+        <>
+          {/* Velocidade (canto superior esquerdo — o X de fechar fica na direita). */}
+          <LinearGradient colors={['rgba(0,0,0,0.45)', 'transparent']} style={playerLocal.topScrim} pointerEvents="box-none">
+            <Pressable accessibilityRole="button" accessibilityLabel={`Velocidade ${rate} vezes`} style={playerLocal.speedPill} onPress={cycleRate} hitSlop={8}>
+              <Text style={playerLocal.speedText}>{rate}×</Text>
+            </Pressable>
+          </LinearGradient>
+
+          {/* Transporte central: -10s · play/pause · +10s */}
+          <View style={[StyleSheet.absoluteFill, playerLocal.center]} pointerEvents="box-none">
+            <View style={playerLocal.transport}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Voltar 10 segundos" onPress={() => seekBy(-10)} hitSlop={10} style={playerLocal.sideBtn}>
+                <Icon name="rewind" size={24} color="#fff" />
+                <Text style={playerLocal.sideBtnLabel}>10</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel={playing ? 'Pausar' : 'Reproduzir'} onPress={togglePlay} hitSlop={12} style={[playerLocal.playBtn, { backgroundColor: theme.accent }]}>
+                <Icon name={playing && !buffering ? 'pause' : 'play'} size={30} color={theme.textOnAccent} fill={!(playing && !buffering)} />
+              </Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Avançar 10 segundos" onPress={() => seekBy(10)} hitSlop={10} style={playerLocal.sideBtn}>
+                <Icon name="forward" size={24} color="#fff" />
+                <Text style={playerLocal.sideBtnLabel}>10</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          {/* Barra de progresso arrastável + tempos */}
+          <LinearGradient colors={['transparent', 'rgba(0,0,0,0.7)']} style={playerLocal.bottomScrim} pointerEvents="box-none">
+            <View style={playerLocal.timeRow}>
+              <Text style={playerLocal.timeText}>{formatTime(shownPos)}</Text>
+              <Text style={[playerLocal.timeText, playerLocal.timeMuted]}>{formatTime(duration)}</Text>
+            </View>
+            <View
+              style={playerLocal.barHit}
+              onLayout={(ev) => { const w = ev.nativeEvent.layout.width; barWidthRef.current = w; setBarWidth(w); }}
+              {...panResponder.panHandlers}
+            >
+              <View style={playerLocal.barTrack}>
+                <View style={[playerLocal.barFill, { width: `${progress * 100}%`, backgroundColor: theme.accent }]} />
+              </View>
+              <View style={[playerLocal.thumb, { left: Math.max(0, Math.min(barWidth - 16, progress * barWidth - 8)), backgroundColor: theme.accent }]} />
+            </View>
+          </LinearGradient>
+        </>
+      ) : null}
+    </View>
+  );
 }
+
+const playerLocal = StyleSheet.create({
+  root: { overflow: 'hidden', backgroundColor: '#000' },
+  center: { alignItems: 'center', justifyContent: 'center' },
+  topScrim: { position: 'absolute', top: 0, left: 0, right: 0, height: 64, paddingTop: 10, paddingHorizontal: 12, alignItems: 'flex-start' },
+  speedPill: { backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)' },
+  speedText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  transport: { flexDirection: 'row', alignItems: 'center', gap: 30 },
+  sideBtn: { alignItems: 'center', justifyContent: 'center', width: 52, height: 52 },
+  sideBtnLabel: { color: '#fff', fontSize: 10, fontWeight: '700', marginTop: -3 },
+  playBtn: { width: 62, height: 62, borderRadius: 31, alignItems: 'center', justifyContent: 'center', elevation: 4, shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
+  bottomScrim: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 14, paddingBottom: 12, paddingTop: 26 },
+  timeRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  timeText: { color: '#fff', fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  timeMuted: { opacity: 0.7 },
+  barHit: { height: 26, justifyContent: 'center' },
+  barTrack: { height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.28)', overflow: 'hidden' },
+  barFill: { height: 4, borderRadius: 2 },
+  thumb: { position: 'absolute', width: 16, height: 16, borderRadius: 8, top: 5, borderWidth: 2, borderColor: '#fff' },
+  error: { alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: 'rgba(0,0,0,0.78)' },
+  errorText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  retry: { borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9, backgroundColor: 'rgba(255,255,255,0.16)' },
+  retryText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+});
 
 const local = StyleSheet.create({
   container: {

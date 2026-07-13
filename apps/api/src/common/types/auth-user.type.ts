@@ -11,6 +11,7 @@ export type JwtAuthPayload = {
   sub: string;
   email: string;
   role: UserRole;
+  ver: number;
   type: 'access';
 };
 

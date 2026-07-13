@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 import { request } from '../services/api';
 import type { LiveDetection, Session } from '../types';
 
@@ -17,9 +18,15 @@ export function useLiveDetections(
   cameraId: string | null,
 ): LiveDetection[] {
   const [detections, setDetections] = useState<LiveDetection[]>([]);
+  const [foreground, setForeground] = useState(AppState.currentState === 'active');
 
   useEffect(() => {
-    if (!session || !enabled || !cameraId) {
+    const sub = AppState.addEventListener('change', (state) => setForeground(state === 'active'));
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!session || !enabled || !foreground || !cameraId) {
       setDetections([]);
       return;
     }
@@ -57,7 +64,7 @@ export function useLiveDetections(
       void postLease('stop');
       setDetections([]);
     };
-  }, [session?.token, session?.apiUrl, enabled, cameraId]);
+  }, [session?.token, session?.apiUrl, enabled, foreground, cameraId]);
 
   return detections;
 }

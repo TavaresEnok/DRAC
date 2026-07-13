@@ -3,19 +3,23 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 // Handler global de "sessão expirada". O App registra sua função de logout aqui;
 // qualquer requisição AUTENTICADA que receba 401 dispara o logout gracioso, em
 // vez de deixar o app preso mostrando telas vazias com um token morto.
-let unauthorizedHandler: (() => void) | null = null;
-export function setUnauthorizedHandler(handler: (() => void) | null) {
+let unauthorizedHandler: ((requestToken?: string) => void) | null = null;
+export function setUnauthorizedHandler(handler: ((requestToken?: string) => void) | null) {
   unauthorizedHandler = handler;
 }
 
 export async function request<T>(apiUrl: string, path: string, token?: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
+  const externalSignal = init?.signal;
+  const abortFromExternal = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
   try {
     const response = await fetch(`${apiUrl}${path}`, {
       ...init,
-      signal: init?.signal ?? controller.signal,
+      signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -23,12 +27,16 @@ export async function request<T>(apiUrl: string, path: string, token?: string, i
       },
     });
     const text = await response.text();
-    const data = text ? JSON.parse(text) : null;
+    let data: any = null;
+    if (text) {
+      try { data = JSON.parse(text); }
+      catch { data = { message: text.slice(0, 300) }; }
+    }
     if (!response.ok) {
       // 401 numa requisição AUTENTICADA = token expirado/revogado → logout gracioso.
       // (No login não há token, então senha errada não dispara isto.)
       if (response.status === 401 && token) {
-        unauthorizedHandler?.();
+        unauthorizedHandler?.(token);
       }
       // Anexa o status HTTP ao erro para que quem chama possa tratar 401 (sessão
       // expirada) de forma robusta, sem depender do texto da mensagem.
@@ -44,6 +52,7 @@ export async function request<T>(apiUrl: string, path: string, token?: string, i
     throw error;
   } finally {
     clearTimeout(timeout);
+    externalSignal?.removeEventListener('abort', abortFromExternal);
   }
 }
 

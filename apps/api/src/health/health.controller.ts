@@ -1,5 +1,6 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Res } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
+import type { Response } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { HealthService } from './health.service';
@@ -16,6 +17,14 @@ export class HealthController {
       service: 'api',
       time: new Date().toISOString(),
     };
+  }
+
+  @Public()
+  @Get('ready')
+  async ready(@Res({ passthrough: true }) response: Response) {
+    const readiness = await this.healthService.getReadiness();
+    if (!readiness.ready) response.status(503);
+    return readiness;
   }
 
   @Roles(UserRole.ADMIN)

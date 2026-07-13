@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Image, type ImageStyle, StyleSheet, type StyleProp, Text, type TextStyle, View, type ViewStyle } from 'react-native';
+import { ActivityIndicator, AppState, Image, type ImageStyle, StyleSheet, type StyleProp, Text, type TextStyle, View, type ViewStyle } from 'react-native';
 import { RTCPeerConnection, RTCSessionDescription, RTCView } from 'react-native-webrtc';
 import type { LiveStatus } from './VideoPlayers';
 
@@ -29,6 +29,7 @@ type WebRtcVideoProps = {
   contentFit?: 'contain' | 'cover';
   /** Informa se o stream recebido tem faixa de áudio (câmeras sem microfone → false). */
   onAudioAvailable?: (available: boolean) => void;
+  onNeedRefresh?: () => void;
 };
 
 function waitIceGathering(pc: RTCPeerConnection): Promise<void> {
@@ -70,6 +71,7 @@ export function WebRtcVideo({
   muted = false,
   contentFit = 'contain',
   onAudioAvailable,
+  onNeedRefresh,
 }: WebRtcVideoProps) {
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<LiveStatus>('connecting');
@@ -96,6 +98,8 @@ export function WebRtcVideo({
   onFailoverRef.current = onFailover;
   const onAudioRef = useRef(onAudioAvailable);
   onAudioRef.current = onAudioAvailable;
+  const onNeedRefreshRef = useRef(onNeedRefresh);
+  onNeedRefreshRef.current = onNeedRefresh;
 
   const apply = (next: LiveStatus) => {
     setStatus(next);
@@ -108,10 +112,18 @@ export function WebRtcVideo({
     let pc: RTCPeerConnection | null = null;
     let sessionUrl: string | null = null;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let disconnectedTimer: ReturnType<typeof setTimeout> | undefined;
+    let appActive = AppState.currentState === 'active';
+    let connectionLost = false;
+    let connectionReady = false;
+    let mediaReady = false;
+    let mediaToken: string | null = null;
+    try { mediaToken = new URL(whepUrl).searchParams.get('token'); } catch { /* URL inválida cairá no failover */ }
 
     const failover = () => {
       if (cancelled) return;
       cancelled = true;
+      onNeedRefreshRef.current?.();
       onFailoverRef.current?.();
     };
 
@@ -129,20 +141,41 @@ export function WebRtcVideo({
             streamRef.current = stream;
             applyMuted(stream);
             setStreamUrl(stream.toURL());
+            mediaReady = true;
+            if (connectionReady) {
+              if (timeout) clearTimeout(timeout);
+              apply('live');
+              try {
+                onAudioRef.current?.((stream.getAudioTracks?.().length ?? 0) > 0);
+              } catch { /* ignore */ }
+            }
           }
         });
         ev.addEventListener('connectionstatechange', () => {
           if (cancelled || !pc) return;
           const state = pc.connectionState;
           if (state === 'connected') {
-            if (timeout) clearTimeout(timeout);
-            apply('live');
-            // Câmera sem microfone → o WHEP não entrega faixa de áudio. Avisa o
-            // pai para o botão "Áudio" poder alertar em vez de fingir que ligou.
-            try {
-              onAudioRef.current?.((streamRef.current?.getAudioTracks?.().length ?? 0) > 0);
-            } catch { /* ignore */ }
-          } else if (state === 'failed') {
+            connectionReady = true;
+            connectionLost = false;
+            if (disconnectedTimer) clearTimeout(disconnectedTimer);
+            // Só considera AO VIVO depois de receber mídia. Uma conexão ICE pode
+            // ficar "connected" sem entregar qualquer track/frame.
+            if (mediaReady) {
+              if (timeout) clearTimeout(timeout);
+              apply('live');
+              try {
+                onAudioRef.current?.((streamRef.current?.getAudioTracks?.().length ?? 0) > 0);
+              } catch { /* ignore */ }
+            }
+          } else if (state === 'disconnected') {
+            connectionReady = false;
+            connectionLost = true;
+            if (!disconnectedTimer) disconnectedTimer = setTimeout(() => {
+              disconnectedTimer = undefined;
+              if (appActive && !cancelled) failover();
+            }, 4_000);
+          } else if (state === 'failed' || state === 'closed') {
+            connectionReady = false;
             failover();
           }
         });
@@ -158,12 +191,19 @@ export function WebRtcVideo({
 
         const response = await fetch(whepUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/sdp' },
+          headers: {
+            'Content-Type': 'application/sdp',
+            ...(mediaToken ? { Authorization: `Bearer ${mediaToken}` } : {}),
+          },
           body: pc.localDescription?.sdp ?? offer.sdp,
         });
         if (!response.ok) throw new Error(`WHEP ${response.status}`);
         sessionUrl = response.headers.get('location');
-        if (sessionUrl) sessionUrl = new URL(sessionUrl, whepUrl).toString();
+        if (sessionUrl) {
+          const resolved = new URL(sessionUrl, whepUrl);
+          if (mediaToken && !resolved.searchParams.has('token')) resolved.searchParams.set('token', mediaToken);
+          sessionUrl = resolved.toString();
+        }
         const answer = await response.text();
         if (cancelled) return;
         await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answer }));
@@ -173,11 +213,22 @@ export function WebRtcVideo({
     };
 
     void start();
+    const appSub = AppState.addEventListener('change', (next) => {
+      appActive = next === 'active';
+      if (appActive && (connectionLost || !liveRef.current) && !cancelled) failover();
+    });
 
     return () => {
       cancelled = true;
       if (timeout) clearTimeout(timeout);
-      if (sessionUrl) fetch(sessionUrl, { method: 'DELETE' }).catch(() => undefined);
+      if (disconnectedTimer) clearTimeout(disconnectedTimer);
+      appSub.remove();
+      if (sessionUrl) {
+        fetch(sessionUrl, {
+          method: 'DELETE',
+          headers: mediaToken ? { Authorization: `Bearer ${mediaToken}` } : undefined,
+        }).catch(() => undefined);
+      }
       if (pc) {
         try {
           pc.close();

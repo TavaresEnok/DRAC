@@ -14,6 +14,12 @@ BigInt.prototype.toJSON = function () {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 0);
+  if (Number.isInteger(trustProxyHops) && trustProxyHops > 0 && trustProxyHops <= 5) {
+    // Só habilite quando a API não estiver acessível diretamente: o valor indica
+    // quantos proxies controlados existem entre cliente e Express.
+    app.getHttpAdapter().getInstance().set('trust proxy', trustProxyHops);
+  }
   // Limite do corpo da requisição. O padrão do Express (100kb) é pequeno para o
   // logo de marca enviado em base64 (até ~550KB de string). 2mb cobre com folga.
   app.use(json({ limit: '2mb' }));

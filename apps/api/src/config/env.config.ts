@@ -73,7 +73,12 @@ export const envConfig = () => ({
   mediaMtxSourceOnDemandStartTimeout: process.env.MEDIAMTX_SOURCE_ON_DEMAND_START_TIMEOUT ?? '6s',
   mediaMtxSourceOnDemandCloseAfter: process.env.MEDIAMTX_SOURCE_ON_DEMAND_CLOSE_AFTER ?? '5m',
   mediaMtxRunOnDemandCloseAfter: process.env.MEDIAMTX_RUN_ON_DEMAND_CLOSE_AFTER ?? '5m',
+  mediaMtxSelectedRunOnDemandCloseAfter:
+    process.env.MEDIAMTX_SELECTED_RUN_ON_DEMAND_CLOSE_AFTER
+    ?? process.env.MEDIAMTX_RUN_ON_DEMAND_CLOSE_AFTER
+    ?? '5m',
   mediaMtxWarmPathsOnBoot: String(process.env.MEDIAMTX_WARM_PATHS_ON_BOOT ?? 'true') !== 'false',
+  mediaMtxWarmSelectedPathsOnBoot: String(process.env.MEDIAMTX_WARM_SELECTED_PATHS_ON_BOOT ?? 'false') === 'true',
   adminEmail: process.env.ADMIN_EMAIL ?? 'admin@local.dev',
   adminPassword: process.env.ADMIN_PASSWORD ?? '',
   adminName: process.env.ADMIN_NAME ?? 'Administrador',
@@ -82,4 +87,7 @@ export const envConfig = () => ({
   retentionDays: Number(process.env.RETENTION_DAYS ?? 7),
   retentionUseBullmq: String(process.env.RETENTION_USE_BULLMQ ?? 'true') !== 'false',
   healthCheckOfflineMinutes: Number(process.env.HEALTHCHECK_OFFLINE_MINUTES ?? 5),
+  // Silêncio entre notificações do MESMO alarme (câmera+tipo+prioridade). Evita
+  // enxurrada de push em câmeras movimentadas (ex.: movimento numa rua). 300s = 5min.
+  alarmNotificationSuppressSeconds: Number(process.env.ALARM_NOTIFICATION_SUPPRESS_SECONDS ?? 300),
 });

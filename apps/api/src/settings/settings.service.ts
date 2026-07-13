@@ -35,6 +35,22 @@ const BRANDING_KEYS = [
   'brandSuccessColor',
   'brandWarningColor',
   'brandDangerColor',
+  // Paleta clara. As chaves sem prefixo continuam sendo a paleta escura para
+  // manter compatibilidade com instalações e versões antigas do aplicativo.
+  'brandLightPrimaryColor',
+  'brandLightBackgroundColor',
+  'brandLightSecondaryColor',
+  'brandLightPrimaryTextColor',
+  'brandLightSecondaryTextColor',
+  'brandLightBackgroundColor2',
+  'brandLightBackgroundTextColor',
+  'brandLightMenuColor',
+  'brandLightMenuTextColor',
+  'brandLightButtonTextColor',
+  'brandLightBorderColor',
+  'brandLightSuccessColor',
+  'brandLightWarningColor',
+  'brandLightDangerColor',
 ] as const;
 
 // Apenas configurações que produzem efeito real no sistema são expostas aqui.
@@ -86,6 +102,22 @@ const SETTING_SPECS: Record<string, SettingSpec> = {
   brandSuccessColor: { type: 'color', default: '' },
   brandWarningColor: { type: 'color', default: '' },
   brandDangerColor: { type: 'color', default: '' },
+  // Tema claro: possui defaults próprios para que uma instalação antiga passe
+  // a oferecer a opção imediatamente, mesmo antes de o administrador editar.
+  brandLightPrimaryColor: { type: 'color', default: '#2563eb' },
+  brandLightBackgroundColor: { type: 'color', default: '#f5f7fb' },
+  brandLightBackgroundColor2: { type: 'color', default: '#ffffff' },
+  brandLightSecondaryColor: { type: 'color', default: '#ffffff' },
+  brandLightPrimaryTextColor: { type: 'color', default: '#111827' },
+  brandLightSecondaryTextColor: { type: 'color', default: '#4b5563' },
+  brandLightBackgroundTextColor: { type: 'color', default: '#111827' },
+  brandLightMenuColor: { type: 'color', default: '#ffffff' },
+  brandLightMenuTextColor: { type: 'color', default: '#64748b' },
+  brandLightButtonTextColor: { type: 'color', default: '#ffffff' },
+  brandLightBorderColor: { type: 'color', default: '#94a3b8' },
+  brandLightSuccessColor: { type: 'color', default: '#15803d' },
+  brandLightWarningColor: { type: 'color', default: '#b45309' },
+  brandLightDangerColor: { type: 'color', default: '#dc2626' },
 };
 
 export type SettingsMap = Record<string, string | number | boolean>;

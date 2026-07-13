@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { useCallback, useEffect, useMemo, useState, type InputHTMLAttributes, type MouseEvent, type ReactNode, type SelectHTMLAttributes, type WheelEvent as ReactWheelEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes, type MouseEvent, type ReactNode, type SelectHTMLAttributes, type WheelEvent as ReactWheelEvent } from 'react';
 import { useLocation, useParams } from 'wouter';
 import {
   ArrowDown,
@@ -359,19 +359,29 @@ function PtzButton({
     <button
       type="button"
       title={label}
+      aria-label={label}
       disabled={disabled}
-      onMouseDown={(event) => {
+      onPointerDown={(event) => {
         event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
         onStart();
       }}
-      onMouseUp={onStop}
-      onMouseLeave={onStop}
-      onTouchStart={(event) => {
-        event.preventDefault();
-        onStart();
+      onPointerUp={onStop}
+      onPointerCancel={onStop}
+      onLostPointerCapture={onStop}
+      onKeyDown={(event) => {
+        if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
+          event.preventDefault();
+          onStart();
+        }
       }}
-      onTouchEnd={onStop}
-      onTouchCancel={onStop}
+      onKeyUp={(event) => {
+        if (event.key === ' ' || event.key === 'Enter') {
+          event.preventDefault();
+          onStop();
+        }
+      }}
+      onBlur={onStop}
       className={cn(
         'flex h-12 w-12 items-center justify-center rounded-xl border transition-all select-none',
         active
@@ -397,6 +407,7 @@ export default function CameraDetailPage() {
   const cam = cameras.find((camera) => camera.id === params.id);
 
   const [activeDirection, setActiveDirection] = useState<PTZDirection | null>(null);
+  const activeMovementRef = useRef<{ cameraId: string; cameraName: string; direction: PTZDirection; startPromise?: ReturnType<typeof sendPtzCommand> } | null>(null);
   const [commandState, setCommandState] = useState<CommandState>('idle');
   const [lastCommand, setLastCommand] = useState('Nenhum comando PTZ enviado');
   const [lastError, setLastError] = useState<string | null>(null);
@@ -534,22 +545,30 @@ export default function CameraDetailPage() {
     };
   }, []);
 
-  const controlsDisabled = !cam?.ptzCapable || !cam?.isOnline || commandState === 'sending';
+  const controlsDisabled = !cam?.ptzCapable || !cam?.isOnline;
 
   const startMove = useCallback(async (direction: PTZDirection) => {
-    if (!cam || controlsDisabled) return;
+    if (!cam || controlsDisabled || activeMovementRef.current) return;
+    const movement = { cameraId: cam.id, cameraName: cam.name, direction } as { cameraId: string; cameraName: string; direction: PTZDirection; startPromise?: ReturnType<typeof sendPtzCommand> };
+    activeMovementRef.current = movement;
     setActiveDirection(direction);
     setCommandState('sending');
     setLastError(null);
     setLastCommand(`Enviando ${direction} para ${cam.name}`);
 
     try {
-      await sendPtzCommand(cam.id, { action: 'start', direction });
-      setCommandState('ok');
-      setLastCommand(`Movimento ${direction} ativo em ${cam.name}`);
+      movement.startPromise = sendPtzCommand(cam.id, { action: 'start', direction });
+      await movement.startPromise;
+      if (activeMovementRef.current === movement) {
+        setCommandState('ok');
+        setLastCommand(`Movimento ${direction} ativo em ${cam.name}`);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Falha ao iniciar PTZ.';
-      setActiveDirection(null);
+      if (activeMovementRef.current === movement) {
+        activeMovementRef.current = null;
+        setActiveDirection(null);
+      }
       setCommandState('error');
       setLastError(message);
       setLastCommand(`Falha em ${direction} para ${cam.name}`);
@@ -562,29 +581,59 @@ export default function CameraDetailPage() {
   }, [cam, controlsDisabled]);
 
   const stopMove = useCallback(async () => {
-    if (!cam?.ptzCapable || !activeDirection || !cam) return;
-
-    const direction = activeDirection;
+    const movement = activeMovementRef.current;
+    if (!movement) return;
+    activeMovementRef.current = null;
+    const direction = movement.direction;
     setActiveDirection(null);
     setCommandState('sending');
 
     try {
-      await sendPtzCommand(cam.id, { action: 'stop', direction });
+      await movement.startPromise?.catch(() => undefined);
+      await sendPtzCommand(movement.cameraId, { action: 'stop', direction });
       setCommandState('ok');
       setLastError(null);
-      setLastCommand(`Movimento ${direction} finalizado em ${cam.name}`);
+      setLastCommand(`Movimento ${direction} finalizado em ${movement.cameraName}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Falha ao parar PTZ.';
       setCommandState('error');
       setLastError(message);
-      setLastCommand(`Falha ao parar ${direction} em ${cam.name}`);
+      setLastCommand(`Falha ao parar ${direction} em ${movement.cameraName}`);
       toast({
         title: 'Falha ao parar PTZ',
         description: message,
         variant: 'destructive',
       });
     }
-  }, [activeDirection, cam]);
+  }, []);
+
+  const stopMoveSilently = useCallback(() => {
+    const movement = activeMovementRef.current;
+    if (!movement) return;
+    activeMovementRef.current = null;
+    setActiveDirection(null);
+    void (async () => {
+      await movement.startPromise?.catch(() => undefined);
+      await sendPtzCommand(movement.cameraId, { action: 'stop', direction: movement.direction });
+    })().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const stopOnHidden = () => {
+      if (document.visibilityState === 'hidden') stopMoveSilently();
+    };
+    window.addEventListener('blur', stopMoveSilently);
+    window.addEventListener('pagehide', stopMoveSilently);
+    document.addEventListener('visibilitychange', stopOnHidden);
+    return () => {
+      stopMoveSilently();
+      window.removeEventListener('blur', stopMoveSilently);
+      window.removeEventListener('pagehide', stopMoveSilently);
+      document.removeEventListener('visibilitychange', stopOnHidden);
+    };
+  }, [stopMoveSilently]);
+
+  useEffect(() => stopMoveSilently, [cam?.id, stopMoveSilently]);
 
   const handleVideoWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
     event.preventDefault();

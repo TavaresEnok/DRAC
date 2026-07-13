@@ -65,6 +65,7 @@ const GRID_PRESETS: { size: GridSize; icon: ReactNode }[] = [
 const GRID_MIN = 1;
 const GRID_MAX = 8; // limite por dimensão
 const GRID_CELL_WARN = 16; // acima disso, avisa sobre CPU (transcode H.265)
+const LIVE_PANEL_AUTO_COLLAPSE_WIDTH = 1100;
 
 /** Colunas × linhas de uma grade "CxL", com limites (1..8). */
 function gridDims(size: string): { cols: number; rows: number } {
@@ -92,6 +93,34 @@ const STATUS_FILTER_LABEL: Record<StatusFilter, string> = {
 };
 
 const LIVE_LAYOUTS_STORAGE_KEY = 'drac.live.layouts.v1';
+const streamStartDelay = (slotIndex: number, totalSlots: number) => {
+  if (totalSlots < 4) return 0;
+  // Distribui a emissão de tokens e os handshakes. O limite antigo de 1,5 s
+  // fazia dezenas de câmeras iniciarem juntas em grades grandes.
+  const stepMs = totalSlots >= 16 ? 200 : totalSlots >= 9 ? 150 : 100;
+  return slotIndex * stepMs;
+};
+
+type ApiLiveLayout = {
+  id: string;
+  name: string;
+  gridSize: string;
+  cameraIds: unknown;
+  lastUsedAt?: string;
+  createdAt?: string;
+};
+
+function mapApiLiveLayout(layout: ApiLiveLayout): SavedLayout | null {
+  if (!/^[1-8]x[1-8]$/.test(layout.gridSize) || !Array.isArray(layout.cameraIds)) return null;
+  return {
+    id: layout.id,
+    name: layout.name,
+    gridSize: layout.gridSize as GridSize,
+    cameraIds: layout.cameraIds.map(String),
+    createdBy: useAuthStore.getState().user?.name ?? 'Operador',
+    lastUsed: layout.lastUsedAt ?? layout.createdAt ?? new Date().toISOString(),
+  };
+}
 
 function loadSavedLayouts(): SavedLayout[] {
   if (typeof window === 'undefined') return [];
@@ -118,7 +147,7 @@ export default function LiveViewPage() {
   const cameras = useVmsDataStore((state) => state.cameras);
   const loadData = useVmsDataStore((state) => state.load);
   const generatedLayouts = useVmsDataStore((state) => state.layouts);
-  const { gridSize, cameraIds, wallMode, setGridSize, setCameraIds, toggleWallMode } = useGridStore();
+  const { gridSize, cameraIds, wallMode, prevLayout, setGridSize, setCameraIds, toggleWallMode, savePrevLayout, clearPrevLayout } = useGridStore();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [selectedCam, setSelectedCam] = useState<string | null>(null);
@@ -133,6 +162,46 @@ export default function LiveViewPage() {
   const [layoutSelectValue, setLayoutSelectValue] = useState('');
   const [layoutDialog, setLayoutDialog] = useState<{ mode: 'save' | 'rename'; id?: string; name: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SavedLayout | null>(null);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let cancelled = false;
+    const headers = { Authorization: `Bearer ${accessToken}` };
+
+    void (async () => {
+      try {
+        const response = await axios.get<ApiLiveLayout[]>(`${API_URL}/live-layouts`, { headers });
+        if (cancelled) return;
+        const remoteLayouts = response.data.map(mapApiLiveLayout).filter((layout): layout is SavedLayout => Boolean(layout));
+        if (remoteLayouts.length) {
+          setSavedLayouts(remoteLayouts);
+          persistSavedLayouts(remoteLayouts);
+          return;
+        }
+
+        const localLayouts = loadSavedLayouts();
+        if (!localLayouts.length) return;
+        const migrated = await Promise.all(localLayouts.map(async (layout) => {
+          const created = await axios.post<ApiLiveLayout>(`${API_URL}/live-layouts`, {
+            name: layout.name,
+            gridSize: layout.gridSize,
+            cameraIds: layout.cameraIds,
+          }, { headers });
+          return mapApiLiveLayout(created.data);
+        }));
+        if (cancelled) return;
+        const valid = migrated.filter((layout): layout is SavedLayout => Boolean(layout));
+        setSavedLayouts(valid);
+        persistSavedLayouts(valid);
+      } catch {
+        // O cache local continua funcional durante indisponibilidade da API.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [API_URL, accessToken]);
 
   const zoneFilters = useMemo(
     () => ['__all__', ...Array.from(new Set(cameras.map((camera) => camera.zone)))],
@@ -155,9 +224,21 @@ export default function LiveViewPage() {
 
   useEffect(() => {
     if (!cameraIds.length && cameras.length) {
-      setCameraIds(cameras.slice(0, 4).map((camera) => camera.id));
+      const onlineFirst = [...cameras].sort((a, b) => Number(b.isOnline) - Number(a.isOnline));
+      setCameraIds(onlineFirst.slice(0, 4).map((camera) => camera.id));
     }
   }, [cameraIds.length, cameras, setCameraIds]);
+
+  useEffect(() => {
+    const collapseWhenTight = () => {
+      if (window.innerWidth < LIVE_PANEL_AUTO_COLLAPSE_WIDTH) {
+        setPanelOpen(false);
+      }
+    };
+    collapseWhenTight();
+    window.addEventListener('resize', collapseWhenTight);
+    return () => window.removeEventListener('resize', collapseWhenTight);
+  }, []);
 
   // Reconcilia o override otimista de gravação com o estado real do servidor: assim
   // que camera.status reflete o valor esperado, o override é removido. Sem isso, um
@@ -211,6 +292,30 @@ export default function LiveViewPage() {
     });
   }, [cameras, search, zoneFilter, statusFilter]);
 
+  // Zoom para 1x1 guardando o layout anterior, para poder VOLTAR à grade.
+  // prevLayout agora vem do Zustand store (gridStore) com persistência em
+  // sessionStorage — sobrevive re-renders, re-mounts e page refresh.
+
+  const zoomToCamera = useCallback((cameraId: string) => {
+    if (gridSize !== '1x1') savePrevLayout({ gridSize, cameraIds });
+    setGridSize('1x1');
+    setCameraIds([cameraId]);
+  }, [gridSize, cameraIds, setGridSize, setCameraIds, savePrevLayout]);
+
+  const restoreLayout = useCallback(() => {
+    if (!prevLayout) return;
+    setGridSize(prevLayout.gridSize);
+    setCameraIds(prevLayout.cameraIds);
+    clearPrevLayout();
+  }, [prevLayout, setGridSize, setCameraIds, clearPrevLayout]);
+
+  // Esc volta para a grade anterior.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') restoreLayout(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [restoreLayout]);
+
   const handleCamAction = useCallback((action: string, camera: Camera) => {
     if (action === 'playback') setLocation(`/playback?cameraId=${encodeURIComponent(camera.id)}`);
     if (action === 'ptz') setLocation(`/cameras/${camera.id}?tab=ptz`);
@@ -248,19 +353,19 @@ export default function LiveViewPage() {
       })();
     }
     if (action === 'fullscreen') {
-      setGridSize('1x1');
-      setCameraIds([camera.id]);
+      zoomToCamera(camera.id);
     }
-  }, [API_URL, accessToken, loadData, setLocation, setGridSize, setCameraIds, toast]);
+  }, [API_URL, accessToken, loadData, setLocation, zoomToCamera, toast]);
 
   const handleCamClick = useCallback((id: string) => {
     setSelectedCam(s => s === id ? null : id);
   }, []);
 
   const handleCamDoubleClick = useCallback((camera: Camera) => {
-    setGridSize('1x1');
-    setCameraIds([camera.id]);
-  }, [setGridSize, setCameraIds]);
+    // Já ampliado (1x1) com layout salvo → duplo-clique VOLTA para a grade.
+    if (gridSize === '1x1' && prevLayout) { restoreLayout(); return; }
+    zoomToCamera(camera.id);
+  }, [gridSize, prevLayout, restoreLayout, zoomToCamera]);
 
   const loadLayout = (layoutId: string) => {
     const layout = availableLayouts.find(l => l.id === layoutId);
@@ -316,26 +421,53 @@ export default function LiveViewPage() {
     setDeleteTarget(layout);
   };
 
-  const commitLayoutDialog = () => {
+  const commitLayoutDialog = async () => {
     if (!layoutDialog) return;
     const name = layoutDialog.name.trim();
     if (!name) return;
+    const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
 
     if (layoutDialog.mode === 'rename' && layoutDialog.id) {
+      const previousLayouts = savedLayouts;
       const nextLayouts = savedLayouts.map((item) => (item.id === layoutDialog.id ? { ...item, name } : item));
       setSavedLayouts(nextLayouts);
       persistSavedLayouts(nextLayouts);
-      toast({ title: 'Layout renomeado', description: name });
+      try {
+        if (!headers) throw new Error('Sessão inválida.');
+        await axios.patch(`${API_URL}/live-layouts/${layoutDialog.id}`, { name }, { headers });
+        toast({ title: 'Layout renomeado', description: name });
+      } catch {
+        setSavedLayouts(previousLayouts);
+        persistSavedLayouts(previousLayouts);
+        toast({ title: 'Não foi possível renomear', description: 'O layout foi restaurado.', variant: 'destructive' });
+        return;
+      }
     } else {
-      const nextLayout: SavedLayout = {
-        id: `live-layout-${Date.now()}`,
+      const draft: SavedLayout = {
+        id: `local-live-layout-${Date.now()}`,
         name,
         gridSize,
         cameraIds: cameraIds.slice(0, count),
         createdBy: useAuthStore.getState().user?.name ?? 'Operador',
         lastUsed: new Date().toISOString(),
       };
-      while (nextLayout.cameraIds.length < count) nextLayout.cameraIds.push('');
+      while (draft.cameraIds.length < count) draft.cameraIds.push('');
+      let nextLayout = draft;
+      try {
+        if (!headers) throw new Error('Sessão inválida.');
+        const response = await axios.post<ApiLiveLayout>(`${API_URL}/live-layouts`, {
+          name: draft.name,
+          gridSize: draft.gridSize,
+          cameraIds: draft.cameraIds,
+        }, { headers });
+        nextLayout = mapApiLiveLayout(response.data) ?? draft;
+      } catch {
+        toast({
+          title: 'Layout salvo somente neste navegador',
+          description: 'A sincronização com o servidor falhou.',
+          variant: 'destructive',
+        });
+      }
       const nextLayouts = [nextLayout, ...savedLayouts];
       setSavedLayouts(nextLayouts);
       persistSavedLayouts(nextLayouts);
@@ -344,12 +476,24 @@ export default function LiveViewPage() {
     setLayoutDialog(null);
   };
 
-  const confirmDeleteLayout = () => {
+  const confirmDeleteLayout = async () => {
     if (!deleteTarget) return;
+    const previousLayouts = savedLayouts;
     const nextLayouts = savedLayouts.filter((item) => item.id !== deleteTarget.id);
     setSavedLayouts(nextLayouts);
     persistSavedLayouts(nextLayouts);
-    toast({ title: 'Layout apagado', description: deleteTarget.name });
+    try {
+      if (accessToken && !deleteTarget.id.startsWith('local-')) {
+        await axios.delete(`${API_URL}/live-layouts/${deleteTarget.id}`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+      }
+      toast({ title: 'Layout apagado', description: deleteTarget.name });
+    } catch {
+      setSavedLayouts(previousLayouts);
+      persistSavedLayouts(previousLayouts);
+      toast({ title: 'Não foi possível apagar', description: 'O layout foi restaurado.', variant: 'destructive' });
+    }
     setDeleteTarget(null);
   };
 
@@ -412,11 +556,14 @@ export default function LiveViewPage() {
                   }}
                   selected={selectedCam === cam.id}
                   showDetectionOverlay={selectedCam === cam.id}
-                  liveViewMode={selectedCam === cam.id ? 'selected' : 'grid'}
+                  // Full HD só quando há exatamente 1 câmera na tela.
+                  // Em grade 2x2 ou maior, até a câmera selecionada permanece
+                  // no perfil reduzido para preservar CPU/banda.
+                  liveViewMode={count === 1 ? 'selected' : 'grid'}
                   onClick={() => handleCamClick(cam.id)}
                   onDoubleClick={() => handleCamDoubleClick(cam)}
                   onAction={handleCamAction}
-                  streamStartDelayMs={0}
+                  streamStartDelayMs={streamStartDelay(i, count)}
                 />
               ) : (
                 <div className="w-full h-full bg-[hsl(210,15%,5%)] flex items-center justify-center">
@@ -438,7 +585,7 @@ export default function LiveViewPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="live-workspace relative flex h-full min-h-0">
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <div className="toolbar">
           <div className="segment">
@@ -451,7 +598,7 @@ export default function LiveViewPage() {
                     data-testid={`button-grid-${size}`}
                   >
                     {icon}
-                    {size}
+                    <span className="grid-label">{size}</span>
                   </button>
                 </TooltipTrigger>
                 <TooltipContent className="text-xs">Grade {size}</TooltipContent>
@@ -462,7 +609,7 @@ export default function LiveViewPage() {
           {/* Grade LIVRE: colunas × linhas (ex.: 4x6, 6x4). Aplica ao digitar. */}
           <Tooltip delayDuration={0}>
             <TooltipTrigger asChild>
-              <div className="flex items-center gap-1 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-1.5 py-0.5" data-testid="grid-custom">
+              <div className="live-grid-custom flex items-center gap-1 rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-1.5 py-0.5" data-testid="grid-custom">
                 <input
                   type="number"
                   min={GRID_MIN}
@@ -498,74 +645,89 @@ export default function LiveViewPage() {
             </Tooltip>
           ) : null}
 
+          {gridSize === '1x1' && prevLayout ? (
+            <Tooltip delayDuration={0}>
+              <TooltipTrigger asChild>
+                <button onClick={restoreLayout} className="btn btn-secondary btn-sm" data-testid="button-restore-grid">
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  Voltar à grade
+                </button>
+              </TooltipTrigger>
+              <TooltipContent className="text-xs">Volta para a grade anterior (ou tecle Esc / dê duplo-clique)</TooltipContent>
+            </Tooltip>
+          ) : null}
           <Tooltip delayDuration={0}>
             <TooltipTrigger asChild>
               <button onClick={fillGrid} className="btn btn-secondary btn-sm" data-testid="button-fill-grid">
                 <LayoutGrid className="w-3.5 h-3.5" />
-                Preencher
+                <span className="toolbar-label">Preencher</span>
               </button>
             </TooltipTrigger>
             <TooltipContent className="text-xs">Preenche a grade com todas as câmeras (ajusta o tamanho)</TooltipContent>
           </Tooltip>
 
-          <div className="hidden xl:flex items-center gap-2">
-            <Select value={layoutSelectValue} onValueChange={loadLayout}>
-              <SelectTrigger className="w-44 h-8 text-xs">
-                <FolderOpen className="w-3.5 h-3.5 mr-2 text-[hsl(var(--muted-foreground))]" />
-                <SelectValue placeholder="Carregar layout" />
-              </SelectTrigger>
-              <SelectContent>
-                {availableLayouts.map(l => (
-                  <SelectItem key={l.id} value={l.id} className="text-xs">
-                    {l.name}
-                  </SelectItem>
-                ))}
-                {!availableLayouts.length && (
-                  <SelectItem value="__empty__" disabled className="text-xs">
-                    Nenhum layout salvo
-                  </SelectItem>
-                )}
-              </SelectContent>
-            </Select>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button className="btn btn-secondary btn-sm btn-icon" title="Gerenciar layouts salvos">
-                  <ChevronDown className="w-3.5 h-3.5" />
+          <Popover>
+            <Tooltip delayDuration={0}>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button className="btn btn-secondary btn-sm" data-testid="button-layouts">
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    <span className="toolbar-label">Layouts</span>
+                    <ChevronDown className="w-3 h-3 text-[hsl(var(--muted-foreground))]" />
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent className="text-xs">Carregar e gerenciar layouts</TooltipContent>
+            </Tooltip>
+            <PopoverContent align="start" className="w-72 p-2">
+              <div className="flex items-center justify-between px-2 py-1.5">
+                <span className="text-[10px] font-mono uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
+                  Layouts
+                </span>
+                <button onClick={saveCurrentLayout} className="btn btn-secondary btn-xs">
+                  <Save className="w-3 h-3" />
+                  Salvar atual
                 </button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="w-64 p-2">
-                <div className="px-2 py-1.5 text-[10px] font-mono uppercase tracking-wide text-[hsl(var(--muted-foreground))]">
-                  Layouts salvos
-                </div>
-                <div className="max-h-64 overflow-y-auto">
-                  {savedLayouts.length ? savedLayouts.map((layout) => (
-                    <div key={layout.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-[hsl(var(--accent))]">
-                      <button className="min-w-0 flex-1 text-left" onClick={() => loadLayout(layout.id)}>
-                        <span className="block truncate text-xs font-medium">{layout.name}</span>
-                        <span className="block font-mono text-[9px] text-[hsl(var(--muted-foreground))]">
-                          {layout.gridSize} / {layout.cameraIds.filter(Boolean).length} câmeras
-                        </span>
-                      </button>
-                      <button onClick={() => renameLayout(layout.id)} className="h-7 w-7 rounded border border-border inline-flex items-center justify-center hover:bg-background" title="Renomear">
-                        <Pencil className="w-3 h-3" />
-                      </button>
-                      <button onClick={() => deleteLayout(layout.id)} className="h-7 w-7 rounded border border-border inline-flex items-center justify-center hover:bg-[hsl(var(--destructive)_/_0.1)] hover:text-[hsl(var(--destructive))]" title="Apagar">
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  )) : (
-                    <div className="px-2 py-3 text-xs text-[hsl(var(--muted-foreground))]">Salve um layout para ele aparecer aqui.</div>
+              </div>
+              <Select value={layoutSelectValue} onValueChange={loadLayout}>
+                <SelectTrigger className="mb-2 h-8 w-full text-xs">
+                  <SelectValue placeholder="Carregar layout" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableLayouts.map(l => (
+                    <SelectItem key={l.id} value={l.id} className="text-xs">{l.name}</SelectItem>
+                  ))}
+                  {!availableLayouts.length && (
+                    <SelectItem value="__empty__" disabled className="text-xs">Nenhum layout salvo</SelectItem>
                   )}
-                </div>
-              </PopoverContent>
-            </Popover>
-            <button onClick={saveCurrentLayout} className="btn btn-secondary btn-sm">
-              <Save className="w-3.5 h-3.5" />
-              Salvar
-            </button>
-          </div>
+                </SelectContent>
+              </Select>
+              <div className="max-h-64 overflow-y-auto border-t border-border pt-1">
+                {savedLayouts.length ? savedLayouts.map((layout) => (
+                  <div key={layout.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-[hsl(var(--accent))]">
+                    <button className="min-w-0 flex-1 text-left" onClick={() => loadLayout(layout.id)}>
+                      <span className="block truncate text-xs font-medium">{layout.name}</span>
+                      <span className="block font-mono text-[9px] text-[hsl(var(--muted-foreground))]">
+                        {layout.gridSize} / {layout.cameraIds.filter(Boolean).length} câmeras
+                      </span>
+                    </button>
+                    <button onClick={() => renameLayout(layout.id)} className="h-7 w-7 rounded border border-border inline-flex items-center justify-center hover:bg-background" title="Renomear">
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <button onClick={() => deleteLayout(layout.id)} className="h-7 w-7 rounded border border-border inline-flex items-center justify-center hover:bg-[hsl(var(--destructive)_/_0.1)] hover:text-[hsl(var(--destructive))]" title="Apagar">
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )) : (
+                  <div className="px-2 py-3 text-xs text-[hsl(var(--muted-foreground))]">
+                    Salve o layout atual para reutilizá-lo.
+                  </div>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
 
-          <div className="ml-auto hidden md:flex items-center gap-2">
+          <div className="live-status-summary ml-auto flex min-w-0 items-center gap-1.5">
             {selectedCameraObj ? (
               <>
                 <button
@@ -654,14 +816,17 @@ export default function LiveViewPage() {
                     }}
                     selected={selectedCam === cam.id}
                     showDetectionOverlay={true}
-                    liveViewMode={selectedCam === cam.id ? 'selected' : 'grid'}
+                    // Full HD só quando há exatamente 1 câmera na tela.
+                    // Em grade 2x2 ou maior, até a câmera selecionada permanece
+                    // no perfil reduzido para preservar CPU/banda.
+                    liveViewMode={count === 1 ? 'selected' : 'grid'}
                     onClick={() => {
                       handleCamClick(cam.id);
                       setSelectedSlotIndex(i);
                     }}
                     onDoubleClick={() => handleCamDoubleClick(cam)}
                     onAction={handleCamAction}
-                    streamStartDelayMs={0}
+                    streamStartDelayMs={streamStartDelay(i, count)}
                   />
                   <div className="absolute top-9 right-1.5 z-40 flex items-center gap-1.5 opacity-0 transition-opacity hover:opacity-100 group-hover:opacity-100">
                     <button
@@ -687,16 +852,18 @@ export default function LiveViewPage() {
                   </div>
                 </>
               ) : (
-                <div
+                <button
+                  type="button"
                   onClick={() => selectSlotForCamera(i)}
                   className="cam-empty"
                   style={{ minHeight: 80 }}
+                  aria-label={`Escolher câmera para o quadro ${i + 1}`}
                 >
                   <Video className="w-4 h-4" />
                   <span style={{ fontFamily: 'var(--ff-mono)', fontSize: 10 }}>
                     {selectedSlotIndex === i ? 'Escolha uma câmera' : 'Slot vazio'}
                   </span>
-                </div>
+                </button>
               )}
             </div>
           ))}
@@ -734,26 +901,28 @@ export default function LiveViewPage() {
                 />
               </div>
 
-              <Select value={zoneFilter} onValueChange={setZoneFilter}>
-                <SelectTrigger className="h-8 text-[10px]">
-                  <Filter className="w-3 h-3 mr-1.5 text-[hsl(var(--muted-foreground))]" />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {zoneFilters.map(z => <SelectItem key={z} value={z} className="text-xs">{z === '__all__' ? 'Todas as zonas' : z}</SelectItem>)}
-                </SelectContent>
-              </Select>
-
-              <div className="flex flex-wrap gap-1">
-                {STATUS_FILTERS.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setStatusFilter(s)}
-                    className={`ops-pill ${statusFilter === s ? 'ops-pill-active' : ''}`}
-                  >
-                    {STATUS_FILTER_LABEL[s]}
-                  </button>
-                ))}
+              <div className="grid grid-cols-2 gap-1.5">
+                <Select value={zoneFilter} onValueChange={setZoneFilter}>
+                  <SelectTrigger className="h-8 min-w-0 px-2 text-[10px]">
+                    <Filter className="mr-1.5 h-3 w-3 shrink-0 text-[hsl(var(--muted-foreground))]" />
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {zoneFilters.map(z => <SelectItem key={z} value={z} className="text-xs">{z === '__all__' ? 'Todas as zonas' : z}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as StatusFilter)}>
+                  <SelectTrigger className="h-8 min-w-0 px-2 text-[10px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STATUS_FILTERS.map((status) => (
+                      <SelectItem key={status} value={status} className="text-xs">
+                        {STATUS_FILTER_LABEL[status]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
@@ -776,7 +945,7 @@ export default function LiveViewPage() {
                     <span className="min-w-0">
                       <span className="block text-[12px] font-medium truncate">{cam.name}</span>
                       <span className="block text-[9px] text-[hsl(var(--muted-foreground))] truncate">
-                        {cam.code}
+                        {cam.code !== cam.name ? cam.code : `${cam.zone} · ${cam.ipAddress}`}
                       </span>
                     </span>
                     <span className={`max-w-[42px] truncate text-[9px] shrink-0 ${isInGrid ? 'text-[hsl(var(--primary))]' : 'text-[hsl(var(--muted-foreground)_/_0.55)]'}`}>
@@ -804,6 +973,8 @@ export default function LiveViewPage() {
         <button
           onClick={() => setPanelOpen(true)}
           className="btn btn-secondary btn-sm btn-icon absolute right-3 top-[104px] z-10"
+          aria-label="Mostrar painel de câmeras"
+          title="Mostrar painel de câmeras"
         >
           <ChevronLeft className="w-3.5 h-3.5" />
         </button>

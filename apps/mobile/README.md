@@ -10,6 +10,9 @@ corepack pnpm --filter mobile start:lan
 
 Abra o link/QR no Expo Go no Android. A URL padrao da API pode ser alterada na tela de login para o IP ou dominio da instalacao.
 
+Builds de produção exigem HTTPS. Para uma instalação local de desenvolvimento
+que ainda use HTTP, gere o app explicitamente com `ALLOW_CLEARTEXT_TRAFFIC=true`.
+
 ## Funcionalidades iniciais
 
 - Login com o JWT da API atual.

@@ -4,10 +4,121 @@ import * as os from 'node:os';
 import { readdir, stat, statfs, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CameraStatus } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
+import Redis from 'ioredis';
 
 @Injectable()
 export class HealthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
+
+  private async withDeadline<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${label}_timeout`)), timeoutMs);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  async getReadiness() {
+    const timeoutMs = Math.max(500, Number(process.env.HEALTH_READINESS_TIMEOUT_MS ?? 3_000));
+    const checks: Record<string, { ok: boolean; detail?: string; optional?: boolean }> = {};
+
+    try {
+      await this.withDeadline(this.prisma.$queryRaw`SELECT 1`, timeoutMs, 'database');
+      checks.database = { ok: true };
+    } catch (error) {
+      checks.database = { ok: false, detail: error instanceof Error ? error.message : 'database_unavailable' };
+    }
+
+    const redis = new Redis({
+      host: this.config.get<string>('redisHost') ?? 'localhost',
+      port: Number(this.config.get<number>('redisPort') ?? 6379),
+      lazyConnect: true,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 0,
+      connectTimeout: timeoutMs,
+    });
+    redis.on('error', () => undefined);
+    try {
+      await this.withDeadline(redis.connect(), timeoutMs, 'redis_connect');
+      await this.withDeadline(redis.ping(), timeoutMs, 'redis_ping');
+      checks.redis = { ok: true };
+    } catch (error) {
+      checks.redis = { ok: false, detail: error instanceof Error ? error.message : 'redis_unavailable' };
+    } finally {
+      redis.disconnect(false);
+    }
+
+    const recordingsRoot = this.config.get<string>('recordingsRoot') ?? '/storage';
+    const probePath = join(recordingsRoot, `.readiness-${process.pid}-${Date.now()}.tmp`);
+    try {
+      await this.withDeadline(statfs(recordingsRoot), timeoutMs, 'storage_stat');
+      await this.withDeadline(writeFile(probePath, 'ready'), timeoutMs, 'storage_write');
+      await unlink(probePath).catch(() => undefined);
+      checks.storage = { ok: true };
+    } catch (error) {
+      await unlink(probePath).catch(() => undefined);
+      checks.storage = { ok: false, detail: error instanceof Error ? error.message : 'storage_unavailable' };
+    }
+
+    const mediaMtxEnabled = this.config.get<boolean>('mediaMtxEnabled') ?? true;
+    if (mediaMtxEnabled) {
+      try {
+        const baseUrl = String(this.config.get<string>('mediaMtxApiBaseUrl') ?? 'http://mediamtx:9997').replace(/\/+$/, '');
+        const user = this.config.get<string>('mediaMtxApiUser') ?? '';
+        const pass = this.config.get<string>('mediaMtxApiPass') ?? '';
+        const authorization = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+        const response = await fetch(`${baseUrl}/v3/config/global/get`, {
+          headers: { authorization },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!response.ok) throw new Error(`mediamtx_http_${response.status}`);
+        checks.mediamtx = { ok: true };
+      } catch (error) {
+        checks.mediamtx = { ok: false, detail: error instanceof Error ? error.message : 'mediamtx_unavailable' };
+      }
+    } else {
+      checks.mediamtx = { ok: true, optional: true, detail: 'disabled' };
+    }
+
+    const aiEnabled = String(process.env.AI_AUTO_START_ENABLED ?? 'true') !== 'false';
+    if (aiEnabled) {
+      try {
+        const baseUrl = String(this.config.get<string>('aiBaseUrl') ?? 'http://ai-service:8000').replace(/\/+$/, '');
+        const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+        if (!response.ok) throw new Error(`ai_http_${response.status}`);
+        const health = await response.json() as { status?: string };
+        if (!['online', 'degraded'].includes(health.status ?? '')) {
+          throw new Error(`ai_status_${health.status ?? 'unknown'}`);
+        }
+        // "degraded" pode significar somente uma câmera sem frame. O serviço
+        // continua alcançável; a saúde por câmera é monitorada separadamente.
+        checks.ai = { ok: true, ...(health.status === 'degraded' ? { detail: 'degraded_processors' } : {}) };
+      } catch (error) {
+        checks.ai = { ok: false, detail: error instanceof Error ? error.message : 'ai_unavailable' };
+      }
+    } else {
+      checks.ai = { ok: true, optional: true, detail: 'disabled' };
+    }
+
+    const ready = Object.values(checks).every((check) => check.ok || check.optional);
+    return {
+      status: ready ? 'ready' : 'not_ready',
+      ready,
+      checks,
+      time: new Date().toISOString(),
+    };
+  }
 
   async getSystemSummary() {
     const recordingsRoot = process.env.RECORDINGS_ROOT ?? '/storage';

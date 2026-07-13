@@ -5,11 +5,15 @@ import { create } from 'zustand';
 export type GridSize = `${number}x${number}`;
 
 const GRID_STORAGE_KEY = 'drac.live.grid.v1';
+const PREV_LAYOUT_SESSION_KEY = 'drac.live.prevLayout.v1';
 
 type PersistedGrid = {
   gridSize?: GridSize;
   cameraIds?: string[];
 };
+
+/** Layout anterior salvo antes de zoom para 1x1 (duplo-clique). */
+export type PrevLayout = { gridSize: GridSize; cameraIds: string[] };
 
 function loadPersistedGrid(): PersistedGrid {
   if (typeof window === 'undefined') return {};
@@ -33,13 +37,42 @@ function persistGrid(next: PersistedGrid) {
   window.localStorage.setItem(GRID_STORAGE_KEY, JSON.stringify({ ...current, ...next }));
 }
 
+/** Persiste o layout anterior em sessionStorage (sobrevive refresh, não fecha de aba). */
+function loadPrevLayout(): PrevLayout | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(PREV_LAYOUT_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PrevLayout;
+    if (typeof parsed.gridSize === 'string' && /^[1-8]x[1-8]$/.test(parsed.gridSize) && Array.isArray(parsed.cameraIds)) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function persistPrevLayout(layout: PrevLayout | null) {
+  if (typeof window === 'undefined') return;
+  if (layout) {
+    window.sessionStorage.setItem(PREV_LAYOUT_SESSION_KEY, JSON.stringify(layout));
+  } else {
+    window.sessionStorage.removeItem(PREV_LAYOUT_SESSION_KEY);
+  }
+}
+
 interface GridState {
   gridSize: GridSize;
   cameraIds: string[];
   wallMode: boolean;
+  /** Layout anterior ao zoom 1x1 (para voltar com duplo-clique/Esc). */
+  prevLayout: PrevLayout | null;
   setGridSize: (size: GridSize) => void;
   setCameraIds: (ids: string[]) => void;
   toggleWallMode: () => void;
+  savePrevLayout: (layout: PrevLayout) => void;
+  clearPrevLayout: () => void;
 }
 
 const persistedGrid = loadPersistedGrid();
@@ -48,6 +81,7 @@ export const useGridStore = create<GridState>((set) => ({
   gridSize: persistedGrid.gridSize ?? '2x2',
   cameraIds: persistedGrid.cameraIds ?? [],
   wallMode: false,
+  prevLayout: loadPrevLayout(),
   setGridSize: (gridSize) => {
     persistGrid({ gridSize });
     set({ gridSize });
@@ -57,4 +91,12 @@ export const useGridStore = create<GridState>((set) => ({
     set({ cameraIds });
   },
   toggleWallMode: () => set((state) => ({ wallMode: !state.wallMode })),
+  savePrevLayout: (layout) => {
+    persistPrevLayout(layout);
+    set({ prevLayout: layout });
+  },
+  clearPrevLayout: () => {
+    persistPrevLayout(null);
+    set({ prevLayout: null });
+  },
 }));

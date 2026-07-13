@@ -4,6 +4,7 @@ import uvicorn
 from pydantic import BaseModel
 from typing import Any, Optional, Dict
 import hmac
+import time
 from stream_processor import StreamProcessor
 from model_registry import registry
 from runtime_profiles import exposed_profiles
@@ -40,9 +41,17 @@ def validate_internal_token(x_service_token: Optional[str]):
 
 @app.get("/health")
 def health_check():
+    max_frame_age = max(5.0, float(os.getenv("AI_READINESS_MAX_FRAME_AGE_SECONDS", "20")))
+    readiness = {
+        camera_id: processor.readiness_state(max_frame_age)
+        for camera_id, processor in processors.items()
+    }
+    degraded = [camera_id for camera_id, state in readiness.items() if not state["ready"]]
     return {
-        "status": "online",
+        "status": "degraded" if degraded else "online",
         "service": "ai-service",
+        "ready": not degraded,
+        "degraded_processors": degraded,
         "active_processors": list(processors.keys()),
         "static_profiles": exposed_profiles(),
         "model_registry": registry.status(),
@@ -68,10 +77,24 @@ def health_check():
                 "hibernating": processor.motion_trigger == "CAMERA" and __import__("time").time() >= processor.wakeup_until,
                 "live_view": processor.live_view_state(),
                 "performance": processor.performance_state(),
+                "readiness": readiness[camera_id],
             }
             for camera_id, processor in processors.items()
         },
     }
+
+
+@app.get("/ready")
+def readiness_check():
+    max_frame_age = max(5.0, float(os.getenv("AI_READINESS_MAX_FRAME_AGE_SECONDS", "20")))
+    states = {
+        camera_id: processor.readiness_state(max_frame_age)
+        for camera_id, processor in processors.items()
+    }
+    unhealthy = {camera_id: state for camera_id, state in states.items() if not state["ready"]}
+    if unhealthy:
+        raise HTTPException(status_code=503, detail={"status": "degraded", "processors": unhealthy})
+    return {"status": "ready", "service": "ai-service", "processors": states, "time": time.time()}
 
 
 @app.get("/detections/latest/{camera_id}")

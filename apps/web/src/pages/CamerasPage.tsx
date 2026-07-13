@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -138,6 +138,7 @@ function formatRecordingMode(mode: string) {
 }
 
 type LocationOption = { id: string; name: string; siteId?: string | null };
+type PosterTokenItem = { cameraId: string; streamToken: string; posterUrl: string };
 
 function WizardModal({
   onClose,
@@ -852,6 +853,8 @@ export default function CamerasPage() {
   const [motionRecordingLoadingCameraId, setMotionRecordingLoadingCameraId] = useState<string | null>(null);
   const [recordingOverrides, setRecordingOverrides] = useState<Record<string, boolean>>({});
   const [diagnosingPtzCameraId, setDiagnosingPtzCameraId] = useState<string | null>(null);
+  const [posterUrls, setPosterUrls] = useState<Record<string, string>>({});
+  const lastPosterRetryAtRef = useRef(0);
   const [recordingHealthByCamera, setRecordingHealthByCamera] = useState<Record<string, {
     total: number;
     broken: number;
@@ -864,6 +867,61 @@ export default function CamerasPage() {
     alertReason?: string | null;
   }>>({});
   const groups = useMemo(() => ['all', ...Array.from(new Set(cameras.map((c) => c.floor).filter((f) => f && f !== '-')))], [cameras]);
+  const posterCameraIdsKey = useMemo(
+    () => cameras.filter((camera) => camera.isOnline).map((camera) => camera.id).sort().join(','),
+    [cameras],
+  );
+  const loadPosterTokens = useCallback(async () => {
+    if (!accessToken) return;
+    const cameraIds = useVmsDataStore.getState().cameras.filter((camera) => camera.isOnline).map((camera) => camera.id);
+    if (!cameraIds.length) {
+      setPosterUrls({});
+      return;
+    }
+    try {
+      const { data } = await axios.post<{ items: PosterTokenItem[] }>(
+        `${API_URL}/camera-stream/poster-tokens`,
+        { cameraIds },
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      const next: Record<string, string> = {};
+      for (const item of Array.isArray(data.items) ? data.items : []) {
+        const separator = item.posterUrl.includes('?') ? '&' : '?';
+        next[item.cameraId] = `${item.posterUrl}${separator}token=${encodeURIComponent(item.streamToken)}&v=${Date.now()}`;
+      }
+      setPosterUrls(next);
+    } catch {
+      // Preserva a última amostra válida durante uma falha transitória.
+    }
+  }, [API_URL, accessToken]);
+
+  useEffect(() => {
+    void loadPosterTokens();
+    const renew = () => {
+      if (document.visibilityState === 'visible') void loadPosterTokens();
+    };
+    const timer = window.setInterval(renew, 4 * 60 * 1000);
+    window.addEventListener('focus', renew);
+    document.addEventListener('visibilitychange', renew);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', renew);
+      document.removeEventListener('visibilitychange', renew);
+    };
+  }, [loadPosterTokens, posterCameraIdsKey]);
+
+  const retryPoster = useCallback((cameraId: string) => {
+    setPosterUrls((current) => {
+      if (!current[cameraId]) return current;
+      const next = { ...current };
+      delete next[cameraId];
+      return next;
+    });
+    const now = Date.now();
+    if (now - lastPosterRetryAtRef.current < 5_000) return;
+    lastPosterRetryAtRef.current = now;
+    void loadPosterTokens();
+  }, [loadPosterTokens]);
   const isRecordingAutoRecovering = useCallback((camera: Camera | null | undefined) => (
     camera?.recordingStatusDetail === 'auto_reconnecting'
   ), []);
@@ -1241,8 +1299,19 @@ export default function CamerasPage() {
                     onClick={() => setEditCamera(cam)}
                   >
                     <td className="px-3 py-2.5">
-                      <div className="font-medium max-w-72 truncate">{cam.name}</div>
-                      <div className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">{cam.code}</div>
+                      <div className="flex items-center gap-2.5">
+                        <div className="relative h-9 w-16 shrink-0 overflow-hidden rounded bg-[hsl(220_18%_8%)]">
+                          {posterUrls[cam.id] ? (
+                            <img src={posterUrls[cam.id]} onError={() => retryPoster(cam.id)} alt={`Amostra de ${cam.name}`} loading="lazy" className="h-full w-full object-cover" />
+                          ) : (
+                            <CameraIcon className="absolute inset-0 m-auto h-4 w-4 text-white/25" aria-hidden="true" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-medium max-w-72 truncate">{cam.name}</div>
+                          <div className="mt-0.5 text-[10px] text-[hsl(var(--muted-foreground))]">{cam.code}</div>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-3 py-2.5 text-[hsl(var(--muted-foreground))]">{cam.zone}</td>
                     <td className="px-3 py-2.5 font-mono text-[11px] text-[hsl(var(--muted-foreground))] whitespace-nowrap">{cam.ipAddress}</td>
@@ -1288,6 +1357,15 @@ export default function CamerasPage() {
                   onClick={() => setEditCamera(cam)}
                 >
                   <div className="relative h-36 overflow-hidden bg-[hsl(220_18%_8%)]">
+                    {posterUrls[cam.id] && !isOffline && (
+                      <img
+                        src={posterUrls[cam.id]}
+                        onError={() => retryPoster(cam.id)}
+                        alt={`Amostra de ${cam.name}`}
+                        loading="lazy"
+                        className="absolute inset-0 h-full w-full object-cover"
+                      />
+                    )}
                     <div className={`absolute top-0 inset-x-0 h-[2.5px] ${STATUS_DOT[cam.status] ?? STATUS_DOT.offline}`} />
                     <div className="absolute top-2 left-2 z-10">
                       <span className="rounded border border-white/10 bg-black/35 px-1.5 py-px font-mono text-[9px] text-white/65">{cam.code}</span>
@@ -1297,7 +1375,7 @@ export default function CamerasPage() {
                         <span className="w-1.5 h-1.5 rounded-full bg-[hsl(var(--status-rec))] rec-pulse inline-block" />
                       </div>
                     )}
-                    <div className="absolute inset-0 flex items-center justify-center">
+                    <div className={`absolute inset-0 flex items-center justify-center ${posterUrls[cam.id] && !isOffline ? 'opacity-0' : ''}`}>
                       <CameraIcon className="h-8 w-8 text-white/25" />
                     </div>
                     {isOffline ? (
@@ -1372,8 +1450,12 @@ export default function CamerasPage() {
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
-              <div className="h-28 rounded border border-border bg-[hsl(220_18%_8%)] flex items-center justify-center">
-                <CameraIcon className="w-10 h-10 text-white/25" />
+              <div className="relative h-28 overflow-hidden rounded border border-border bg-[hsl(220_18%_8%)] flex items-center justify-center">
+                {posterUrls[liveCam.id] ? (
+                  <img src={posterUrls[liveCam.id]} onError={() => retryPoster(liveCam.id)} alt={`Amostra de ${liveCam.name}`} className="h-full w-full object-cover" />
+                ) : (
+                  <CameraIcon className="w-10 h-10 text-white/25" />
+                )}
               </div>
               <div>
                 <div className="text-sm font-semibold mb-0.5">{liveCam.name}</div>

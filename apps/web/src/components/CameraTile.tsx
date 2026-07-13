@@ -50,12 +50,10 @@ export function CameraTile({
   return (
     <motion.div
       className={`relative w-full h-full rounded-sm overflow-hidden cursor-pointer select-none
-        ${selected ? 'ring-1 ring-[hsl(var(--primary)_/_0.7)]' : ''}
+        ${selected ? 'ring-2 ring-inset ring-[hsl(var(--primary))] shadow-[inset_0_0_0_1px_hsl(var(--primary)_/_0.28)]' : ''}
         ${isAlarm   ? 'alarm-glow ring-1 ring-[hsl(var(--status-alarm)_/_0.5)]' : ''}
       `}
       style={{ background: 'hsl(var(--layer-base))', minHeight: compact ? 80 : 120 }}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
       onHoverStart={() => setHovered(true)}
       onHoverEnd={() => setHovered(false)}
       transition={{ duration: 0.12 }}
@@ -75,6 +73,17 @@ export function CameraTile({
         </div>
       )}
 
+      <button
+        type="button"
+        onClick={onClick}
+        onDoubleClick={onDoubleClick}
+        aria-label={`${camera.name}, ${isOffline ? 'offline' : 'ao vivo'}`}
+        aria-pressed={selected}
+        className="absolute inset-0 z-[15] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[hsl(var(--primary))]"
+      >
+        <span className="sr-only">Selecionar {camera.name}</span>
+      </button>
+
       <div className="absolute inset-0 bg-gradient-to-b from-black/10 via-transparent to-black/10" />
 
       {/* Offline overlay */}
@@ -91,10 +100,10 @@ export function CameraTile({
 
       {!wallMode && (
         <>
-          {/* Top-left: camera code + status badge */}
+          {/* Top-left: camera name + status badge */}
           <div className="absolute top-1.5 left-1.5 z-20 flex items-center gap-1">
-            <span className="text-[9px] text-white/60 bg-black/35 px-1.5 py-px rounded-sm">
-              {camera.code}
+            <span className="max-w-[220px] truncate rounded bg-black/65 px-2 py-1 text-[11px] font-medium text-white/95 shadow-sm backdrop-blur-[2px]">
+              {camera.name}
             </span>
             {isAlarm && (
               <span className="text-[9px] text-[hsl(var(--status-alarm))] bg-[hsl(var(--status-alarm)_/_0.18)] border border-[hsl(var(--status-alarm)_/_0.4)] px-1.5 py-px rounded-sm rec-pulse">
@@ -115,7 +124,7 @@ export function CameraTile({
 
       {/* Hover action bar */}
       <AnimatePresence>
-        {hovered && !isOffline && !wallMode && (
+        {(hovered || selected) && !isOffline && !wallMode && (
           <motion.div
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
@@ -126,6 +135,8 @@ export function CameraTile({
           >
             {camera.ptzCapable && (
               <button
+                type="button"
+                aria-label={`Abrir controle PTZ de ${camera.name}`}
                 className="w-6 h-6 flex items-center justify-center rounded text-white/50 hover:text-[hsl(var(--primary))] hover:bg-white/8 transition-colors"
                 onClick={() => onAction?.('ptz', camera)}
                 title="Controle PTZ"
@@ -134,6 +145,8 @@ export function CameraTile({
               </button>
             )}
             <button
+              type="button"
+              aria-label={`${isManualRecordingActive ? 'Parar' : 'Iniciar'} gravação manual de ${camera.name}`}
               className={`w-6 h-6 flex items-center justify-center rounded border transition-colors ${
                 isManualRecordingActive
                   ? 'border-[hsl(var(--destructive)_/_0.6)] bg-[hsl(var(--destructive)_/_0.1)] text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive)_/_0.2)]'
@@ -145,6 +158,8 @@ export function CameraTile({
               <Circle className={`w-3 h-3 ${isManualRecordingActive ? 'fill-current' : ''}`} />
             </button>
             <button
+              type="button"
+              aria-label={`Abrir reprodução de ${camera.name}`}
               className="w-6 h-6 flex items-center justify-center rounded text-white/50 hover:text-[hsl(var(--primary))] hover:bg-white/8 transition-colors"
               onClick={() => onAction?.('playback', camera)}
               title="Reprodução"
@@ -152,6 +167,8 @@ export function CameraTile({
               <PlaySquare className="w-3 h-3" />
             </button>
             <button
+              type="button"
+              aria-label={`Abrir ${camera.name} em tela cheia`}
               className="w-6 h-6 flex items-center justify-center rounded text-white/50 hover:text-[hsl(var(--primary))] hover:bg-white/8 transition-colors"
               onClick={() => onAction?.('fullscreen', camera)}
               title="Tela cheia"
@@ -159,6 +176,8 @@ export function CameraTile({
               <Maximize2 className="w-3 h-3" />
             </button>
             <button
+              type="button"
+              aria-label={`Abrir detalhes de ${camera.name}`}
               className="w-6 h-6 flex items-center justify-center rounded text-white/50 hover:text-[hsl(var(--primary))] hover:bg-white/8 transition-colors"
               onClick={() => onAction?.('info', camera)}
               title="Detalhes da câmera"

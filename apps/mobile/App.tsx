@@ -2,8 +2,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import { Alert, SafeAreaView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, AppState, BackHandler, Image, SafeAreaView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { DEFAULT_API_URL, TOP_SAFE } from './src/config';
 import { BottomTabs } from './src/components/BottomTabs';
@@ -15,17 +15,25 @@ import { MosaicScreen } from './src/screens/MosaicScreen';
 import { PlaybackScreen } from './src/screens/PlaybackScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { request, normalizeServerUrl, setUnauthorizedHandler } from './src/services/api';
-import { fetchBranding } from './src/services/branding';
-import { requestCachedStreamUrls } from './src/services/stream-urls-cache';
-import { saveToGallery, addClip, listClips, removeClip, type SavedClip } from './src/services/clips';
+import { authenticatedMediaUrl, isSecureMediaUrl } from './src/services/media-urls';
+import { fetchBranding, isLightColor } from './src/services/branding';
+import { clearStreamUrlsCache, requestCachedStreamUrls } from './src/services/stream-urls-cache';
+import {
+  saveToGallery, addClip, listClips, removeClip, createClipThumbnail,
+  listPendingClips, savePendingClip, removePendingClip,
+  type PendingClip, type SavedClip,
+} from './src/services/clips';
 import { cleanApiUrl, clearStoredSession, loadStoredSession, saveStoredSession } from './src/services/sessionStore';
 import { registerForPush, subscribeToNotificationTaps, unregisterFromPush } from './src/services/push';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { useAlarms } from './src/hooks/useAlarms';
 import { useLiveDetections } from './src/hooks/useLiveDetections';
 import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
-import { LibraryProvider } from './src/state/LibraryProvider';
-import type { ActivePlayback, Camera, Direction, Recording, Session, StreamUrls, Tab, User } from './src/types';
+import { LibraryProvider, useLibrary } from './src/state/LibraryProvider';
+import { localDateKey, localDayIsoRange } from './src/utils/format';
+import type { ActivePlayback, Camera, Direction, MobileCapabilities, Recording, Session, StreamUrls, Tab, User } from './src/types';
+
+const RECORDINGS_PAGE_SIZE = 50;
 
 export default function App() {
   return (
@@ -43,6 +51,7 @@ export default function App() {
 
 function AppInner() {
   const { theme, applyBranding } = useTheme();
+  const { setScope: setLibraryScope } = useLibrary();
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const [session, setSession] = useState<Session | null>(null);
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
@@ -54,6 +63,9 @@ function AppInner() {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
   const [liveCamera, setLiveCamera] = useState<Camera | null>(null);
+  const [highlightedAlarmId, setHighlightedAlarmId] = useState<string | null>(null);
+  const [notificationsMuted, setNotificationsMuted] = useState(false);
+  const [canManageAlarms, setCanManageAlarms] = useState(false);
   const [streamUrls, setStreamUrls] = useState<Record<string, string | null>>({});
   const [streamWhep, setStreamWhep] = useState<Record<string, string | null>>({});
   const [streamPosters, setStreamPosters] = useState<Record<string, string | null>>({});
@@ -61,19 +73,55 @@ function AppInner() {
   // vivo aberta. Buscada sob demanda quando o usuário liga o modo HD.
   const [hdUrl, setHdUrl] = useState<string | null>(null);
   const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [recordingsTotal, setRecordingsTotal] = useState(0);
+  const [recordingsLoading, setRecordingsLoading] = useState(false);
+  const [recordingsLoadingMore, setRecordingsLoadingMore] = useState(false);
+  const [recordingsError, setRecordingsError] = useState<string | null>(null);
   const [activePlayback, setActivePlayback] = useState<ActivePlayback | null>(null);
   const [ptzActive, setPtzActive] = useState<Direction | null>(null);
   const [ptzFeedback, setPtzFeedback] = useState<string | null>(null);
   const [recordingActive, setRecordingActive] = useState(false);
+  const [recordingBusy, setRecordingBusy] = useState(false);
   // Id do clipe em gravação no servidor (gravação "no celular": o servidor grava
   // o trecho EXATO start→stop e o app baixa o arquivo ao parar).
   const [clipId, setClipId] = useState<string | null>(null);
   // "Minhas gravações" — índice local dos clipes gravados pelo app.
   const [savedClips, setSavedClips] = useState<SavedClip[]>([]);
-  const [recordingDate, setRecordingDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [recordingDate, setRecordingDate] = useState(() => localDateKey());
   const [lastSyncError, setLastSyncError] = useState<string | null>(null);
-  const previewLimit = 8;
+  const [capabilities, setCapabilities] = useState<MobileCapabilities>({ liveView: true, playback: true, exportEvidence: false, alarmAck: false });
+  const [downloadingIds, setDownloadingIds] = useState<string[]>([]);
   const selectedCamera = cameras.find((camera) => camera.id === selectedCameraId) ?? cameras[0] ?? null;
+  const sessionScope = session ? `${session.apiUrl}|${session.user.id}` : 'anonymous';
+  const sessionTokenRef = useRef<string | null>(null);
+  const recordingDateRef = useRef(recordingDate);
+  const recordingDateCameraRef = useRef<string | null>(null);
+  const recordingsRef = useRef<Recording[]>([]);
+  const clipPhaseRef = useRef<'idle' | 'starting' | 'recording' | 'stopping'>('idle');
+  const clipIdRef = useRef<string | null>(null);
+  const clipCameraRef = useRef<Camera | null>(null);
+  const clipStartedAtRef = useRef<string | null>(null);
+  const clipStartPromiseRef = useRef<Promise<void> | null>(null);
+  const clipStopPromiseRef = useRef<Promise<void> | null>(null);
+  const clipCancelRequestedRef = useRef(false);
+  const clipFinalizeSilentRef = useRef(false);
+  const recordingRequestRef = useRef(0);
+  const playbackRequestRef = useRef(0);
+  const hdRequestRef = useRef(0);
+  const brandingRequestRef = useRef(0);
+  const posterRequestRef = useRef(0);
+  const lastThumbnailRefreshRef = useRef(0);
+  const camerasRequestRef = useRef(0);
+  const streamRequestRef = useRef(new Map<string, number>());
+  const downloadingRef = useRef(new Set<string>());
+  const pendingClipDownloadsRef = useRef(new Set<string>());
+  const appStateRef = useRef(AppState.currentState);
+  const liveCameraIdRef = useRef<string | null>(null);
+  const selectedCameraIdRef = useRef<string | null>(null);
+  liveCameraIdRef.current = liveCamera?.id ?? null;
+  selectedCameraIdRef.current = selectedCameraId;
+  recordingDateRef.current = recordingDate;
+  recordingsRef.current = recordings;
 
   const { alarms, openAlarmCount, reload: reloadAlarms, ack: ackAlarm, resolve: resolveAlarm } = useAlarms(session);
   const liveDetections = useLiveDetections(session, liveCamera != null, liveCamera?.id ?? null);
@@ -88,13 +136,17 @@ function AppInner() {
     // valendo silenciosamente (gravação/PTZ bloqueados quando for o caso).
     return messages.slice(0, 3);
   })();
+  const statusBarStyle = isLightColor(theme.bg) ? 'dark' : 'light';
 
   // Busca a marca (logo/nome/cores) do servidor e aplica no tema. Silencioso:
   // se falhar (offline, sem branding configurado), mantém o tema padrão.
   const loadBranding = (url: string) => {
     if (!url) return;
+    const generation = ++brandingRequestRef.current;
     fetchBranding(url)
-      .then(applyBranding)
+      .then((next) => {
+        if (brandingRequestRef.current === generation) applyBranding(next);
+      })
       .catch(() => undefined);
   };
 
@@ -110,6 +162,7 @@ function AppInner() {
         if (normalized.apiUrl !== stored.apiUrl) {
           void saveStoredSession(normalized);
         }
+        sessionTokenRef.current = normalized.token;
         setSession(normalized);
         setApiUrl(normalized.apiUrl);
         loadBranding(normalized.apiUrl);
@@ -118,21 +171,69 @@ function AppInner() {
   }, []);
 
   useEffect(() => {
+    sessionTokenRef.current = session?.token ?? null;
+    setLibraryScope(sessionScope);
+    if (!session) {
+      setSavedClips([]);
+      return;
+    }
+    let cancelled = false;
+    void listClips(sessionScope).then((items) => {
+      if (!cancelled && sessionTokenRef.current === session.token) setSavedClips(items);
+    });
+    void resumePendingClips(session);
+    return () => { cancelled = true; };
+  }, [sessionScope, session?.token, setLibraryScope]);
+
+  useEffect(() => {
     if (session) void loadAll();
   }, [session?.token]);
+
+  useEffect(() => {
+    if (!session) { setCanManageAlarms(false); return; }
+    const token = session.token;
+    void request<{ permissions?: Partial<MobileCapabilities> }>(session.apiUrl, '/role-permissions/me', token)
+      .then((data) => {
+        if (sessionTokenRef.current !== token) return;
+        const next = {
+          liveView: data.permissions?.liveView !== false,
+          playback: data.permissions?.playback !== false,
+          exportEvidence: data.permissions?.exportEvidence === true,
+          alarmAck: data.permissions?.alarmAck === true,
+        };
+        setCapabilities(next);
+        setCanManageAlarms(next.alarmAck);
+      })
+      .catch(() => {
+        if (sessionTokenRef.current === token) {
+          const fallback = { liveView: true, playback: true, exportEvidence: false, alarmAck: false };
+          setCapabilities(fallback);
+          setCanManageAlarms(false);
+        }
+      });
+  }, [session?.token, session?.apiUrl]);
 
   // Push de alarmes + sessão expirada. Ao autenticar: registra o handler de 401
   // (logout gracioso quando o token morre) e o aparelho para push; ao tocar na
   // notificação, abre Alarmes e recarrega. Falha de push nunca quebra o app.
   useEffect(() => {
     if (!session) return;
-    setUnauthorizedHandler(() => { void logout(); });
-    void registerForPush(session.apiUrl, session.token);
-    const unsubscribe = subscribeToNotificationTaps(() => {
+    const controller = new AbortController();
+    let disposed = false;
+    setUnauthorizedHandler((requestToken) => {
+      if (requestToken === sessionTokenRef.current) void logout();
+    });
+    void registerForPush(session.apiUrl, session.token, controller.signal).then((expoToken) => {
+      if (disposed && expoToken) void unregisterFromPush(session.apiUrl, session.token, expoToken);
+    });
+    const unsubscribe = subscribeToNotificationTaps((data) => {
+      setHighlightedAlarmId(data.alarmId ?? null);
       setTab('alarmes');
       void reloadAlarms();
     });
     return () => {
+      disposed = true;
+      controller.abort();
       setUnauthorizedHandler(null);
       unsubscribe();
     };
@@ -143,37 +244,51 @@ function AppInner() {
   useEffect(() => {
     if (liveCamera) {
       ScreenOrientation.unlockAsync().catch(() => undefined);
+      void loadStream(liveCamera.id, 'selected', true);
+      void loadNotificationMute(liveCamera.id);
     } else {
       ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => undefined);
     }
   }, [liveCamera]);
 
   useEffect(() => {
-    if (selectedCamera && session) {
-      void loadStream(selectedCamera.id);
-      void loadRecordings(selectedCamera.id, recordingDate);
+    if (selectedCamera && session && capabilities.playback) {
+      if (recordingDateCameraRef.current !== selectedCamera.id) {
+        recordingDateCameraRef.current = selectedCamera.id;
+        void loadLatestRecordingDate(selectedCamera.id);
+      } else {
+        void loadRecordings(selectedCamera.id, recordingDate);
+      }
+    } else if (!capabilities.playback) {
+      recordingRequestRef.current += 1;
+      setRecordings([]);
+      setRecordingsTotal(0);
+      setRecordingsLoading(false);
+      setRecordingsLoadingMore(false);
+      setRecordingsError('Você não possui permissão para visualizar gravações.');
+      playbackRequestRef.current += 1;
+      setActivePlayback(null);
     }
-  }, [selectedCamera?.id, session?.token, recordingDate]);
+  }, [selectedCamera?.id, session?.token, recordingDate, capabilities.playback]);
 
-  // Ao trocar/sair do ao vivo, zera indicador de gravação e o modo HD (a URL de
-  // máxima qualidade é por câmera; não vaza entre telas).
+  // A URL de máxima qualidade é por câmera; não vaza entre telas.
   useEffect(() => {
     setHdUrl(null);
-    if (!liveCamera) { setRecordingActive(false); setClipId(null); }
   }, [liveCamera?.id]);
-
-  // Carrega "Minhas gravações" (índice local) ao iniciar.
-  useEffect(() => { void listClips().then(setSavedClips); }, []);
 
   // Máxima qualidade: busca o HLS passthrough (H.265) sob demanda.
   const loadHdStream = async (cameraId: string) => {
     if (!session) return;
+    const token = session.token;
+    const generation = ++hdRequestRef.current;
     try {
       const data = await requestCachedStreamUrls<StreamUrls>(session.apiUrl, cameraId, session.token, undefined, 'original');
-      const hls = normalizeServerUrl(data.protocols?.hlsUrl, session.apiUrl);
+      if (sessionTokenRef.current !== token || hdRequestRef.current !== generation || liveCameraIdRef.current !== cameraId) return;
+      const hls = authenticatedMediaUrl(data.protocols?.hlsUrl, session.apiUrl, data.streamToken);
       if (!hls) throw new Error('sem HLS');
       setHdUrl(hls);
     } catch {
+      if (sessionTokenRef.current !== token || hdRequestRef.current !== generation || liveCameraIdRef.current !== cameraId) return;
       setHdUrl(null);
       Alert.alert('Máxima qualidade', 'Não foi possível abrir a máxima qualidade desta câmera agora.');
     }
@@ -190,6 +305,8 @@ function AppInner() {
       });
       const nextSession = { apiUrl: nextApiUrl, token: data.accessToken, user: data.user };
       await saveStoredSession(nextSession);
+      clearStreamUrlsCache();
+      sessionTokenRef.current = nextSession.token;
       setSession(nextSession);
       setPassword('');
       // Aplica a marca da instalação que acabou de logar (caso o servidor não
@@ -228,29 +345,63 @@ function AppInner() {
   };
 
   const logout = async () => {
-    if (session) await unregisterFromPush(session.apiUrl, session.token);
-    await clearStoredSession();
+    const previous = session;
+    void stopActiveClip(true);
+    sessionTokenRef.current = null;
+    setUnauthorizedHandler(null);
+    clearStreamUrlsCache();
     setSession(null);
     setCameras([]);
+    setSelectedCameraId(null);
+    recordingDateCameraRef.current = null;
     setRecordings([]);
+    setRecordingsTotal(0);
+    setRecordingsLoading(false);
+    setRecordingsLoadingMore(false);
+    setRecordingsError(null);
     setStreamUrls({});
+    setStreamWhep({});
+    setStreamPosters({});
+    setHdUrl(null);
+    setActivePlayback(null);
+    setNotificationsMuted(false);
+    setCanManageAlarms(false);
+    setCapabilities({ liveView: true, playback: true, exportEvidence: false, alarmAck: false });
+    downloadingRef.current.clear();
+    pendingClipDownloadsRef.current.clear();
+    setDownloadingIds([]);
+    recordingRequestRef.current += 1;
+    playbackRequestRef.current += 1;
+    hdRequestRef.current += 1;
+    posterRequestRef.current += 1;
+    camerasRequestRef.current += 1;
+    streamRequestRef.current.clear();
+    setHighlightedAlarmId(null);
     setLiveCamera(null);
     setTab('central');
+    setRefreshing(false);
+    setLastSyncError(null);
+    await clearStoredSession();
+    if (previous) void unregisterFromPush(previous.apiUrl, previous.token);
   };
 
-  const loadAll = async () => {
+  const loadAll = async (quiet = false) => {
     if (!session) return;
-    setRefreshing(true);
+    const token = session.token;
+    const generation = ++camerasRequestRef.current;
+    if (!quiet) setRefreshing(true);
     try {
       const data = await request<Camera[]>(session.apiUrl, '/cameras', session.token);
+      if (sessionTokenRef.current !== token || camerasRequestRef.current !== generation) return;
       setCameras(data);
       setLastSyncError(null);
-      setSelectedCameraId((current) => current ?? data[0]?.id ?? null);
+      setSelectedCameraId((current) => (current && data.some((camera) => camera.id === current) ? current : data[0]?.id ?? null));
       void reloadAlarms();
-      void Promise.all(data.slice(0, previewLimit).map((camera) => loadStream(camera.id)));
-      // Posters para a grade inteira (barato: só token + 1 frame com cache).
-      void loadAllPosters(data);
+      // Status sonda a cada 30s; posters têm renovação própria (3,5 min) para
+      // não forçar dezenas de frames a cada ciclo silencioso.
+      if (!quiet) void loadAllPosters(data);
     } catch (error) {
+      if (sessionTokenRef.current !== token || camerasRequestRef.current !== generation) return;
       const status = (error as { status?: number })?.status;
       const message = error instanceof Error ? error.message : 'Não foi possível carregar câmeras.';
       const isAuthError = status === 401 || /\b401\b|unauthorized|não autorizado/i.test(message);
@@ -258,23 +409,28 @@ function AppInner() {
       if (isAuthError) {
         await logout();
         Alert.alert('Sessão expirada', 'Sua sessão expirou. Entre novamente para continuar.');
-      } else {
+      } else if (!quiet) {
         Alert.alert('Falha ao carregar', message);
       }
     } finally {
-      setRefreshing(false);
+      if (!quiet && sessionTokenRef.current === token && camerasRequestRef.current === generation) setRefreshing(false);
     }
   };
 
-  const loadStream = async (cameraId: string) => {
+  const loadStream = async (cameraId: string, viewMode: 'selected' | 'grid' = 'selected', force = false) => {
     if (!session) return;
+    const token = session.token;
+    const generation = (streamRequestRef.current.get(cameraId) ?? 0) + 1;
+    streamRequestRef.current.set(cameraId, generation);
     try {
-      const data = await requestCachedStreamUrls<StreamUrls>(session.apiUrl, cameraId, session.token);
-      const hlsUrl = normalizeServerUrl(data.protocols?.hlsUrl, session.apiUrl);
+      if (force) clearStreamUrlsCache(cameraId);
+      const data = await requestCachedStreamUrls<StreamUrls>(session.apiUrl, cameraId, session.token, undefined, viewMode);
+      if (sessionTokenRef.current !== token || streamRequestRef.current.get(cameraId) !== generation) return;
+      const hlsUrl = authenticatedMediaUrl(data.protocols?.hlsUrl, session.apiUrl, data.streamToken);
       const whepRaw =
         data.protocols?.whepUrl
         ?? (data.protocols?.webrtcUrl ? `${data.protocols.webrtcUrl.replace(/\/+$/, '')}/whep` : null);
-      const whepUrl = normalizeServerUrl(whepRaw, session.apiUrl);
+      const whepUrl = authenticatedMediaUrl(whepRaw, session.apiUrl, data.streamToken);
       // Poster montado a partir do session.apiUrl (alcançável pelo celular), não
       // do host que a API devolve (pode ser interno do Docker atrás do nginx).
       const posterUrl = data.streamToken
@@ -283,7 +439,11 @@ function AppInner() {
       setStreamUrls((current) => ({ ...current, [cameraId]: hlsUrl }));
       setStreamWhep((current) => ({ ...current, [cameraId]: whepUrl }));
       setStreamPosters((current) => ({ ...current, [cameraId]: posterUrl }));
+      if (session.apiUrl.startsWith('https://') && ((hlsUrl && !isSecureMediaUrl(hlsUrl)) || (whepUrl && !isSecureMediaUrl(whepUrl)))) {
+        setLastSyncError('A mídia ao vivo precisa ser publicada por HTTPS nesta instalação.');
+      }
     } catch {
+      if (sessionTokenRef.current !== token || streamRequestRef.current.get(cameraId) !== generation) return;
       setStreamUrls((current) => ({ ...current, [cameraId]: null }));
       setStreamWhep((current) => ({ ...current, [cameraId]: null }));
       setStreamPosters((current) => ({ ...current, [cameraId]: null }));
@@ -296,59 +456,227 @@ function AppInner() {
   // frames ffmpeg de uma vez no servidor. Best-effort: falha = tiles com gradiente.
   const loadAllPosters = async (cams: Camera[]) => {
     if (!session || cams.length === 0) return;
+    const onlineCameras = cams.filter((camera) => camera.status?.toUpperCase() === 'ONLINE');
+    const onlineIds = new Set(onlineCameras.map((camera) => camera.id));
+    setStreamPosters((current) => {
+      const next = { ...current };
+      for (const camera of cams) {
+        if (!onlineIds.has(camera.id)) next[camera.id] = null;
+      }
+      return next;
+    });
+    if (!onlineCameras.length) return;
+    const token = session.token;
+    const generation = ++posterRequestRef.current;
     try {
       const { items } = await request<{ items: { cameraId: string; streamToken: string }[] }>(
         session.apiUrl,
         '/camera-stream/poster-tokens',
         session.token,
-        { method: 'POST', body: JSON.stringify({ cameraIds: cams.map((c) => c.id) }) },
+        { method: 'POST', body: JSON.stringify({ cameraIds: onlineCameras.map((c) => c.id) }) },
       );
       // Monta a URL do poster a partir do session.apiUrl (SEMPRE alcançável pelo
       // celular). NÃO usa o host que a API devolve — atrás do nginx/Docker ele
       // pode vir interno (ex.: vms-api:3000), que o celular não acessa → tile preto.
       const apiBase = session.apiUrl.replace(/\/+$/, '');
-      const CHUNK = 6;
-      for (let i = 0; i < items.length; i += CHUNK) {
-        const slice = items.slice(i, i + CHUNK);
-        setStreamPosters((current) => {
-          const next = { ...current };
-          for (const it of slice) {
-            next[it.cameraId] = `${apiBase}/camera-stream/${encodeURIComponent(it.cameraId)}/poster?token=${encodeURIComponent(it.streamToken)}&v=${Date.now()}`;
-          }
-          return next;
-        });
-        if (i + CHUNK < items.length) await new Promise((resolve) => setTimeout(resolve, 120));
-      }
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < items.length) {
+          const item = items[cursor++];
+          if (sessionTokenRef.current !== token || posterRequestRef.current !== generation) return;
+          const url = `${apiBase}/camera-stream/${encodeURIComponent(item.cameraId)}/poster?token=${encodeURIComponent(item.streamToken)}&v=${Date.now()}`;
+          try { await Image.prefetch(url); } catch { /* CameraTile oferece retry/token novo. */ }
+          if (sessionTokenRef.current !== token || posterRequestRef.current !== generation) return;
+          setStreamPosters((current) => ({ ...current, [item.cameraId]: url }));
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(3, items.length) }, () => worker()));
     } catch {
       // sem posters: os tiles caem no gradiente placeholder.
     }
   };
 
-  const loadRecordings = async (cameraId: string, date = recordingDate) => {
+  const refreshPoster = async (cameraId: string): Promise<string | null> => {
+    if (!session) return null;
+    const token = session.token;
+    try {
+      const { items } = await request<{ items: { cameraId: string; streamToken: string }[] }>(
+        session.apiUrl,
+        '/camera-stream/poster-tokens',
+        token,
+        { method: 'POST', body: JSON.stringify({ cameraIds: [cameraId] }) },
+      );
+      if (sessionTokenRef.current !== token) return null;
+      const item = items[0];
+      if (!item) return null;
+      const url = `${session.apiUrl.replace(/\/+$/, '')}/camera-stream/${encodeURIComponent(cameraId)}/poster?token=${encodeURIComponent(item.streamToken)}&v=${Date.now()}`;
+      try { await Image.prefetch(url); } catch { /* o componente ainda fará retry */ }
+      if (sessionTokenRef.current === token) {
+        setStreamPosters((current) => ({ ...current, [cameraId]: url }));
+        return url;
+      }
+      return null;
+    } catch { return null; }
+  };
+
+  const applyThumbnailTokens = async (items: Recording[], generation?: number) => {
+    if (!session || !items.length) return;
+    const token = session.token;
+    const thumbnailTokens = await request<Record<string, string>>(
+      session.apiUrl,
+      '/recordings/thumbnail-tokens',
+      token,
+      { method: 'POST', body: JSON.stringify({ recordingIds: items.map((item) => item.id) }) },
+    );
+    if (sessionTokenRef.current !== token || (generation != null && recordingRequestRef.current !== generation)) return;
+    const apiBase = session.apiUrl.replace(/\/+$/, '');
+    setRecordings((current) => current.map((item) => {
+      const thumbnailToken = thumbnailTokens[item.id];
+      return thumbnailToken ? {
+        ...item,
+        thumbnailUrl: `${apiBase}/recordings/${encodeURIComponent(item.id)}/thumbnail?token=${encodeURIComponent(thumbnailToken)}&v=${Date.now()}`,
+      } : item;
+    }));
+  };
+
+  const refreshExpiredThumbnails = () => {
+    const now = Date.now();
+    if (now - lastThumbnailRefreshRef.current < 5_000) return;
+    lastThumbnailRefreshRef.current = now;
+    if (recordingsRef.current.length) {
+      void applyThumbnailTokens(recordingsRef.current).catch(() => undefined);
+    }
+  };
+
+  const loadRecordings = async (cameraId: string, date = recordingDate, append = false) => {
     if (!session) return;
+    const token = session.token;
+    const generation = ++recordingRequestRef.current;
+    const offset = append ? recordingsRef.current.length : 0;
+    if (append) setRecordingsLoadingMore(true);
+    else {
+      setRecordingsLoading(true);
+      setRecordingsError(null);
+      setRecordings([]);
+      setRecordingsTotal(0);
+    }
+    try {
+      const { from, to } = localDayIsoRange(date);
+      const data = await request<{ items: Recording[]; total?: number }>(
+        session.apiUrl,
+        `/recordings?cameraId=${encodeURIComponent(cameraId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${RECORDINGS_PAGE_SIZE}&offset=${offset}&sort=desc`,
+        token,
+      );
+      if (
+        sessionTokenRef.current !== token
+        || recordingRequestRef.current !== generation
+        || selectedCameraIdRef.current !== cameraId
+        || recordingDateRef.current !== date
+      ) return;
+      const items = Array.isArray(data.items) ? data.items.map((item) => ({ ...item, thumbnailUrl: null })) : [];
+      setRecordings((current) => append
+        ? [...current, ...items.filter((item) => !current.some((existing) => existing.id === item.id))]
+        : items);
+      setRecordingsTotal(Number.isFinite(data.total)
+        ? Number(data.total)
+        : offset + items.length + (items.length === RECORDINGS_PAGE_SIZE ? 1 : 0));
+      setRecordingsError(null);
+      if (!append) setActivePlayback(null);
+      try { await applyThumbnailTokens(items, generation); } catch { /* lista permanece funcional */ }
+    } catch (error) {
+      if (sessionTokenRef.current !== token || recordingRequestRef.current !== generation) return;
+      const status = (error as { status?: number })?.status;
+      setRecordingsError(status === 403
+        ? 'Você não possui permissão para visualizar estas gravações.'
+        : error instanceof Error ? error.message : 'Não foi possível carregar as gravações.');
+    } finally {
+      if (recordingRequestRef.current === generation) {
+        setRecordingsLoading(false);
+        setRecordingsLoadingMore(false);
+      }
+    }
+  };
+
+  const loadMoreRecordings = () => {
+    if (!selectedCamera || recordingsLoading || recordingsLoadingMore || recordingsRef.current.length >= recordingsTotal) return;
+    void loadRecordings(selectedCamera.id, recordingDateRef.current, true);
+  };
+
+  const loadLatestRecordingDate = async (cameraId: string) => {
+    if (!session) return;
+    const token = session.token;
+    const generation = ++recordingRequestRef.current;
+    setRecordingsLoading(true);
+    setRecordingsError(null);
+    setRecordings([]);
+    setRecordingsTotal(0);
+    setActivePlayback(null);
     try {
       const data = await request<{ items: Recording[] }>(
         session.apiUrl,
-        `/recordings?cameraId=${encodeURIComponent(cameraId)}&date=${date}&limit=80&sort=desc`,
+        `/recordings?cameraId=${encodeURIComponent(cameraId)}&limit=1&sort=desc`,
         session.token,
       );
-      setRecordings(Array.isArray(data.items) ? data.items : []);
-      setActivePlayback(null);
+      if (sessionTokenRef.current !== token || recordingRequestRef.current !== generation || recordingDateCameraRef.current !== cameraId) return;
+      const latest = Array.isArray(data.items) ? data.items[0] : null;
+      const latestDate = latest?.startedAt ? localDateKey(new Date(latest.startedAt)) : localDateKey();
+      if (recordingDateRef.current === latestDate) {
+        await loadRecordings(cameraId, latestDate);
+      } else {
+        setRecordingDate(latestDate);
+      }
+    } catch (error) {
+      if (sessionTokenRef.current !== token || recordingRequestRef.current !== generation || recordingDateCameraRef.current !== cameraId) return;
+      const status = (error as { status?: number })?.status;
+      setRecordingsError(status === 403
+        ? 'Você não possui permissão para visualizar estas gravações.'
+        : error instanceof Error ? error.message : 'Não foi possível localizar a gravação mais recente.');
+    } finally {
+      if (recordingRequestRef.current === generation) setRecordingsLoading(false);
+    }
+  };
+
+  // Silenciamento de notificações por câmera (por usuário). Busca o estado ao
+  // abrir a câmera e alterna com o botão "Alertas".
+  const loadNotificationMute = async (cameraId: string) => {
+    if (!session) return;
+    const token = session.token;
+    try {
+      const r = await request<{ muted: boolean }>(session.apiUrl, `/notifications/camera/${cameraId}/mute`, session.token);
+      if (sessionTokenRef.current !== token || liveCameraIdRef.current !== cameraId) return;
+      setNotificationsMuted(Boolean(r?.muted));
     } catch {
-      setRecordings([]);
-      setActivePlayback(null);
+      if (sessionTokenRef.current !== token || liveCameraIdRef.current !== cameraId) return;
+      setNotificationsMuted(false);
+    }
+  };
+
+  const toggleNotifications = async (camera: Camera) => {
+    if (!session) return;
+    const next = !notificationsMuted;
+    setNotificationsMuted(next); // otimista
+    try {
+      await request(session.apiUrl, `/notifications/camera/${camera.id}/mute`, session.token, {
+        method: 'POST',
+        body: JSON.stringify({ muted: next }),
+      });
+    } catch {
+      if (liveCameraIdRef.current === camera.id) setNotificationsMuted(!next); // reverte em erro
     }
   };
 
   const shiftRecordingDate = (days: number) => {
+    playbackRequestRef.current += 1;
     setRecordingDate((current) => {
       const next = new Date(`${current}T12:00:00`);
       next.setDate(next.getDate() + days);
-      const nextKey = next.toISOString().slice(0, 10);
-      const todayKey = new Date().toISOString().slice(0, 10);
+      const nextKey = localDateKey(next);
+      const todayKey = localDateKey();
       return nextKey > todayKey ? todayKey : nextKey;
     });
     setActivePlayback(null);
+    setRecordings([]);
+    setRecordingsError(null);
   };
 
   const sendPtz = async (direction: Direction) => {
@@ -379,146 +707,417 @@ function AppInner() {
     }
   };
 
-  // Botão Gravar (SÓ celular): grava no servidor o trecho EXATO start→stop e,
-  // ao parar, baixa o arquivo pro aparelho (galeria/arquivos). Sem opção de
-  // "gravar no servidor" — o app é dedicado à gravação no celular.
-  const toggleRecording = async (camera: Camera) => {
-    // Clipe no celular = salvar o que o usuário JÁ está vendo (como a Foto).
-    // Não depende de canRecord (permissão de gravação do NVR) — senão o botão
-    // fica morto para usuários VIEWER dos clientes.
-    if (!session) return;
-    if (recordingActive) {
-      await stopClip(camera);
-    } else {
-      await startClip(camera);
+  const resetClipState = () => {
+    clipPhaseRef.current = 'idle';
+    clipIdRef.current = null;
+    clipCameraRef.current = null;
+    clipStartedAtRef.current = null;
+    clipCancelRequestedRef.current = false;
+    clipFinalizeSilentRef.current = false;
+    setClipId(null);
+    setRecordingActive(false);
+    setRecordingBusy(false);
+  };
+
+  /**
+   * Baixa um clipe já encerrado e persistido na fila local. O arquivo usa nome
+   * determinístico para que retries não criem órfãos ou cópias duplicadas.
+   */
+  const downloadPendingClip = async (currentSession: Session, pending: PendingClip, silent = false): Promise<boolean> => {
+    if (pendingClipDownloadsRef.current.has(pending.id)) return false;
+    pendingClipDownloadsRef.current.add(pending.id);
+    const scope = `${currentSession.apiUrl}|${currentSession.user.id}`;
+    const safeId = pending.id.replace(/[^a-zA-Z0-9_-]/g, '-');
+    const target = `${FileSystem.documentDirectory}clip-${safeId}.mp4`;
+    try {
+      await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => undefined);
+      const url = `${currentSession.apiUrl.replace(/\/+$/, '')}/camera-stream/clip/${encodeURIComponent(pending.id)}/download`;
+      const result = await FileSystem.downloadAsync(url, target, {
+        headers: { Authorization: `Bearer ${currentSession.token}` },
+      });
+      if (result.status && result.status >= 400) throw new Error(`Falha ao baixar o clipe (HTTP ${result.status}).`);
+      const thumbnailUri = await createClipThumbnail(result.uri, safeId);
+      let savedToGallery = false;
+      try { savedToGallery = await saveToGallery(result.uri); } catch { /* o clipe local continua válido */ }
+      const next = await addClip(scope, {
+        id: pending.id,
+        cameraId: pending.cameraId,
+        cameraName: pending.cameraName,
+        uri: result.uri,
+        thumbnailUri,
+        createdAt: pending.createdAt,
+      });
+      await removePendingClip(scope, pending.id);
+      if (sessionTokenRef.current === currentSession.token) setSavedClips(next);
+      if (!silent && sessionTokenRef.current === currentSession.token) {
+        Alert.alert('Gravação salva', savedToGallery
+          ? 'Clipe salvo na galeria e em "Minhas gravações".'
+          : 'Clipe salvo em "Minhas gravações". A galeria não concedeu permissão.');
+      }
+      return true;
+    } catch (error) {
+      await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => undefined);
+      if (!silent && sessionTokenRef.current === currentSession.token) {
+        Alert.alert(
+          'Gravação pendente',
+          `${error instanceof Error ? error.message : 'Não foi possível baixar o clipe.'}\nO app tentará novamente quando voltar ao primeiro plano.`,
+        );
+      }
+      return false;
+    } finally {
+      pendingClipDownloadsRef.current.delete(pending.id);
     }
+  };
+
+  const resumePendingClips = async (currentSession: Session) => {
+    if (AppState.currentState !== 'active') return;
+    const scope = `${currentSession.apiUrl}|${currentSession.user.id}`;
+    const pending = await listPendingClips(scope);
+    for (const item of pending) {
+      if (AppState.currentState !== 'active' || sessionTokenRef.current !== currentSession.token) return;
+      if (item.id === clipIdRef.current && clipStopPromiseRef.current) {
+        await clipStopPromiseRef.current;
+        continue;
+      }
+      let ready = item;
+      if (item.status === 'recording') {
+        try {
+          await request(currentSession.apiUrl, `/camera-stream/clip/${encodeURIComponent(item.id)}/stop`, currentSession.token, {
+            method: 'POST', body: JSON.stringify({}),
+          });
+          ready = { ...item, status: 'stopped' };
+          await savePendingClip(scope, ready);
+        } catch {
+          // Mantém como recording para a próxima retomada; não tenta baixar um
+          // arquivo que o servidor ainda pode estar escrevendo.
+          continue;
+        }
+      }
+      await downloadPendingClip(currentSession, ready, true);
+    }
+  };
+
+  /** Encerra, persiste e indexa um clipe. A Promise compartilhada impede stop duplo. */
+  const finalizeClip = async (camera: Camera, id: string, silent = false) => {
+    if (clipStopPromiseRef.current) return clipStopPromiseRef.current;
+    if (!session) { resetClipState(); return; }
+    const currentSession = session;
+    const scope = `${currentSession.apiUrl}|${currentSession.user.id}`;
+    clipPhaseRef.current = 'stopping';
+    setRecordingBusy(true);
+    setRecordingActive(false);
+
+    const run = (async () => {
+      try {
+        await request(currentSession.apiUrl, `/camera-stream/clip/${id}/stop`, currentSession.token, {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+        const pending: PendingClip = {
+          id,
+          cameraId: camera.id,
+          cameraName: camera.name,
+          createdAt: clipStartedAtRef.current ?? new Date().toISOString(),
+          status: 'stopped',
+        };
+        await savePendingClip(scope, pending);
+        // Em background/logout, termina o processo do servidor e deixa a etapa
+        // pesada de download/thumbnail para o próximo foreground.
+        if (AppState.currentState === 'active' && sessionTokenRef.current === currentSession.token) {
+          await downloadPendingClip(currentSession, pending, silent);
+        }
+      } catch (error) {
+        if (!silent) Alert.alert('Gravação', error instanceof Error ? error.message : 'Não foi possível salvar o clipe.');
+      } finally {
+        clipStopPromiseRef.current = null;
+        resetClipState();
+      }
+    })();
+    clipStopPromiseRef.current = run;
+    return run;
   };
 
   const startClip = async (camera: Camera) => {
-    if (!session) return;
-    setRecordingActive(true); // otimista
-    try {
-      const data = await request<{ clipId: string }>(
-        session.apiUrl,
-        `/camera-stream/${camera.id}/clip/start`,
-        session.token,
-        { method: 'POST', body: JSON.stringify({}) },
-      );
-      setClipId(data.clipId);
-    } catch (error) {
-      setRecordingActive(false);
-      setClipId(null);
-      Alert.alert('Gravação', error instanceof Error ? error.message : 'Não foi possível iniciar a gravação.');
-    }
+    if (!session || clipPhaseRef.current !== 'idle') return;
+    const currentSession = session;
+    clipPhaseRef.current = 'starting';
+    clipCameraRef.current = camera;
+    clipCancelRequestedRef.current = false;
+    setRecordingBusy(true);
+
+    const run = (async () => {
+      try {
+        const data = await request<{ clipId: string }>(
+          currentSession.apiUrl,
+          `/camera-stream/${camera.id}/clip/start`,
+          currentSession.token,
+          { method: 'POST', body: JSON.stringify({}) },
+        );
+        clipIdRef.current = data.clipId;
+        const startedAt = new Date().toISOString();
+        clipStartedAtRef.current = startedAt;
+        setClipId(data.clipId);
+        try {
+          await savePendingClip(`${currentSession.apiUrl}|${currentSession.user.id}`, {
+            id: data.clipId,
+            cameraId: camera.id,
+            cameraName: camera.name,
+            createdAt: startedAt,
+            status: 'recording',
+          });
+        } catch {
+          await request(currentSession.apiUrl, `/camera-stream/clip/${encodeURIComponent(data.clipId)}/stop`, currentSession.token, {
+            method: 'POST', body: JSON.stringify({}),
+          }).catch(() => undefined);
+          throw new Error('Não foi possível preparar o armazenamento local da gravação.');
+        }
+        if (clipCancelRequestedRef.current || sessionTokenRef.current !== currentSession.token) {
+          await finalizeClip(camera, data.clipId, clipFinalizeSilentRef.current);
+          return;
+        }
+        clipPhaseRef.current = 'recording';
+        setRecordingActive(true);
+        setRecordingBusy(false);
+      } catch (error) {
+        const shouldNotify = sessionTokenRef.current === currentSession.token && !clipFinalizeSilentRef.current;
+        resetClipState();
+        if (shouldNotify) {
+          Alert.alert('Gravação', error instanceof Error ? error.message : 'Não foi possível iniciar a gravação.');
+        }
+      } finally {
+        clipStartPromiseRef.current = null;
+      }
+    })();
+    clipStartPromiseRef.current = run;
+    return run;
   };
 
-  const stopClip = async (camera: Camera) => {
-    if (!session) return;
-    const id = clipId;
-    setRecordingActive(false);
-    setClipId(null);
-    if (!id) return;
-    try {
-      await request(session.apiUrl, `/camera-stream/clip/${id}/stop`, session.token, {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-      // Baixa o arquivo do clipe pro celular (compartilhar → salvar em galeria/arquivos).
-      const target = `${FileSystem.documentDirectory}clip-${camera.id}-${Date.now()}.mp4`;
-      const url = `${session.apiUrl.replace(/\/+$/, '')}/camera-stream/clip/${encodeURIComponent(id)}/download`;
-      const result = await FileSystem.downloadAsync(url, target, {
-        headers: { Authorization: `Bearer ${session.token}` },
-      });
-      if (result.status && result.status >= 400) throw new Error('Falha ao baixar o clipe.');
-      // Salva DIRETO na galeria (sem folha de compartilhamento) + registra em
-      // "Minhas gravações". O arquivo local (documentDirectory) fica p/ tocar in-app.
-      const savedToGallery = await saveToGallery(result.uri);
-      const next = await addClip({
-        id: id,
-        cameraId: camera.id,
-        cameraName: camera.name,
-        uri: result.uri,
-        createdAt: new Date().toISOString(),
-      });
-      setSavedClips(next);
-      Alert.alert('Gravação salva', savedToGallery
-        ? 'Clipe salvo na galeria e em "Minhas gravações".'
-        : 'Clipe salvo em "Minhas gravações". (Permissão de galeria negada — dá pra ver o vídeo aqui no app.)');
-    } catch (error) {
-      Alert.alert('Gravação', error instanceof Error ? error.message : 'Não foi possível salvar o clipe.');
-    }
+  const stopActiveClip = async (silent = false) => {
+    if (clipPhaseRef.current === 'idle') return;
+    clipCancelRequestedRef.current = true;
+    clipFinalizeSilentRef.current = silent;
+    if (clipStartPromiseRef.current) await clipStartPromiseRef.current;
+    if (clipStopPromiseRef.current) return clipStopPromiseRef.current;
+    const camera = clipCameraRef.current;
+    const id = clipIdRef.current;
+    if (camera && id) return finalizeClip(camera, id, silent);
+    resetClipState();
+  };
+
+  // Botão Gravar (SÓ celular): grava no servidor o trecho EXATO start→stop e,
+  // ao parar, baixa o arquivo pro aparelho. Transições são bloqueadas para evitar
+  // starts/stops concorrentes e clipes sem referência.
+  const toggleRecording = async (camera: Camera) => {
+    if (!session || recordingBusy) return;
+    if (clipPhaseRef.current === 'recording') await finalizeClip(camera, clipIdRef.current!, false);
+    else if (clipPhaseRef.current === 'idle') await startClip(camera);
+  };
+
+  const leaveLive = (afterLeave?: () => void) => {
+    const finish = () => {
+      playbackRequestRef.current += 1;
+      setActivePlayback(null);
+      setLiveCamera(null);
+      afterLeave?.();
+    };
+    if (clipPhaseRef.current === 'idle') { finish(); return; }
+    Alert.alert(
+      'Gravação em andamento',
+      'Deseja parar e salvar o clipe antes de sair da câmera?',
+      [
+        { text: 'Continuar gravando', style: 'cancel' },
+        { text: 'Parar e sair', onPress: () => { void stopActiveClip(false).then(finish); } },
+      ],
+    );
   };
 
   // Reproduz um clipe local ("Minhas gravações") no mesmo player, sem servidor.
   const playLocalClip = (clip: SavedClip) => {
+    playbackRequestRef.current += 1;
     setActivePlayback({
-      recording: { id: clip.id, cameraId: clip.cameraId, startedAt: clip.createdAt },
+      recording: { id: clip.id, cameraId: clip.cameraId, startedAt: clip.createdAt, thumbnailUrl: clip.thumbnailUri },
       url: clip.uri,
     });
   };
 
   const deleteLocalClip = async (clip: SavedClip) => {
-    try { await FileSystem.deleteAsync(clip.uri, { idempotent: true }); } catch { /* já pode não existir */ }
-    setSavedClips(await removeClip(clip.id));
+    if (activePlayback?.recording.id === clip.id) {
+      playbackRequestRef.current += 1;
+      setActivePlayback(null);
+    }
+    setSavedClips(await removeClip(sessionScope, clip.id));
   };
 
   const openPlayback = async (recording: Recording) => {
-    if (!session) return;
+    if (!session || !capabilities.playback) return;
+    const token = session.token;
+    const generation = ++playbackRequestRef.current;
     try {
       const data = await request<{ playToken: string }>(session.apiUrl, `/recordings/${recording.id}/play-token`, session.token, { method: 'POST' });
       const url = normalizeServerUrl(`${session.apiUrl}/recordings/${recording.id}/play?token=${encodeURIComponent(data.playToken)}&compatible=1`, session.apiUrl);
       if (!url) throw new Error('URL de reprodução indisponível.');
+      if (
+        sessionTokenRef.current !== token
+        || playbackRequestRef.current !== generation
+        || selectedCameraIdRef.current !== recording.cameraId
+      ) return;
       setActivePlayback({ recording, url });
     } catch (error) {
+      if (sessionTokenRef.current !== token || playbackRequestRef.current !== generation) return;
       Alert.alert('Reprodução', error instanceof Error ? error.message : 'Não foi possível abrir a gravação.');
     }
   };
 
+  const closePlayback = () => {
+    playbackRequestRef.current += 1;
+    setActivePlayback(null);
+  };
+
+  const retryPlayback = () => {
+    const current = activePlayback;
+    if (!current) return;
+    if (current.url.startsWith('file:')) {
+      closePlayback();
+      const clip = savedClips.find((item) => item.id === current.recording.id);
+      if (clip) setTimeout(() => playLocalClip(clip), 0);
+      return;
+    }
+    void openPlayback(current.recording);
+  };
+
   const downloadRecording = async (recording: Recording) => {
-    if (!session) return;
+    if (!session || !capabilities.exportEvidence || downloadingRef.current.has(recording.id)) return;
+    const currentSession = session;
+    downloadingRef.current.add(recording.id);
+    setDownloadingIds(Array.from(downloadingRef.current));
+    const safeId = recording.id.replace(/[^a-zA-Z0-9_-]/g, '-');
+    const target = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}download-${safeId}-${Date.now()}.mp4`;
     try {
-      const target = `${FileSystem.documentDirectory}${recording.id}.mp4`;
-      const url = normalizeServerUrl(`${session.apiUrl}/recordings/${recording.id}/download`, session.apiUrl);
+      const url = normalizeServerUrl(`${currentSession.apiUrl}/recordings/${recording.id}/download`, currentSession.apiUrl);
       if (!url) throw new Error('URL de download indisponível.');
       const result = await FileSystem.downloadAsync(url, target, {
-        headers: { Authorization: `Bearer ${session.token}` },
+        headers: { Authorization: `Bearer ${currentSession.token}` },
       });
+      if (result.status && result.status >= 400) throw new Error(`Falha no download (HTTP ${result.status}).`);
       const ok = await saveToGallery(result.uri);
-      Alert.alert('Download', ok ? 'Gravação salva na galeria.' : 'Não foi possível salvar (permissão de galeria negada).');
+      if (sessionTokenRef.current === currentSession.token) {
+        Alert.alert('Download', ok ? 'Gravação salva na galeria.' : 'Não foi possível salvar (permissão de galeria negada).');
+      }
     } catch (error) {
-      Alert.alert('Download', error instanceof Error ? error.message : 'Não foi possível baixar.');
+      if (sessionTokenRef.current === currentSession.token) {
+        Alert.alert('Download', error instanceof Error ? error.message : 'Não foi possível baixar.');
+      }
+    } finally {
+      await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => undefined);
+      downloadingRef.current.delete(recording.id);
+      if (sessionTokenRef.current === currentSession.token) setDownloadingIds(Array.from(downloadingRef.current));
     }
   };
 
   const takeSnapshot = async (camera: Camera) => {
     if (!session) return;
-    const poster = streamPosters[camera.id];
+    const currentSession = session;
+    // Emite token novo e pede ao endpoint um frame fresco; não reutiliza o
+    // snapshot que pode estar há minutos visível no tile.
+    const poster = await refreshPoster(camera.id) ?? streamPosters[camera.id];
     if (!poster) {
       Alert.alert('Foto', 'Imagem ainda indisponível. Aguarde a transmissão carregar e tente novamente.');
       return;
     }
+    const target = `${FileSystem.cacheDirectory ?? FileSystem.documentDirectory}snapshot-${camera.id.replace(/[^a-zA-Z0-9_-]/g, '-')}-${Date.now()}.jpg`;
     try {
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const target = `${FileSystem.documentDirectory}${camera.id}-${stamp}.jpg`;
       // O poster já carrega o token na query — baixa direto, sem header de auth.
-      const fresh = `${poster}${poster.includes('?') ? '&' : '?'}snap=${Date.now()}`;
+      const fresh = `${poster}${poster.includes('?') ? '&' : '?'}fresh=1&snap=${Date.now()}`;
       const result = await FileSystem.downloadAsync(fresh, target);
+      if (result.status && result.status >= 400) throw new Error(`Falha ao capturar a imagem (HTTP ${result.status}).`);
       const ok = await saveToGallery(result.uri);
-      Alert.alert('Foto', ok ? 'Foto salva na galeria.' : 'Não foi possível salvar (permissão de galeria negada).');
+      if (sessionTokenRef.current === currentSession.token) {
+        Alert.alert('Foto', ok ? 'Foto salva na galeria.' : 'Não foi possível salvar (permissão de galeria negada).');
+      }
     } catch (error) {
-      Alert.alert('Foto', error instanceof Error ? error.message : 'Não foi possível capturar a imagem.');
+      if (sessionTokenRef.current === currentSession.token) {
+        Alert.alert('Foto', error instanceof Error ? error.message : 'Não foi possível capturar a imagem.');
+      }
+    } finally {
+      await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => undefined);
     }
   };
 
   const openLive = (camera: Camera) => {
+    if (!capabilities.liveView) {
+      Alert.alert('Ao vivo', 'Você não possui permissão para visualizar câmeras ao vivo.');
+      return;
+    }
+    closePlayback();
     setSelectedCameraId(camera.id);
     setLiveCamera(camera);
   };
 
+  // Voltar físico respeita a confirmação de gravação em vez de encerrar o app.
+  useEffect(() => {
+    if (!liveCamera) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      leaveLive();
+      return true;
+    });
+    return () => sub.remove();
+  }, [liveCamera?.id]);
+
+  // Se o app perde o primeiro plano, finaliza o clipe para não deixar FFmpeg
+  // rodando no servidor sem feedback no aparelho.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      appStateRef.current = state;
+      if (state === 'active') {
+        if (session && !refreshing) void loadAll(true);
+        if (cameras.length) void loadAllPosters(cameras);
+        if (session) void resumePendingClips(session);
+        if (capabilities.playback && recordingsRef.current.length) {
+          void applyThumbnailTokens(recordingsRef.current).catch(() => undefined);
+        }
+      } else if (clipPhaseRef.current !== 'idle') {
+        void stopActiveClip(true);
+      }
+    });
+    return () => sub.remove();
+  }, [session?.token, refreshing, capabilities.playback, cameras]);
+
+  // Atualiza estados ONLINE/OFFLINE sem exigir pull-to-refresh. Timers ficam
+  // suspensos no background para poupar bateria e evitar requests inúteis.
+  useEffect(() => {
+    if (!session) return;
+    const timer = setInterval(() => {
+      if (appStateRef.current === 'active' && !refreshing) void loadAll(true);
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [session?.token, refreshing]);
+
+  // O token de poster dura 5 minutos. Renova antes disso para que um tile
+  // remontado nunca tente carregar uma URL já expirada.
+  useEffect(() => {
+    if (!session || !cameras.length) return;
+    const timer = setInterval(() => {
+      if (appStateRef.current === 'active') void loadAllPosters(cameras);
+    }, 3.5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [session?.token, cameras]);
+
+  // Tokens das miniaturas também expiram. Renova apenas quando alguma tela que
+  // mostra gravações está ativa.
+  useEffect(() => {
+    if (!session || !capabilities.playback || (!liveCamera && tab !== 'reproducao')) return;
+    const timer = setInterval(() => {
+      if (appStateRef.current === 'active' && recordingsRef.current.length) {
+        void applyThumbnailTokens(recordingsRef.current).catch(() => undefined);
+      }
+    }, 3.5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [session?.token, capabilities.playback, liveCamera?.id, tab]);
+
   if (!session) {
     return (
       <SafeAreaView style={[styles.screen, { backgroundColor: theme.bg }]}>
-        <StatusBar style="light" />
+        <StatusBar style={statusBarStyle} />
         <LoginScreen
           apiUrl={apiUrl}
           email={email}
@@ -553,21 +1152,36 @@ function AppInner() {
           ptzActive={ptzActive}
           ptzFeedback={ptzFeedback}
           recordings={recordings}
+          recordingsTotal={recordingsTotal}
+          recordingsLoading={recordingsLoading}
+          recordingsLoadingMore={recordingsLoadingMore}
+          recordingsError={recordingsError}
           myRecordings={savedClips.filter((c) => c.cameraId === live.id)}
           onPlayLocal={playLocalClip}
           onDeleteLocal={deleteLocalClip}
           recordingDate={recordingDate}
           activePlayback={activePlayback}
           recordingActive={recordingActive}
-          onBack={() => { setActivePlayback(null); setLiveCamera(null); }}
+          recordingBusy={recordingBusy}
+          onBack={() => leaveLive()}
           onSendPtz={sendPtz}
           onToggleRecording={toggleRecording}
           onSnapshot={takeSnapshot}
           onOpenPlayback={openPlayback}
-          onClosePlayback={() => setActivePlayback(null)}
+          onClosePlayback={closePlayback}
+          onRetryPlayback={retryPlayback}
           onDownloadRecording={downloadRecording}
           onPreviousDate={() => shiftRecordingDate(-1)}
           onNextDate={() => shiftRecordingDate(1)}
+          onLoadMoreRecordings={loadMoreRecordings}
+          onRetryRecordings={() => { if (selectedCamera) void loadRecordings(selectedCamera.id, recordingDateRef.current); }}
+          onThumbnailError={refreshExpiredThumbnails}
+          onRefreshStream={() => { void loadStream(live.id, 'selected', true); }}
+          canPlayback={capabilities.playback}
+          canDownload={capabilities.exportEvidence}
+          downloadingIds={downloadingIds}
+          notificationsMuted={notificationsMuted}
+          onToggleNotifications={toggleNotifications}
         />
         {/* Menu inferior também na câmera aberta — tocar numa aba sai do vídeo e
             vai pra ela. Escondido em paisagem (vídeo em tela cheia usa a área). */}
@@ -575,7 +1189,7 @@ function AppInner() {
           <BottomTabs
             active={tab}
             alarmCount={openAlarmCount}
-            onChange={(next) => { setActivePlayback(null); setLiveCamera(null); setTab(next); }}
+            onChange={(next) => leaveLive(() => setTab(next))}
           />
         ) : null}
       </SafeAreaView>
@@ -584,7 +1198,7 @@ function AppInner() {
 
   return (
     <SafeAreaView style={[styles.screen, { backgroundColor: theme.bg }]}>
-      <StatusBar style="light" />
+      <StatusBar style={statusBarStyle} />
       {/* Fundo em GRADIENTE quando o branding define 2 cores (bg != bg2); senão
           o backgroundColor sólido do SafeAreaView aparece. As telas são
           transparentes, então o gradiente é visível atrás delas. */}
@@ -603,16 +1217,23 @@ function AppInner() {
             onRefresh={loadAll}
             onOpenCamera={openLive}
             onOpenAlarms={() => setTab('alarmes')}
+            onPosterError={(cameraId) => { void refreshPoster(cameraId); }}
           />
         )}
 
         {tab === 'mosaico' && (
           <MosaicScreen
             cameras={cameras}
+            streamUrls={streamUrls}
+            streamWhep={streamWhep}
             streamPosters={streamPosters}
             refreshing={refreshing}
+            canLiveView={capabilities.liveView}
             onRefresh={loadAll}
             onOpenCamera={openLive}
+            onRequestStreams={(cameraIds) => { void Promise.all(cameraIds.map((id) => loadStream(id, 'grid'))); }}
+            onRefreshStream={(cameraId) => { void loadStream(cameraId, 'grid', true); }}
+            onPosterError={(cameraId) => { void refreshPoster(cameraId); }}
           />
         )}
 
@@ -621,21 +1242,33 @@ function AppInner() {
             cameras={cameras}
             selectedCamera={selectedCamera}
             recordings={recordings}
+            recordingsTotal={recordingsTotal}
+            loading={recordingsLoading}
+            loadingMore={recordingsLoadingMore}
+            error={recordingsError}
             activePlayback={activePlayback}
             recordingDate={recordingDate}
-            onSelectCamera={(cameraId) => { setSelectedCameraId(cameraId); setActivePlayback(null); void loadRecordings(cameraId, recordingDate); }}
+            canPlayback={capabilities.playback}
+            canDownload={capabilities.exportEvidence}
+            downloadingIds={downloadingIds}
+            onSelectCamera={(cameraId) => { setSelectedCameraId(cameraId); closePlayback(); }}
             onOpenPlayback={openPlayback}
-            onClosePlayback={() => setActivePlayback(null)}
+            onClosePlayback={closePlayback}
+            onRetryPlayback={retryPlayback}
             onDownloadRecording={downloadRecording}
             onPreviousDate={() => shiftRecordingDate(-1)}
             onNextDate={() => shiftRecordingDate(1)}
+            onLoadMore={loadMoreRecordings}
+            onRetry={() => { if (selectedCamera) void loadRecordings(selectedCamera.id, recordingDateRef.current); }}
+            onThumbnailError={refreshExpiredThumbnails}
           />
         )}
 
         {tab === 'alarmes' && (
           <AlarmsScreen
             alarms={alarms}
-            canManage={session.user.role !== 'VIEWER'}
+            highlightedAlarmId={highlightedAlarmId}
+            canManage={canManageAlarms}
             refreshing={refreshing}
             onRefresh={() => { void reloadAlarms(); }}
             onAck={ackAlarm}
@@ -648,11 +1281,18 @@ function AppInner() {
         )}
 
         {tab === 'ajustes' && (
-          <SettingsScreen user={session.user} apiUrl={session.apiUrl} onLogout={logout} />
+          <SettingsScreen user={session.user} apiUrl={session.apiUrl} connected={!lastSyncError} onLogout={logout} />
         )}
       </View>
 
-      <BottomTabs active={tab} onChange={setTab} alarmCount={openAlarmCount} />
+      <BottomTabs
+        active={tab}
+        onChange={(next) => {
+          if (next !== 'reproducao') closePlayback();
+          setTab(next);
+        }}
+        alarmCount={openAlarmCount}
+      />
     </SafeAreaView>
   );
 }

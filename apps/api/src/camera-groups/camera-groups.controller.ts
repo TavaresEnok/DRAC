@@ -73,6 +73,22 @@ export class CameraGroupsController {
 
   @Roles(UserRole.ADMIN)
   @RequirePermission('cameraConfig')
+  @Post(':id/retention')
+  async setRetention(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() body: { retentionDays?: number },
+    @Req() req: Request,
+  ) {
+    // Sobrescreve a retenção de TODAS as câmeras do grupo (a UI avisa antes).
+    const retentionDays = Math.max(1, Math.min(3650, Math.floor(Number(body?.retentionDays ?? 7)) || 7));
+    const result = await this.cameraGroupsService.setRetentionForGroup(id, retentionDays);
+    await this.auditService.log(user.id, 'camera_group.retention_set', 'CameraGroup', id, { retentionDays, affected: result.affected }, req);
+    return result;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @RequirePermission('cameraConfig')
   @Post(':id/cameras/:cameraId')
   async addCamera(@CurrentUser() user: AuthUser, @Param('id') id: string, @Param('cameraId') cameraId: string, @Req() req: Request) {
     const group = await this.cameraGroupsService.addCamera(id, cameraId);

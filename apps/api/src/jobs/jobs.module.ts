@@ -20,6 +20,7 @@ import { AuditModule } from '../audit/audit.module';
 import { EvidenceModule } from '../evidence/evidence.module';
 import { RecordingsModule } from '../recordings/recordings.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { AlarmsModule } from '../alarms/alarms.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     EvidenceModule,
     RecordingsModule,
     NotificationsModule,
+    AlarmsModule,
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({

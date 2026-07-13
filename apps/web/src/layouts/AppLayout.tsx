@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useLocation } from 'wouter';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Sun, Moon } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Sun, Moon } from 'lucide-react';
 import { Sidebar } from '../components/Sidebar';
 import { StatusStrip } from '../components/StatusStrip';
 import { CommandPalette } from '../components/CommandPalette';
@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Kbd } from '@/components/ui/kbd';
 import { useThemeStore } from '../store/themeStore';
 import { useVmsDataStore } from '../store/vmsDataStore';
+import { useAuthStore } from '../store/authStore';
 
 const PAGE_TITLES: Record<string, string> = {
   '/live':          'Ao Vivo',
@@ -33,21 +34,19 @@ function resolvePageTitle(location: string) {
   return PAGE_TITLES[base] ?? 'DRAC VMS';
 }
 
-const SHORTCUTS = [
+type ShortcutRole = 'viewer' | 'operator' | 'admin';
+const SHORTCUT_ROLE_WEIGHT: Record<ShortcutRole, number> = { viewer: 1, operator: 2, admin: 3 };
+const SHORTCUTS: Array<{ key: string; description: string; minRole?: ShortcutRole }> = [
   { key: 'Ctrl + K', description: 'Abrir paleta de comandos' },
   { key: 'Alt + 1',  description: 'Ao Vivo' },
   { key: 'Alt + 2',  description: 'Reprodução' },
-  { key: 'Alt + 3',  description: 'Câmeras' },
-  { key: 'Alt + 4',  description: 'Monitoramento' },
-  { key: 'Alt + 5',  description: 'Usuários' },
-  { key: 'Alt + 6',  description: 'Configurações' },
-  { key: 'G',        description: 'Alternar layout em grade' },
-  { key: 'W',        description: 'Alternar modo mural em tela cheia' },
+  { key: 'Alt + 3',  description: 'Câmeras', minRole: 'operator' },
+  { key: 'Alt + 4',  description: 'Armazenamento', minRole: 'operator' },
+  { key: 'Alt + 5',  description: 'Usuários', minRole: 'operator' },
+  { key: 'Alt + 6',  description: 'Configurações', minRole: 'admin' },
   { key: 'Esc',      description: 'Fechar painel / diálogo' },
   { key: '?',        description: 'Mostrar atalhos' },
 ];
-
-const PAGE_PATHS = ['/live', '/playback', '/cameras', '/storage', '/users', '/settings'];
 
 interface AppLayoutProps { children: React.ReactNode }
 
@@ -57,6 +56,24 @@ export function AppLayout({ children }: AppLayoutProps) {
   const [shortcutsOpen, setAtalhosOpen] = useState(false);
   const { theme, setTheme } = useThemeStore();
   const cameras = useVmsDataStore((state) => state.cameras);
+  const stale = useVmsDataStore((state) => state.stale);
+  const isRefreshing = useVmsDataStore((state) => state.isRefreshing);
+  const lastUpdatedAt = useVmsDataStore((state) => state.lastUpdatedAt);
+  const refreshOperational = useVmsDataStore((state) => state.refreshOperational);
+  const resourceErrors = useVmsDataStore((state) => state.resourceErrors);
+  const userRole = useAuthStore((state) => state.user?.role ?? 'viewer');
+  const pagePaths = useMemo(() => [
+    '/live',
+    '/playback',
+    SHORTCUT_ROLE_WEIGHT[userRole] >= SHORTCUT_ROLE_WEIGHT.operator ? '/cameras' : null,
+    SHORTCUT_ROLE_WEIGHT[userRole] >= SHORTCUT_ROLE_WEIGHT.operator ? '/storage' : null,
+    SHORTCUT_ROLE_WEIGHT[userRole] >= SHORTCUT_ROLE_WEIGHT.operator ? '/users' : null,
+    SHORTCUT_ROLE_WEIGHT[userRole] >= SHORTCUT_ROLE_WEIGHT.admin ? '/settings' : null,
+  ], [userRole]);
+  const visibleShortcuts = useMemo(
+    () => SHORTCUTS.filter((shortcut) => !shortcut.minRole || SHORTCUT_ROLE_WEIGHT[userRole] >= SHORTCUT_ROLE_WEIGHT[shortcut.minRole]),
+    [userRole],
+  );
   const isDark = theme === 'dark' || theme === 'dim';
   const pageTitle = resolvePageTitle(location);
 
@@ -71,17 +88,18 @@ export function AppLayout({ children }: AppLayoutProps) {
       }
       if (e.altKey && e.key >= '1' && e.key <= '9') {
         const idx = parseInt(e.key) - 1;
-        if (PAGE_PATHS[idx]) { e.preventDefault(); setLocation(PAGE_PATHS[idx]); }
+        const path = pagePaths[idx];
+        if (path) { e.preventDefault(); setLocation(path); }
         return;
       }
       if (e.key === 'Escape') setCmdOpen(false);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [setLocation]);
+  }, [pagePaths, setLocation]);
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background">
+    <div className="flex h-[100dvh] w-full overflow-hidden bg-background">
       <Sidebar
         onAtalhosOpen={() => setAtalhosOpen(true)}
         onSearchOpen={() => setCmdOpen(true)}
@@ -108,6 +126,29 @@ export function AppLayout({ children }: AppLayoutProps) {
           </div>
         </header>
 
+        {stale && (
+          <div
+            role="status"
+            className="flex min-h-9 shrink-0 items-center gap-2 border-b border-[hsl(var(--status-warning)_/_0.35)] bg-[hsl(var(--status-warning)_/_0.10)] px-3 text-[11px] text-foreground sm:px-5"
+          >
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[hsl(var(--status-warning))]" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">
+              Dados operacionais temporariamente desatualizados
+              {lastUpdatedAt ? ` · última atualização ${new Date(lastUpdatedAt).toLocaleTimeString('pt-BR')}` : ''}
+              {Object.keys(resourceErrors).length ? ` · falha em ${Object.keys(resourceErrors).join(', ')}` : ''}
+            </span>
+            <button
+              type="button"
+              onClick={() => void refreshOperational()}
+              disabled={isRefreshing}
+              className="inline-flex h-7 items-center gap-1.5 rounded border border-border bg-card px-2 font-medium hover:bg-accent disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3 w-3 ${isRefreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+              <span className="hidden sm:inline">Atualizar</span>
+            </button>
+          </div>
+        )}
+
         <main className="flex-1 min-h-0 overflow-hidden">
           <AnimatePresence mode="wait">
             <motion.div
@@ -122,9 +163,8 @@ export function AppLayout({ children }: AppLayoutProps) {
             </motion.div>
           </AnimatePresence>
         </main>
+        <StatusStrip />
       </div>
-
-      <StatusStrip />
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
 
       {/* Keyboard shortcuts dialog */}
@@ -134,7 +174,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             <DialogTitle className="text-[13px] font-semibold">Atalhos de Teclado</DialogTitle>
           </DialogHeader>
           <div className="space-y-px py-1">
-            {SHORTCUTS.map(s => (
+            {visibleShortcuts.map(s => (
               <div key={s.key} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-[hsl(var(--accent))] transition-colors">
                 <span className="text-[12px] text-[hsl(var(--muted-foreground))]">{s.description}</span>
                 <Kbd className="font-mono text-[9px] ml-4 shrink-0">{s.key}</Kbd>

@@ -1,11 +1,11 @@
 /**
- * DRAC Mobile — Tema base (escuro único).
- * Fonte única da verdade para cores; o branding do servidor sobrepõe por cima.
+ * DRAC Mobile — temas base claro e escuro.
+ * O branding do servidor sobrepõe cada paleta separadamente.
  * Os screens consomem o tema via useTheme() (ver ThemeProvider.tsx).
  */
 
 export interface Theme {
-  mode: 'dark';
+  mode: 'dark' | 'light';
 
   // Backgrounds
   bg: string;          // fundo da tela
@@ -74,8 +74,34 @@ export const darkTheme: Theme = {
   tlHead: '#ef4444',
 };
 
-/** Tema base único (escuro). O tema claro foi removido — a aparência agora vem
- *  100% do branding do servidor por cima deste base. */
+export const lightTheme: Theme = {
+  mode: 'light',
+  bg: '#f5f7fb',
+  bg2: '#ffffff',
+  bgText: '#111827',
+  surface: '#ffffff',
+  surfaceAlt: '#f1f5f9',
+  menu: '#ffffff',
+  menuText: '#64748b',
+  border: '#94a3b8',
+  accent: '#2563eb',
+  accentDark: '#1d4ed8',
+  accentBg: 'rgba(37,99,235,0.10)',
+  success: '#15803d',
+  danger: '#dc2626',
+  dangerBg: 'rgba(220,38,38,0.08)',
+  warning: '#b45309',
+  text: '#111827',
+  textSub: '#4b5563',
+  textMuted: '#64748b',
+  textOnAccent: '#ffffff',
+  videoBg: '#070809',
+  tlBlue: '#2563eb',
+  tlOrange: '#ea580c',
+  tlHead: '#dc2626',
+};
+
+/** Compatibilidade para consumidores antigos que esperam um tema base. */
 export const baseTheme: Theme = darkTheme;
 
 /** Espaçamento e raios padronizados (8pt-ish). */

@@ -91,6 +91,8 @@ type LiveDiagnostics = {
   mediaMtxPublicHlsUrl?: string | null;
   mediaMtxWebrtcAllowOrigin?: string | null;
   mediaMtxHlsAllowOrigin?: string | null;
+  sourceVideoCodec?: string | null;
+  liveTranscodedForBrowser?: boolean;
   readiness?: {
     state?: 'ready' | 'degraded' | 'blocked';
     readyForWebrtc?: boolean;
@@ -267,6 +269,7 @@ export function LiveStreamPlayer({
 }: LiveStreamPlayerProps) {
   const aiOverlayEnabled = showOverlay && aiEnabled;
   const accessToken = useAuthStore((state) => state.accessToken);
+  const authUserId = useAuthStore((state) => state.user?.id ?? 'anonymous');
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<HlsController | null>(null);
@@ -299,6 +302,8 @@ export function LiveStreamPlayer({
   const previousLiveViewModeRef = useRef(liveViewMode);
   // Timer to proactively renew the stream token before it expires (avoids black screen)
   const streamTokenRenewTimerRef = useRef<number | null>(null);
+  const mediaAuthTokenRef = useRef<string>('');
+  const lastBitrateSampleRef = useRef<{ at: number; bytes: number } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(muted);
@@ -310,12 +315,21 @@ export function LiveStreamPlayer({
   const [reloadNonce, setReloadNonce] = useState(0);
   const [protocolReason, setProtocolReason] = useState<string | null>(null);
   const [displayFps, setDisplayFps] = useState<number | null>(null);
+  const [sourceVideoCodec, setSourceVideoCodec] = useState<string | null>(null);
+  const [isTranscodedForBrowser, setIsTranscodedForBrowser] = useState(false);
+  const [measuredBitrateKbps, setMeasuredBitrateKbps] = useState<number | null>(null);
+  const [liveLatencySeconds, setLiveLatencySeconds] = useState<number | null>(null);
   // Suspende a transmissão quando a aba fica oculta por tempo suficiente, para
   // não gastar CPU de transcode nem banda com quem não está vendo.
   const [suspended, setSuspended] = useState(false);
   const suspendedRef = useRef(false);
   const suspendTimerRef = useRef<number | null>(null);
   const [zoom, setZoom] = useState(1);
+  const compactLiveOverlay = liveViewMode === 'grid';
+  const loadingLabel = compactLiveOverlay ? 'Conectando…' : retryMessage ?? 'Aguardando vídeo';
+  const compactErrorLabel = error && /Nenhum protocolo|WebRTC|WHEP|HLS|MediaMTX|codec/i.test(error)
+    ? 'Reconectando…'
+    : 'Sem vídeo';
 
   const tokenHeaders = useMemo(
     () => (accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined),
@@ -341,7 +355,13 @@ export function LiveStreamPlayer({
   useEffect(() => {
     failedProtocolsRef.current.clear();
     blackFrameSinceRef.current = null;
+    mediaAuthTokenRef.current = '';
+    lastBitrateSampleRef.current = null;
     setProtocolReason(null);
+    setSourceVideoCodec(null);
+    setIsTranscodedForBrowser(false);
+    setMeasuredBitrateKbps(null);
+    setLiveLatencySeconds(null);
     liveViewSessionIdRef.current = createLiveViewSessionId(cameraId);
   }, [cameraId]);
 
@@ -353,9 +373,13 @@ export function LiveStreamPlayer({
     });
   }, [activeProtocol, error, isLoading, onStatusChange, protocolReason, retryMessage]);
 
-  const requestFreshLiveBoot = useCallback((message = 'Atualizando transmissão ao vivo...', preserveExistingFrame = true) => {
+  const requestFreshLiveBoot = useCallback((
+    message = 'Atualizando transmissão ao vivo...',
+    preserveExistingFrame = true,
+    bypassDebounce = false,
+  ) => {
     const now = Date.now();
-    if (now - liveReloadAtRef.current < LIVE_RECONNECT_DEBOUNCE_MS) return;
+    if (!bypassDebounce && now - liveReloadAtRef.current < LIVE_RECONNECT_DEBOUNCE_MS) return;
 
     const alreadyHadFrame = hasFrameRef.current;
     liveReloadAtRef.current = now;
@@ -382,6 +406,7 @@ export function LiveStreamPlayer({
       liveViewMode === 'selected'
         ? 'Abrindo câmera individual na resolução original...'
         : 'Ajustando câmera para o grid padrão...',
+      true,
       true,
     );
   }, [liveViewMode, requestFreshLiveBoot]);
@@ -533,7 +558,7 @@ export function LiveStreamPlayer({
         // A chave usa câmera + modo de visualização. Grid e câmera individual
         // precisam perfis diferentes, mas ainda evitamos incluir o JWT para não
         // deixar entradas órfãs no cache.
-        const cacheKey = `stream-urls:${cameraId}:${liveViewMode}`;
+        const cacheKey = `stream-urls:${authUserId}:${cameraId}:${liveViewMode}`;
         const data = await streamUrlsCache.getOrFetch(
           cacheKey,
           () => axios.get<{
@@ -577,6 +602,9 @@ export function LiveStreamPlayer({
         const preferredLiveProtocol = data?.preferredLiveProtocol ?? 'webrtc';
         const sourceCodec = data?.sourceVideoCodec ?? data?.detectedVideoCodec;
         const liveDiagnostics = data?.liveDiagnostics ?? null;
+        mediaAuthTokenRef.current = streamToken;
+        setSourceVideoCodec(sourceCodec ?? null);
+        setIsTranscodedForBrowser(Boolean(liveDiagnostics?.liveTranscodedForBrowser));
         const orderedProtocols = buildProtocolOrder(
           cameraId,
           preferredLiveProtocol,
@@ -599,19 +627,45 @@ export function LiveStreamPlayer({
           throw new Error('Token de stream inválido retornado pela API.');
         }
 
-        // NÃO renovamos o token derrubando a conexão. WebRTC (WHEP), HLS e LL-HLS
-        // são servidos DIRETO pelo MediaMTX (authMethod: internal, user "any" com
-        // permissão de read) — nenhum deles carrega o stream token na URL nem o
-        // revalida durante a transmissão. O token só serve para o poster (antes do
-        // 1º frame) e para o FLV legado. Logo, uma reconexão "para renovar token"
-        // só causava um piscar periódico (a cada expiração) sem nenhum ganho.
-        // Se acontecer um reboot por motivo real (stall/freeze/troca de protocolo),
-        // a própria chamada a /urls já emite um token novo. Uma transmissão saudável
-        // permanece conectada indefinidamente, sem piscar.
         if (streamTokenRenewTimerRef.current != null) {
           window.clearTimeout(streamTokenRenewTimerRef.current);
           streamTokenRenewTimerRef.current = null;
         }
+        const renewMediaToken = async () => {
+          try {
+            const response = await axios.post<{ streamToken: string; expiresAt?: string | null }>(
+              `${API_URL}/camera-stream/${cameraId}/token`,
+              {},
+              { headers: tokenHeaders },
+            );
+            if (cancelled) return;
+            mediaAuthTokenRef.current = response.data.streamToken;
+            if (rawPosterUrl && response.data.streamToken) {
+              const separator = rawPosterUrl.includes('?') ? '&' : '?';
+              setPosterUrl(`${rawPosterUrl}${separator}token=${encodeURIComponent(response.data.streamToken)}&v=${Date.now()}`);
+            }
+            scheduleMediaTokenRenewal(response.data.expiresAt ?? null);
+          } catch {
+            if (!cancelled) {
+              streamTokenRenewTimerRef.current = window.setTimeout(() => {
+                void renewMediaToken();
+              }, 30_000);
+            }
+          }
+        };
+        const scheduleMediaTokenRenewal = (expiresAt?: string | null) => {
+          if (streamTokenRenewTimerRef.current != null) {
+            window.clearTimeout(streamTokenRenewTimerRef.current);
+          }
+          const expiresAtMs = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+          const delayMs = Number.isFinite(expiresAtMs)
+            ? Math.max(30_000, expiresAtMs - Date.now() - 60_000)
+            : 4 * 60_000;
+          streamTokenRenewTimerRef.current = window.setTimeout(() => {
+            void renewMediaToken();
+          }, delayMs);
+        };
+        scheduleMediaTokenRenewal(data?.streamTokenExpiresAt ?? null);
 
         const cleanupHls = () => {
           if (!hlsRef.current) return;
@@ -675,7 +729,11 @@ export function LiveStreamPlayer({
           }
           if (webrtcSessionUrlRef.current) {
             try {
-              await fetch(webrtcSessionUrlRef.current, { method: 'DELETE', mode: 'cors' });
+              await fetch(webrtcSessionUrlRef.current, {
+                method: 'DELETE',
+                mode: 'cors',
+                headers: { Authorization: `Bearer ${mediaAuthTokenRef.current}` },
+              });
             } catch {
             }
             webrtcSessionUrlRef.current = null;
@@ -945,6 +1003,7 @@ export function LiveStreamPlayer({
                   mode: 'cors',
                   headers: {
                     'Content-Type': 'application/sdp',
+                    Authorization: `Bearer ${mediaAuthTokenRef.current}`,
                   },
                   body: localSdp,
                   signal: abortController.signal,
@@ -1008,6 +1067,10 @@ export function LiveStreamPlayer({
               liveMaxLatencyDurationCount: 3,
               maxLiveSyncPlaybackRate: 1.5,
               backBufferLength: 30,
+              xhrSetup: (xhr) => {
+                xhr.withCredentials = true;
+                xhr.setRequestHeader('Authorization', `Bearer ${mediaAuthTokenRef.current}`);
+              },
             });
             hlsRef.current = hls;
             const hlsFailure = new Promise<void>((_resolve, reject) => {
@@ -1035,11 +1098,7 @@ export function LiveStreamPlayer({
           }
 
           if (element.canPlayType('application/vnd.apple.mpegurl')) {
-            element.src = hlsUrl;
-            if (autoPlay) void element.play().catch(() => {});
-            await waitForVisibleFrame(protocolName, HLS_FIRST_FRAME_TIMEOUT_MS);
-            markHealthy(protocolName);
-            return;
+            throw new Error('HLS nativo sem suporte a token seguro; use um navegador com MediaSource/WebRTC.');
           }
 
           throw new Error('Navegador sem suporte para HLS.');
@@ -1177,7 +1236,11 @@ export function LiveStreamPlayer({
         webrtcStreamRef.current = null;
       }
       if (webrtcSessionUrlRef.current) {
-        void fetch(webrtcSessionUrlRef.current, { method: 'DELETE', mode: 'cors' }).catch(() => undefined);
+        void fetch(webrtcSessionUrlRef.current, {
+          method: 'DELETE',
+          mode: 'cors',
+          headers: { Authorization: `Bearer ${mediaAuthTokenRef.current}` },
+        }).catch(() => undefined);
         webrtcSessionUrlRef.current = null;
       }
       const preserveFrame = preserveFrameOnReloadRef.current && hasFrameRef.current;
@@ -1188,7 +1251,7 @@ export function LiveStreamPlayer({
         element.load();
       }
     };
-  }, [accessToken, autoPlay, cameraId, failActiveProtocol, getFastRetryDelay, isLikelyBlackFrame, requestFreshLiveBoot, startDelayMs, tokenHeaders, reloadNonce, suspended]);
+  }, [accessToken, authUserId, autoPlay, cameraId, failActiveProtocol, getFastRetryDelay, isLikelyBlackFrame, requestFreshLiveBoot, startDelayMs, tokenHeaders, reloadNonce, suspended]);
 
   useEffect(() => {
     const element = videoRef.current;
@@ -1245,6 +1308,58 @@ export function LiveStreamPlayer({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (liveViewMode !== 'selected' || activeProtocol !== 'WEBRTC') {
+      lastBitrateSampleRef.current = null;
+      setMeasuredBitrateKbps(null);
+      return;
+    }
+
+    const sample = async () => {
+      const pc = webrtcPcRef.current;
+      if (!pc) return;
+      try {
+        const stats = await pc.getStats();
+        let bytes = 0;
+        stats.forEach((report) => {
+          if (report.type === 'inbound-rtp' && report.kind === 'video' && !report.isRemote) {
+            bytes += Number(report.bytesReceived ?? 0);
+          }
+        });
+        const now = performance.now();
+        const previous = lastBitrateSampleRef.current;
+        lastBitrateSampleRef.current = { at: now, bytes };
+        if (previous && bytes >= previous.bytes && now > previous.at) {
+          const kbps = ((bytes - previous.bytes) * 8) / (now - previous.at);
+          setMeasuredBitrateKbps(Math.max(0, Math.round(kbps)));
+        }
+      } catch {
+        setMeasuredBitrateKbps(null);
+      }
+    };
+
+    void sample();
+    const interval = window.setInterval(() => void sample(), 2000);
+    return () => window.clearInterval(interval);
+  }, [activeProtocol, liveViewMode]);
+
+  useEffect(() => {
+    if (activeProtocol !== 'HLS' && activeProtocol !== 'LL-HLS') {
+      setLiveLatencySeconds(null);
+      return;
+    }
+    const updateLatency = () => {
+      const element = videoRef.current;
+      if (!element?.seekable.length) return;
+      const liveEdge = element.seekable.end(element.seekable.length - 1);
+      const drift = liveEdge - element.currentTime;
+      setLiveLatencySeconds(Number.isFinite(drift) ? Math.max(0, drift) : null);
+    };
+    updateLatency();
+    const interval = window.setInterval(updateLatency, 1000);
+    return () => window.clearInterval(interval);
+  }, [activeProtocol]);
 
   useEffect(() => {
     const softResumeAtLiveEdge = () => {
@@ -1571,6 +1686,7 @@ export function LiveStreamPlayer({
           <img
             src={posterUrl}
             alt=""
+            onError={() => requestFreshLiveBoot('Atualizando amostra da câmera...', false)}
             className={`absolute inset-0 h-full w-full opacity-80 ${liveViewMode === 'grid' ? 'object-cover' : 'object-contain'}`}
             draggable={false}
           />
@@ -1662,14 +1778,25 @@ export function LiveStreamPlayer({
 
       {showOverlay && isLoading && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
-          <div className="flex items-center gap-2 rounded-md border border-white/10 bg-black/45 px-3 py-2 text-xs text-white/75">
-            <LoaderCircle className="h-4 w-4 animate-spin" />
-            {retryMessage ?? 'Aguardando vídeo'}
+          <div className={`flex items-center gap-2 rounded-md border border-white/10 bg-black/45 text-white/75 ${
+            compactLiveOverlay ? 'px-2 py-1 text-[10px]' : 'px-3 py-2 text-xs'
+          }`}>
+            <LoaderCircle className={`${compactLiveOverlay ? 'h-3 w-3' : 'h-4 w-4'} animate-spin`} />
+            {loadingLabel}
           </div>
         </div>
       )}
 
-      {showOverlay && error && (
+      {showOverlay && error && compactLiveOverlay && (
+        <div className="absolute inset-x-1 bottom-1 z-20 flex justify-center">
+          <div className="flex max-w-[92%] items-center gap-1.5 rounded border border-white/10 bg-black/68 px-2 py-1 text-[10px] text-white/75 backdrop-blur-[2px]">
+            <AlertTriangle className="h-3 w-3 shrink-0 text-[hsl(var(--status-warning))]" />
+            <span className="truncate">{compactErrorLabel}</span>
+          </div>
+        </div>
+      )}
+
+      {showOverlay && error && !compactLiveOverlay && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60">
           <div className="max-w-[85%] rounded-lg border border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] px-4 py-3 text-center text-xs text-[hsl(var(--destructive))]">
             <div className="mb-2 flex items-center justify-center gap-2">
@@ -1699,7 +1826,24 @@ export function LiveStreamPlayer({
       )}
 
       {showOverlay && (activeProtocol || displayFps != null) && (
-        <div className="absolute top-2 right-2 z-30 flex items-center gap-1.5 opacity-55 transition-opacity hover:opacity-90">
+        <div className="absolute top-2 right-2 z-30 flex max-w-[70%] flex-wrap items-center justify-end gap-1.5 opacity-60 transition-opacity hover:opacity-95">
+          {!compactLiveOverlay && videoRef.current?.videoWidth ? (
+            <span className="inline-flex h-4 items-center rounded-sm border border-white/10 bg-black/40 px-1.5 text-[8px] font-medium tracking-wider text-white/70">
+              {videoRef.current.videoWidth}×{videoRef.current.videoHeight}
+            </span>
+          ) : null}
+          {!compactLiveOverlay && sourceVideoCodec ? (
+            <span className="inline-flex h-4 items-center rounded-sm border border-white/10 bg-black/40 px-1.5 text-[8px] font-medium uppercase tracking-wider text-white/70">
+              {sourceVideoCodec}{isTranscodedForBrowser ? ' → H.264' : ''}
+            </span>
+          ) : null}
+          {!compactLiveOverlay && measuredBitrateKbps != null ? (
+            <span className="inline-flex h-4 items-center rounded-sm border border-white/10 bg-black/40 px-1.5 text-[8px] font-medium tracking-wider text-white/70">
+              {measuredBitrateKbps >= 1000
+                ? `${(measuredBitrateKbps / 1000).toFixed(1)} Mbps`
+                : `${measuredBitrateKbps} kbps`}
+            </span>
+          ) : null}
           {displayFps != null && (
             <span className="inline-flex h-4 items-center rounded-sm border border-white/10 bg-black/40 px-1.5 text-[8px] font-medium tracking-wider text-white/65">
               {displayFps} FPS
@@ -1723,6 +1867,21 @@ export function LiveStreamPlayer({
           </span>
           )}
         </div>
+      )}
+
+      {showOverlay && !compactLiveOverlay && (activeProtocol === 'HLS' || activeProtocol === 'LL-HLS') && (
+        <button
+          type="button"
+          onClick={() => {
+            const element = videoRef.current;
+            if (element) seekVideoToLiveEdge(element);
+          }}
+          className="absolute bottom-2 left-2 z-30 inline-flex h-7 items-center gap-1.5 rounded-full border border-[hsl(var(--status-online)_/_0.35)] bg-black/60 px-2.5 text-[9px] font-semibold text-[hsl(var(--status-online))] hover:bg-black/75"
+          title="Voltar para a borda ao vivo"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-current" />
+          Ao vivo{liveLatencySeconds != null ? ` · ${liveLatencySeconds.toFixed(1)}s` : ''}
+        </button>
       )}
 
       {showOverlay && !isLoading && !error && (

@@ -14,7 +14,8 @@ export type IconName =
   | 'arrowUp' | 'arrowDown' | 'arrowLeft' | 'arrowRight'
   | 'download' | 'check' | 'server' | 'logout'
   | 'alert' | 'moon' | 'sun' | 'videoOff' | 'aperture' | 'maximize'
-  | 'star' | 'edit' | 'trash' | 'close' | 'clock';
+  | 'star' | 'edit' | 'trash' | 'close' | 'clock'
+  | 'pause' | 'rewind' | 'forward';
 
 interface IconProps {
   name: IconName;
@@ -204,6 +205,27 @@ export function Icon({ name, size = 22, color = '#fff', strokeWidth = 1.9, fill 
       );
     case 'close':
       return (<Svg width={size} height={size} viewBox="0 0 24 24"><Path {...common} strokeWidth={strokeWidth + 0.3} d="M6 6l12 12M18 6L6 18" /></Svg>);
+    case 'pause':
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24">
+          <Rect x={6} y={4.5} width={4} height={15} rx={1.3} fill={color} />
+          <Rect x={14} y={4.5} width={4} height={15} rx={1.3} fill={color} />
+        </Svg>
+      );
+    case 'rewind':
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24">
+          <Path fill={color} d="M11.4 5.3c.5-.4 1.3 0 1.3.7v12c0 .7-.8 1.1-1.3.7l-7.2-6a.9.9 0 0 1 0-1.4z" />
+          <Path fill={color} d="M20.4 5.3c.5-.4 1.3 0 1.3.7v12c0 .7-.8 1.1-1.3.7l-7.2-6a.9.9 0 0 1 0-1.4z" />
+        </Svg>
+      );
+    case 'forward':
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24">
+          <Path fill={color} d="M12.6 5.3c-.5-.4-1.3 0-1.3.7v12c0 .7.8 1.1 1.3.7l7.2-6a.9.9 0 0 0 0-1.4z" />
+          <Path fill={color} d="M3.6 5.3c-.5-.4-1.3 0-1.3.7v12c0 .7.8 1.1 1.3.7l7.2-6a.9.9 0 0 0 0-1.4z" />
+        </Svg>
+      );
     default:
       return null;
   }

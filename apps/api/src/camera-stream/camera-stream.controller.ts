@@ -1,4 +1,6 @@
 import { Body, Controller, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { SkipThrottle } from '@nestjs/throttler';
 import { UserRole } from '@prisma/client';
 import { type Request, type Response } from 'express';
 import { AuditService } from '../audit/audit.service';
@@ -33,6 +35,14 @@ import {
 } from '../cameras/helpers/rtsp-url.helper';
 
 type LiveProtocol = 'auto' | 'flv' | 'hls' | 'llhls' | 'webrtc' | 'mjpeg';
+type MediaMtxAuthRequest = {
+  user?: string;
+  password?: string;
+  token?: string;
+  action?: string;
+  path?: string;
+  protocol?: string;
+};
 
 @Controller('camera-stream')
 export class CameraStreamController {
@@ -46,6 +56,7 @@ export class CameraStreamController {
     private readonly auditService: AuditService,
     private readonly commercialPolicy: CommercialPolicyService,
     private readonly streamResourceAdvisor: StreamResourceAdvisorService,
+    private readonly configService: ConfigService,
   ) {}
 
   private extractBearerToken(req: Request): string | null {
@@ -69,6 +80,65 @@ export class CameraStreamController {
       !ua.includes('opr') &&
       !ua.includes('opera');
     return isAppleDevice && isSafariFamily;
+  }
+
+  private resolveApiPublicBase(req: Request) {
+    const configured = String(
+      this.configService.get<string>('apiPublicUrl') ?? process.env.API_PUBLIC_URL ?? '',
+    ).trim().replace(/\/+$/, '');
+    if (configured) return configured;
+
+    const hostHeader = (req.headers['x-forwarded-host'] as string | undefined) ?? req.headers.host ?? 'localhost:3000';
+    const apiHost = hostHeader.split(',')[0].trim();
+    const reqProto = ((req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol ?? 'http')
+      .split(',')[0]
+      .trim();
+    return `${reqProto}://${apiHost}`;
+  }
+
+  @Public()
+  @SkipThrottle()
+  @Post('mediamtx-auth')
+  async authorizeMediaMtx(@Body() body: MediaMtxAuthRequest, @Res() res: Response) {
+    const deny = (message: string) => res.status(401).json({ message });
+    const expectedUser = (this.configService.get<string>('mediaMtxApiUser') ?? '').trim();
+    const expectedPass = (this.configService.get<string>('mediaMtxApiPass') ?? '').trim();
+    const suppliedUser = String(body?.user ?? '');
+    const suppliedPass = String(body?.password ?? '');
+
+    // Processos internos (API, métricas e publishers FFmpeg) continuam usando a
+    // credencial administrativa já existente. O endpoint só é chamado pela rede
+    // interna do Compose, mas a credencial ainda é obrigatória.
+    if (
+      expectedUser &&
+      expectedPass &&
+      suppliedUser === expectedUser &&
+      suppliedPass === expectedPass
+    ) {
+      return res.status(200).json({ authorized: true });
+    }
+
+    const action = String(body?.action ?? '');
+    if (action !== 'read' && action !== 'playback') {
+      return deny('Ação de mídia não autorizada.');
+    }
+
+    const match = /^cam_([0-9a-f]{32})(?:_grid)?$/i.exec(String(body?.path ?? ''));
+    if (!match) return deny('Caminho de mídia inválido.');
+
+    const token = String(body?.token ?? '').trim();
+    if (!token) return deny('Token de mídia ausente.');
+
+    try {
+      const payload = await this.authService.verifyStreamToken(token);
+      const tokenCameraId = payload.cameraId.replace(/-/g, '').toLowerCase();
+      if (tokenCameraId !== match[1].toLowerCase()) {
+        return deny('Token não corresponde à câmera.');
+      }
+      return res.status(200).json({ authorized: true });
+    } catch {
+      return deny('Token de mídia inválido ou expirado.');
+    }
   }
 
   @Roles(UserRole.VIEWER)
@@ -203,8 +273,9 @@ export class CameraStreamController {
     const reqProto = ((req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol ?? 'http')
       .split(',')[0]
       .trim();
-    const flvUrl = `${reqProto}://${apiHost}/camera-stream/${cameraId}/flv`;
-    const posterUrl = `${reqProto}://${apiHost}/camera-stream/${cameraId}/poster`;
+    const apiPublicBase = this.resolveApiPublicBase(req);
+    const flvUrl = `${apiPublicBase}/camera-stream/${cameraId}/flv`;
+    const posterUrl = `${apiPublicBase}/camera-stream/${cameraId}/poster`;
 
     const configuredPreferred = (camera.preferredLiveProtocol ?? 'webrtc').toLowerCase();
     const configuredCodec = camera.streamVideoCodec ?? null;
@@ -334,11 +405,7 @@ export class CameraStreamController {
     const ids = Array.isArray(body?.cameraIds)
       ? (body.cameraIds.filter((v) => typeof v === 'string' && v.length > 0) as string[]).slice(0, 200)
       : [];
-    const hostHeader = (req.headers['x-forwarded-host'] as string | undefined) ?? req.headers.host ?? 'localhost:3000';
-    const apiHost = hostHeader.split(',')[0].trim();
-    const reqProto = ((req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol ?? 'http')
-      .split(',')[0]
-      .trim();
+    const apiPublicBase = this.resolveApiPublicBase(req);
     const items: { cameraId: string; streamToken: string; posterUrl: string }[] = [];
     for (const cameraId of ids) {
       try {
@@ -347,7 +414,7 @@ export class CameraStreamController {
         items.push({
           cameraId,
           streamToken: token.streamToken,
-          posterUrl: `${reqProto}://${apiHost}/camera-stream/${cameraId}/poster`,
+          posterUrl: `${apiPublicBase}/camera-stream/${cameraId}/poster`,
         });
       } catch {
         // Sem acesso / câmera inexistente: omite do lote, não derruba o resto.

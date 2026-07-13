@@ -5,6 +5,7 @@ import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, Text
 import { BRANDING, BRAND_LOGO } from '../branding';
 import { Icon } from '../components/Icon';
 import { useTheme } from '../theme/ThemeProvider';
+import { withAlpha } from '../services/branding';
 
 interface LoginScreenProps {
   apiUrl: string;
@@ -51,8 +52,8 @@ export function LoginScreen({
 
       <View style={styles.hero}>
         <Image source={logoSource} style={styles.logo} resizeMode="contain" />
-        <Text style={[styles.brand, { color: theme.text }]}>{appName}</Text>
-        <Text style={[styles.tagline, { color: theme.textSub }]}>Monitoramento inteligente</Text>
+        <Text style={[styles.brand, { color: theme.bgText }]}>{appName}</Text>
+        <Text style={[styles.tagline, { color: withAlpha(theme.bgText, 0.72) ?? theme.bgText }]}>Monitoramento inteligente</Text>
       </View>
 
       <View style={styles.form}>
@@ -68,6 +69,9 @@ export function LoginScreen({
               keyboardType="email-address"
               placeholder="voce@empresa.com"
               placeholderTextColor={theme.textMuted}
+              accessibilityLabel="E-mail"
+              textContentType="emailAddress"
+              autoComplete="email"
               style={[styles.input, { color: theme.text }]}
             />
           </View>
@@ -84,10 +88,18 @@ export function LoginScreen({
               placeholder="••••••••"
               placeholderTextColor={theme.textMuted}
               onSubmitEditing={onSubmit}
+              accessibilityLabel="Senha"
+              textContentType="password"
+              autoComplete="current-password"
               style={[styles.input, { color: theme.text }]}
             />
           </View>
-          <Pressable onPress={() => setShow((s) => !s)} hitSlop={10}>
+          <Pressable
+            onPress={() => setShow((s) => !s)}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel={show ? 'Ocultar senha' : 'Mostrar senha'}
+          >
             <Icon name="eye" size={19} color={theme.textMuted} />
           </Pressable>
         </View>
@@ -122,7 +134,13 @@ export function LoginScreen({
           </Pressable>
         </View>
 
-        <Pressable onPress={onSubmit} disabled={loading}>
+        <Pressable
+          onPress={onSubmit}
+          disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel="Entrar"
+          accessibilityState={{ disabled: loading, busy: loading }}
+        >
           <LinearGradient colors={[theme.accent, theme.accentDark]} style={[styles.cta, loading && { opacity: 0.7 }]}>
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.ctaText}>Entrar</Text>}
           </LinearGradient>

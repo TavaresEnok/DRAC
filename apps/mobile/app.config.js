@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const base = require('./app.json').expo;
+const base = require('./app.base.json').expo;
 const client = process.env.CLIENT || 'default';
 const clientDir = path.join(__dirname, 'clients', client);
 
@@ -24,13 +24,27 @@ function readClientConfig() {
   }
 }
 
-// Caminho de asset do cliente se existir; senão mantém o padrão do app.json.
+// Caminho de asset do cliente se existir; senão mantém o padrão do app.base.json.
 function asset(name, fallback) {
   const p = path.join(clientDir, name);
   return fs.existsSync(p) ? `./clients/${client}/${name}` : fallback;
 }
 
 const c = readClientConfig();
+const allowCleartextTraffic = c.allowCleartext === true || process.env.ALLOW_CLEARTEXT_TRAFFIC === 'true';
+const plugins = (base.plugins || []).map((plugin) => {
+  if (!Array.isArray(plugin) || plugin[0] !== 'expo-build-properties') return plugin;
+  return [
+    plugin[0],
+    {
+      ...(plugin[1] || {}),
+      android: {
+        ...((plugin[1] && plugin[1].android) || {}),
+        usesCleartextTraffic: allowCleartextTraffic,
+      },
+    },
+  ];
+});
 
 module.exports = () => ({
   expo: {
@@ -41,6 +55,7 @@ module.exports = () => ({
     // (Antes trocava o slug por cliente, o que conflita com o projectId do EAS.)
     slug: base.slug,
     icon: asset('icon.png', base.icon),
+    plugins,
     splash: { ...base.splash, image: asset('splash.png', base.splash && base.splash.image) },
     android: {
       ...base.android,

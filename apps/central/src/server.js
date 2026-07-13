@@ -164,9 +164,15 @@ async function saveDb(db) {
     const current = await fs.readFile(DATA_FILE, 'utf8');
     if (parseDbText(current)) await fs.writeFile(`${DATA_FILE}.bak`, current);
   } catch { /* sem arquivo atual ainda, ou ilegível: ignora o backup */ }
-  const tmp = `${DATA_FILE}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(db, null, 2));
-  await fs.rename(tmp, DATA_FILE);
+  // Nome único também protege contra duas instâncias acidentalmente apontando
+  // para o mesmo volume (ou uma rota não serializada no futuro).
+  const tmp = `${DATA_FILE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fs.writeFile(tmp, JSON.stringify(db, null, 2));
+    await fs.rename(tmp, DATA_FILE);
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
+  }
 }
 
 function timingSafeTextEquals(a, b) {
@@ -295,7 +301,8 @@ function publicBaseUrl(req) {
   if (configured) return configured.replace(/\/+$/, '');
   const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || (req.socket.encrypted ? 'https' : 'http');
   const host = String(req.headers['x-forwarded-host'] || req.headers.host || `127.0.0.1:${PORT}`).split(',')[0].trim();
-  return `${proto}://${host}`;
+  const prefix = String(req.headers['x-forwarded-prefix'] || '').split(',')[0].trim().replace(/\/+$/, '');
+  return `${proto}://${host}${prefix && prefix.startsWith('/') ? prefix : ''}`;
 }
 
 function buildInstallCommand({ customerName, installationId, licenseKey, serverAddress, centralUrl }) {
@@ -1456,6 +1463,49 @@ async function route(req, res) {
           ...securityHeaders(req),
           'content-type': 'application/vnd.android.package-archive',
           'content-disposition': `attachment; filename="${filename}"`,
+          ...(len ? { 'content-length': len } : {}),
+        });
+        const { Readable } = require('node:stream');
+        Readable.fromWeb(upstream.body).pipe(res);
+        return;
+      }
+      // Download do AAB (App Bundle) — arquivo que sobe na Google Play Store.
+      const aabDownloadMatch = url.pathname.match(/^\/api\/admin\/apk\/clients\/([^/]+)\/download-aab$/);
+      if (req.method === 'GET' && aabDownloadMatch) {
+        const slug = decodeURIComponent(aabDownloadMatch[1]);
+        const inst = db.installations[slug];
+        const base = safeApkFilename(inst ? effectiveAppName(inst) : slug).replace(/\.apk$/i, '');
+        await saveDb(db);
+        const upstream = await fetch(`${APK_SOURCE_BASE}/apk/drac-${encodeURIComponent(slug)}.aab`);
+        if (!upstream.ok || !upstream.body) {
+          return json(req, res, 404, { error: 'aab_not_found', message: 'AAB (Play Store) ainda não gerado. Gere/atualize o app.' });
+        }
+        const len = upstream.headers.get('content-length');
+        res.writeHead(200, {
+          ...securityHeaders(req),
+          'content-type': 'application/octet-stream',
+          'content-disposition': `attachment; filename="${base}.aab"`,
+          ...(len ? { 'content-length': len } : {}),
+        });
+        const { Readable } = require('node:stream');
+        Readable.fromWeb(upstream.body).pipe(res);
+        return;
+      }
+      const kitDownloadMatch = url.pathname.match(/^\/api\/admin\/apk\/clients\/([^/]+)\/download-kit$/);
+      if (req.method === 'GET' && kitDownloadMatch) {
+        const slug = decodeURIComponent(kitDownloadMatch[1]);
+        const inst = db.installations[slug];
+        const base = safeApkFilename(inst ? effectiveAppName(inst) : slug).replace(/\.apk$/i, '');
+        await saveDb(db);
+        const upstream = await fetch(`${APK_SOURCE_BASE}/apk/drac-${encodeURIComponent(slug)}-playstore-kit.zip`);
+        if (!upstream.ok || !upstream.body) {
+          return json(req, res, 404, { error: 'kit_not_found', message: 'Kit Play Store ainda não gerado. Gere/atualize o app.' });
+        }
+        const len = upstream.headers.get('content-length');
+        res.writeHead(200, {
+          ...securityHeaders(req),
+          'content-type': 'application/zip',
+          'content-disposition': `attachment; filename="${base}-playstore-kit.zip"`,
           ...(len ? { 'content-length': len } : {}),
         });
         const { Readable } = require('node:stream');

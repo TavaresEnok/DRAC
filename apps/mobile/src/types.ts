@@ -66,8 +66,10 @@ export type Recording = {
   endedAt?: string | null;
   durationSeconds?: number | null;
   sizeBytes?: string | number | null;
+  actualSizeBytes?: string | number | null;
   fileUsable?: boolean;
   fileExists?: boolean;
+  thumbnailUrl?: string | null;
 };
 
 export type ActivePlayback = {
@@ -75,8 +77,16 @@ export type ActivePlayback = {
   url: string;
 };
 
+export type MobileCapabilities = {
+  liveView: boolean;
+  playback: boolean;
+  exportEvidence: boolean;
+  alarmAck: boolean;
+};
+
 export type StreamUrls = {
   streamToken?: string;
+  streamTokenExpiresAt?: string | null;
   protocols?: {
     hlsUrl?: string | null;
     webrtcUrl?: string | null;

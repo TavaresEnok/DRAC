@@ -2,23 +2,28 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as bcrypt from 'bcrypt';
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
-import { CameraPermissionLevel, UserRole } from '@prisma/client';
+import { AlarmSource, AlarmStatus, CameraPermissionLevel, UserRole } from '@prisma/client';
 import { AccessControlService } from '../src/access-control/access-control.service';
 import { AuthService } from '../src/auth/auth.service';
 import { AiManagerService } from '../src/ai/ai-manager.service';
 import { AiService } from '../src/ai/ai.service';
 import { CameraStreamController } from '../src/camera-stream/camera-stream.controller';
 import { StreamResourceAdvisorService } from '../src/camera-stream/stream-resource-advisor.service';
+import { MediamtxProxyService } from '../src/camera-stream/mediamtx-proxy.service';
 import { CamerasController } from '../src/cameras/cameras.controller';
 import { EvidenceService } from '../src/evidence/evidence.service';
 import { RecordingsController } from '../src/recordings/recordings.controller';
 import { RecordingsService } from '../src/recordings/recordings.service';
 import { UsersService } from '../src/users/users.service';
+import { SettingsService } from '../src/settings/settings.service';
 import { PermissionsGuard } from '../src/role-permissions/permissions.guard';
 import { DEFAULT_PERMISSIONS, normalizeMatrix } from '../src/role-permissions/role-permissions.constants';
 import { assessCameraCompatibility } from '../src/cameras/helpers/camera-compatibility.helper';
 import { assessLiveReadiness } from '../src/camera-stream/helpers/live-readiness.helper';
 import type { AuthUser } from '../src/common/types/auth-user.type';
+import { AlarmsService } from '../src/alarms/alarms.service';
+import { ensureFileUnderRoot } from '../src/recordings/helpers/safe-file.helper';
+import { CameraHealthCheckProcessor } from '../src/jobs/processors/camera-health-check.processor';
 
 type TestCase = { name: string; run: () => Promise<void> | void };
 const tests: TestCase[] = [];
@@ -62,6 +67,15 @@ const permissions = [
   { userId: 'operator', cameraId: null, groupId: 'group-a', level: CameraPermissionLevel.CONTROL },
   { userId: 'recorder', cameraId: 'cam-1', groupId: null, level: CameraPermissionLevel.RECORD },
 ];
+
+test('settings branding: expõe paletas clara e escura com compatibilidade', async () => {
+  const prisma = { systemSetting: { findMany: async () => [] } };
+  const service = new SettingsService(prisma as any);
+  const branding = await service.getBranding();
+  assert.equal(branding.brandPrimaryColor, '', 'chaves históricas devem continuar disponíveis para tema escuro');
+  assert.equal(branding.brandLightBackgroundColor, '#f5f7fb', 'tema claro deve possuir fallback próprio');
+  assert.equal(branding.brandLightPrimaryTextColor, '#111827', 'texto do tema claro deve ser exposto publicamente');
+});
 
 function makeAccessControlService() {
   const prisma = {
@@ -214,6 +228,21 @@ test('live readiness: aprova WHEP na mesma origem segura', () => {
   assert.equal(readiness.readyForWebrtc, true);
 });
 
+test('mediamtx: URL RTSP interna inclui autenticação sem expor senha em claro malformada', () => {
+  const service = new MediamtxProxyService(
+    config({
+      mediaMtxRtspInternalUrl: 'rtsp://mediamtx:8554',
+      mediaMtxApiUser: 'internal-user',
+      mediaMtxApiPass: 'p@ss/word',
+    }) as any,
+    {} as any,
+    {} as any,
+    {} as any,
+  );
+  const url = service.buildInternalRtspUrl('cam_abc_grid');
+  assert.equal(url, 'rtsp://internal-user:p%40ss%2Fword@mediamtx:8554/cam_abc_grid');
+});
+
 test('ai service: modo desativado nao tenta acessar container ausente', async () => {
   const previous = process.env.AI_AUTO_START_ENABLED;
   process.env.AI_AUTO_START_ENABLED = 'false';
@@ -256,6 +285,7 @@ test('auth: login normaliza email, retorna usuario sanitizado e token assinado',
           name: 'Admin',
           role: UserRole.ADMIN,
           isActive: true,
+          authVersion: 3,
           passwordHash,
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -277,7 +307,45 @@ test('auth: login normaliza email, retorna usuario sanitizado e token assinado',
   assert.equal(result.user.role, UserRole.ADMIN);
   assert.equal('passwordHash' in result.user, false);
   assert.equal(signCalls[0].payload.type, 'access');
+  assert.equal(signCalls[0].payload.ver, 3);
   assert.equal(signCalls[0].options.expiresIn, '15m');
+});
+
+test('auth: rejeita token revogado e logout incrementa versão da sessão', async () => {
+  let updateArgs: any = null;
+  const prisma = {
+    user: {
+      findUnique: async () => ({
+        id: 'user-1',
+        email: 'admin@test.local',
+        name: 'Admin',
+        role: UserRole.ADMIN,
+        isActive: true,
+        authVersion: 4,
+        passwordHash: 'unused',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+      update: async (args: any) => {
+        updateArgs = args;
+        return {};
+      },
+    },
+  };
+  const service = new AuthService(prisma as any, {} as any, config({}) as any, settings() as any);
+
+  await assert.rejects(
+    () => service.validateAccessPayload({
+      sub: 'user-1',
+      email: 'admin@test.local',
+      role: UserRole.ADMIN,
+      ver: 3,
+      type: 'access',
+    }),
+    UnauthorizedException,
+  );
+  await service.logout('user-1');
+  assert.deepEqual(updateArgs.data.authVersion, { increment: 1 });
 });
 
 test('auth: senha invalida rejeita com UnauthorizedException', async () => {
@@ -299,6 +367,95 @@ test('auth: senha invalida rejeita com UnauthorizedException', async () => {
   const service = new AuthService(prisma as any, { signAsync: async () => 'never' } as any, config({}) as any, settings() as any);
 
   await assert.rejects(() => service.login('admin@test.local', 'wrong'), UnauthorizedException);
+});
+
+test('arquivos: bloqueia prefixo parecido fora da raiz de gravações', () => {
+  assert.equal(ensureFileUnderRoot('/storage/recordings', 'cam-1/video.mp4'), '/storage/recordings/cam-1/video.mp4');
+  assert.throws(
+    () => ensureFileUnderRoot('/storage/recordings', '/storage/recordings-evil/video.mp4'),
+    /fora da raiz/,
+  );
+});
+
+test('alarmes: movimento aberto é auto-resolvido após período sem ocorrências', async () => {
+  let updateArgs: any = null;
+  const prisma = {
+    alarmRule: {
+      findUnique: async () => ({ dedupWindowSeconds: 60 }),
+    },
+    alarmInstance: {
+      updateMany: async (args: any) => {
+        updateArgs = args;
+        return { count: 2 };
+      },
+    },
+  };
+  const service = new AlarmsService(prisma as any, {} as any, {} as any, {} as any);
+  const now = new Date('2026-07-13T20:00:00.000Z');
+
+  const result = await service.resolveStaleMotionAlarms(now);
+
+  assert.equal(result.resolved, 2);
+  assert.equal(updateArgs.where.source, AlarmSource.MOTION);
+  assert.equal(updateArgs.where.type, 'MOTION_DETECTED');
+  assert.deepEqual(updateArgs.where.status.in, [AlarmStatus.OPEN, AlarmStatus.ACKED]);
+  assert.equal(updateArgs.data.status, AlarmStatus.RESOLVED);
+  assert.equal(updateArgs.data.resolvedByUserName, 'SYSTEM_MOTION_QUIET');
+});
+
+test('health motion: status agregado degraded não marca processador saudável como stale', async () => {
+  const originalFetch = globalThis.fetch;
+  const events: Array<{ cameraId: string; type: string }> = [];
+  const nowSeconds = Date.now() / 1000;
+  globalThis.fetch = (async () => ({
+    ok: true,
+    json: async () => ({
+      status: 'degraded',
+      processors: {
+        'cam-healthy': {
+          running: true,
+          last_seen: nowSeconds,
+          readiness: { ready: true, reason: null },
+        },
+        'cam-stale': {
+          running: false,
+          last_seen: nowSeconds,
+          readiness: { ready: false, reason: 'processor_stopped' },
+        },
+      },
+    }),
+  })) as any;
+
+  try {
+    const prisma = {
+      camera: {
+        findMany: async () => [
+          { id: 'cam-healthy', name: 'Saudável', status: 'ONLINE' },
+          { id: 'cam-stale', name: 'Parada', status: 'ONLINE' },
+        ],
+      },
+      cameraEvent: { findFirst: async () => null },
+    };
+    const camerasService = {
+      registerEvent: async (cameraId: string, type: string) => {
+        events.push({ cameraId, type });
+      },
+    };
+    const processor = new CameraHealthCheckProcessor(
+      prisma as any,
+      config({}) as any,
+      camerasService as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    await (processor as any).checkMotionDetectorHealth();
+
+    assert.deepEqual(events, [{ cameraId: 'cam-stale', type: 'HEALTH_MOTION_DETECTOR_STALE' }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('recordings: listagem aplica filtro de cameras acessiveis', async () => {
@@ -392,12 +549,80 @@ test('camera-stream controller: cria token somente apos validar permissao de vis
     },
   };
   const audit = { log: async () => order.push('audit') };
-  const controller = new CameraStreamController({} as any, {} as any, {} as any, auth as any, access as any, audit as any, commercialPolicy as any, {} as any);
+  const controller = new CameraStreamController(
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    auth as any,
+    access as any,
+    audit as any,
+    commercialPolicy as any,
+    {} as any,
+    {} as any,
+  );
 
   const result = await controller.createStreamToken(user, 'cam-1', { headers: {} } as any);
 
   assert.deepEqual(result, { streamToken: 'stream-token', expiresAt: '2026-05-22T00:05:00.000Z' });
   assert.deepEqual(order, ['access:cam-1', 'policy:localLive', 'token:operator:cam-1', 'audit']);
+});
+
+test('camera-stream: URLs de FLV e poster preservam o prefixo público /api', async () => {
+  const user: AuthUser = { id: 'viewer', email: 'viewer@test.local', name: 'Viewer', role: UserRole.VIEWER };
+  const mediamtx = {
+    isEnabled: () => false,
+    buildPublicUrls: () => ({
+      enabled: false,
+      pathName: null,
+      whepUrl: null,
+      hlsUrl: null,
+      rtspUrl: null,
+    }),
+  };
+  const camera = {
+    id: 'cam-1',
+    channel: 1,
+    subtype: 0,
+    liveChannel: 1,
+    liveSubtype: 0,
+    recordingChannel: 1,
+    recordingSubtype: 0,
+    preferredLiveProtocol: 'webrtc',
+    preferredRtspTransport: 'tcp',
+    streamVideoCodec: 'h264',
+    recordingVideoCodec: 'h264',
+    detectedVideoCodec: 'h264',
+    detectedWidth: 1920,
+    detectedHeight: 1080,
+  };
+  const auth = {
+    createStreamToken: async () => ({ streamToken: 'poster-token', expiresAt: null }),
+  };
+  const access = { assertCanViewCamera: async () => undefined };
+  const controller = new CameraStreamController(
+    {} as any,
+    {} as any,
+    mediamtx as any,
+    { getCameraOrThrow: async () => camera } as any,
+    auth as any,
+    access as any,
+    {} as any,
+    { assertFeature: async () => undefined } as any,
+    {} as any,
+    config({ apiPublicUrl: 'https://drac.example.com/api/' }) as any,
+  );
+  const req = {
+    headers: { host: 'drac.example.com' },
+    protocol: 'https',
+  } as any;
+
+  const delivery = await controller.getDeliveryUrls(user, 'cam-1', undefined, req);
+  const posterTokens = await controller.getPosterTokens(user, { cameraIds: ['cam-1'] }, req);
+
+  assert.equal(delivery.protocols.flvUrl, 'https://drac.example.com/api/camera-stream/cam-1/flv');
+  assert.equal(delivery.protocols.posterUrl, 'https://drac.example.com/api/camera-stream/cam-1/poster');
+  assert.equal(posterTokens.items[0].posterUrl, 'https://drac.example.com/api/camera-stream/cam-1/poster');
 });
 
 test('recordings controller: listagem de operador usa cameras acessiveis', async () => {
@@ -938,6 +1163,8 @@ test('permissions audit: rotas sensiveis mantem RequirePermission', () => {
   assertRoutePermission('src/recordings/recordings.controller.ts', "@Post('recordings/:id/clips/export')", 'exportEvidence');
   assertRoutePermission('src/evidence/evidence.controller.ts', "@Post('sign')", 'exportEvidence');
   assertRoutePermission('src/alarms/alarms.controller.ts', "@Post('rules/:id/mute')", 'alarmAck');
+  assertRoutePermission('src/ai/ai.controller.ts', "@Patch('settings')", 'serverConfig');
+  assertRoutePermission('src/ai/ai.controller.ts', "@Post('sync')", 'serverConfig');
 });
 
 async function main() {

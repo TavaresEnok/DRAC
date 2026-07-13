@@ -1,4 +1,4 @@
-import { resolve, normalize } from 'node:path';
+import { resolve, normalize, sep } from 'node:path';
 
 export function ensureFileUnderRoot(root: string, filePath: string): string {
   const resolvedRoot = resolve(root);
@@ -6,7 +6,7 @@ export function ensureFileUnderRoot(root: string, filePath: string): string {
   const resolvedFile = normalizedPath.startsWith(resolvedRoot)
     ? resolve(normalizedPath)
     : resolve(resolvedRoot, normalizedPath);
-  if (!resolvedFile.startsWith(resolvedRoot)) {
+  if (resolvedFile !== resolvedRoot && !resolvedFile.startsWith(`${resolvedRoot}${sep}`)) {
     throw new Error('Arquivo fora da raiz de gravações.');
   }
   return resolvedFile;

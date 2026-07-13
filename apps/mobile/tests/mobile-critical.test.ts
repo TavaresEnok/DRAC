@@ -1,6 +1,9 @@
-import { formatBytes, formatDateLabel, formatDuration, formatResolution, formatTime, isOnline } from '../src/utils/format';
+import { formatBytes, formatDateLabel, formatDuration, formatResolution, formatTime, isOnline, localDateKey, localDayIsoRange } from '../src/utils/format';
 import { normalizeServerUrl, request, setUnauthorizedHandler } from '../src/services/api';
+import { authenticatedMediaUrl, isSecureMediaUrl } from '../src/services/media-urls';
 import { computeDetectionRect } from '../src/utils/detection-geometry';
+import { contrastRatio, ensureReadableText, fetchBranding } from '../src/services/branding';
+import { clearStreamUrlsCache, requestCachedStreamUrls } from '../src/services/stream-urls-cache';
 import type { Camera } from '../src/types';
 
 type TestCase = { name: string; fn: () => void | Promise<void> };
@@ -24,9 +27,54 @@ test('formatters: tempo, duração, bytes e resolução', () => {
 });
 
 test('formatDateLabel: hoje e data histórica', () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateKey();
   assert(formatDateLabel(today) === 'Hoje', 'data atual deve ser Hoje');
   assert(formatDateLabel('2026-05-20').includes('20'), 'data histórica deve conter dia');
+});
+
+test('localDateKey: usa componentes locais sem converter para UTC', () => {
+  const fakeLocalDate = {
+    getFullYear: () => 2026,
+    getMonth: () => 6,
+    getDate: () => 9,
+  } as Date;
+  assert(localDateKey(fakeLocalDate) === '2026-07-09', 'data local deve preservar ano, mês e dia');
+});
+
+test('localDayIsoRange: envia início e fim do dia civil no fuso do aparelho', () => {
+  const range = localDayIsoRange('2026-07-09');
+  const from = new Date(range.from);
+  const to = new Date(range.to);
+  assert(localDateKey(from) === '2026-07-09', 'início deve permanecer no dia local solicitado');
+  assert(localDateKey(to) === '2026-07-09', 'fim deve permanecer no dia local solicitado');
+  assert(from.getHours() === 0 && from.getMinutes() === 0, 'início deve ser meia-noite local');
+  assert(to.getHours() === 23 && to.getMinutes() === 59, 'fim deve ser 23:59 local');
+});
+
+test('branding: corrige combinações de texto sem contraste', () => {
+  assert((contrastRatio('#ffffff', '#000000') ?? 0) > 20, 'preto e branco devem ter contraste máximo');
+  assert(ensureReadableText('#ffffff', ['#ffffff']) === '#0b0d12', 'texto branco sobre fundo branco deve ser corrigido');
+  assert(ensureReadableText('#ffffff', ['#000000']) === '#ffffff', 'combinação legível deve ser preservada');
+});
+
+test('branding: separa as paletas clara e escura recebidas do servidor', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    facilityName: 'Instalação',
+    brandPrimaryColor: '#111111',
+    brandBackgroundColor: '#000000',
+    brandLightPrimaryColor: '#222222',
+    brandLightBackgroundColor: '#ffffff',
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+  try {
+    const branding = await fetchBranding('https://api.local');
+    assert(branding.dark.primaryColor === '#111111', 'tema escuro deve usar chaves históricas');
+    assert(branding.dark.backgroundColor === '#000000', 'fundo escuro deve ser mapeado');
+    assert(branding.light.primaryColor === '#222222', 'tema claro deve usar chaves brandLight');
+    assert(branding.light.backgroundColor === '#ffffff', 'fundo claro deve ser mapeado');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('isOnline: normaliza status da câmera', () => {
@@ -39,6 +87,16 @@ test('normalizeServerUrl: troca localhost pelo host da API', () => {
   const normalized = normalizeServerUrl('http://localhost:3002/camera-stream/1/poster', 'http://168.194.13.70:3002');
   assert(normalized === 'http://168.194.13.70:3002/camera-stream/1/poster', 'localhost deve ser substituído');
   assert(normalizeServerUrl(null, 'http://api.local') === null, 'null deve retornar null');
+});
+
+test('media URL: preserva query e adiciona streamToken curto', () => {
+  const url = authenticatedMediaUrl('https://media.local/cam/whep?view=grid', 'https://api.local', 'token curto');
+  assert(url != null, 'URL válida deve ser retornada');
+  const parsed = new URL(url!);
+  assert(parsed.searchParams.get('view') === 'grid', 'query existente deve ser preservada');
+  assert(parsed.searchParams.get('token') === 'token curto', 'streamToken deve ser anexado');
+  assert(isSecureMediaUrl(url), 'HTTPS deve ser reconhecido como seguro');
+  assert(!isSecureMediaUrl('http://media.local/live.m3u8'), 'HTTP não deve ser tratado como seguro');
 });
 
 test('request: envia autorização e parseia JSON', async () => {
@@ -70,6 +128,46 @@ test('request: transforma AbortError em mensagem amigável', async () => {
   assert(message === 'Tempo esgotado. Verifique a conexão.', 'AbortError deve virar timeout amigável');
 });
 
+test('cache de stream: deduplica por sessão sem compartilhar credenciais', async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  clearStreamUrlsCache();
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    calls += 1;
+    const authorization = (init?.headers as Record<string, string> | undefined)?.Authorization ?? '';
+    return new Response(JSON.stringify({ authorization }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const [first, duplicate] = await Promise.all([
+      requestCachedStreamUrls<{ authorization: string }>('https://api.local', 'cam-1', 'token-a'),
+      requestCachedStreamUrls<{ authorization: string }>('https://api.local', 'cam-1', 'token-a'),
+    ]);
+    const otherSession = await requestCachedStreamUrls<{ authorization: string }>('https://api.local', 'cam-1', 'token-b');
+    assert(calls === 2, `mesma sessão deve deduplicar e outra sessão deve buscar novamente (got ${calls})`);
+    assert(first.authorization === 'Bearer token-a' && duplicate.authorization === 'Bearer token-a', 'resposta deduplicada deve manter a sessão correta');
+    assert(otherSession.authorization === 'Bearer token-b', 'cache não deve vazar token entre contas');
+  } finally {
+    clearStreamUrlsCache();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('cache de stream: erro não JSON continua legível', async () => {
+  const originalFetch = globalThis.fetch;
+  clearStreamUrlsCache();
+  globalThis.fetch = (async () => new Response('gateway indisponível', { status: 502 })) as typeof fetch;
+  let message = '';
+  try {
+    await requestCachedStreamUrls('https://api.local', 'cam-2', 'token-a');
+  } catch (error) {
+    message = error instanceof Error ? error.message : '';
+  } finally {
+    clearStreamUrlsCache();
+    globalThis.fetch = originalFetch;
+  }
+  assert(message === 'gateway indisponível', 'erro textual do servidor deve ser preservado');
+});
+
 test('computeDetectionRect: mapeia bbox respeitando o letterbox do contain', () => {
   // Frame 1000x1000 num container 200x100 → vídeo renderizado fica 100x100,
   // centralizado, com 50px de letterbox em cada lado horizontal.
@@ -85,10 +183,11 @@ test('computeDetectionRect: mapeia bbox respeitando o letterbox do contain', () 
 });
 
 test('api 401: requisição AUTENTICADA dispara o handler de sessão expirada', async () => {
-  const originalFetch = global.fetch;
+  const originalFetch = globalThis.fetch;
   let fired = 0;
-  setUnauthorizedHandler(() => { fired += 1; });
-  global.fetch = (async () => ({
+  let receivedToken = '';
+  setUnauthorizedHandler((token) => { fired += 1; receivedToken = token ?? ''; });
+  globalThis.fetch = (async () => ({
     ok: false,
     status: 401,
     text: async () => JSON.stringify({ message: 'expired' }),
@@ -96,17 +195,18 @@ test('api 401: requisição AUTENTICADA dispara o handler de sessão expirada', 
   try {
     await request('http://x', '/cameras', 'a-token').catch(() => undefined);
     assert(fired === 1, `handler deveria disparar 1x em 401 autenticado (got ${fired})`);
+    assert(receivedToken === 'a-token', 'handler deve identificar qual sessão originou o 401');
   } finally {
-    global.fetch = originalFetch;
+    globalThis.fetch = originalFetch;
     setUnauthorizedHandler(null);
   }
 });
 
 test('api 401: SEM token (login) NÃO dispara o handler', async () => {
-  const originalFetch = global.fetch;
+  const originalFetch = globalThis.fetch;
   let fired = 0;
   setUnauthorizedHandler(() => { fired += 1; });
-  global.fetch = (async () => ({
+  globalThis.fetch = (async () => ({
     ok: false,
     status: 401,
     text: async () => JSON.stringify({ message: 'senha inválida' }),
@@ -115,7 +215,7 @@ test('api 401: SEM token (login) NÃO dispara o handler', async () => {
     await request('http://x', '/auth/login').catch(() => undefined);
     assert(fired === 0, `handler NÃO deve disparar em 401 sem token (got ${fired})`);
   } finally {
-    global.fetch = originalFetch;
+    globalThis.fetch = originalFetch;
     setUnauthorizedHandler(null);
   }
 });

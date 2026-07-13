@@ -17,8 +17,9 @@ Type=simple
 User=flashnet
 WorkingDirectory=/home/flashnet/Drac/apps/mobile
 EnvironmentFile=/home/flashnet/Drac/infra/build-agent.env
+Environment=BUILD_AGENT_HOST=172.17.0.1
 Environment=BUILD_AGENT_PORT=8780
-Environment=PUBLIC_APK_BASE=http://168.194.13.70:5173
+Environment=PUBLIC_APK_BASE=https://ajustcam.ajustconsulting.com.br
 Environment=MIN_FREE_GB=6
 Environment=PATH=/home/flashnet/toolchain/jdk-17.0.19+10/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/local/bin/node /home/flashnet/Drac/apps/mobile/scripts/build-agent.mjs

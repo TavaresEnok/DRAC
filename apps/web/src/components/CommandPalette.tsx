@@ -26,7 +26,7 @@ const PAGES: PalettePage[] = [
   { label: 'Ao Vivo',       path: '/live',       icon: Monitor,     description: 'Grade de câmeras e controles' },
   { label: 'Reprodução',    path: '/playback',   icon: PlaySquare,  description: 'Revisar gravações' },
   { label: 'Controle PTZ',  path: '/ptz',        icon: Crosshair,   description: 'Movimentação e presets PTZ' },
-  { label: 'Minha conta',   path: '/profile',    icon: UserCircle,  description: 'Seu perfil e gestão do grupo', roles: ['viewer'] },
+  { label: 'Minha conta',   path: '/profile',    icon: UserCircle,  description: 'Seu perfil e gestão do grupo' },
   // operator+
   { label: 'Alertas',       path: '/alarms',     icon: Bell,        description: 'Tratamento e regras de alarme',       roles: ['admin', 'operator'] },
   { label: 'Câmeras',       path: '/cameras',    icon: Camera,      description: 'Gestão e configuração de câmeras',    roles: ['admin', 'operator'] },

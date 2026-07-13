@@ -5,7 +5,7 @@ DRAC_REPO_URL="${DRAC_REPO_URL:-https://github.com/TavaresEnok/DRAC.git}"
 DRAC_BRANCH="${DRAC_BRANCH:-main}"
 DRAC_INSTALL_DIR="${DRAC_INSTALL_DIR:-/home/flashnet/Drac}"
 DRAC_OPERATING_USER="${DRAC_OPERATING_USER:-flashnet}"
-DRAC_CENTRAL_URL="${DRAC_CENTRAL_URL:-http://168.194.13.70:9765}"
+DRAC_CENTRAL_URL="${DRAC_CENTRAL_URL:-https://ajustcam.ajustconsulting.com.br/central}"
 DRAC_ENVIRONMENT="${DRAC_ENVIRONMENT:-prod}"
 DRAC_AUTO_YES="${DRAC_AUTO_YES:-false}"
 

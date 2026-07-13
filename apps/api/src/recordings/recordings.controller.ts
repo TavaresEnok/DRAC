@@ -22,6 +22,9 @@ import { RecordingsService } from './recordings.service';
 import { ExportClipDto } from './dto/export-clip.dto';
 import { InvestigationsService } from '../investigations/investigations.service';
 import { CommercialPolicyService } from '../commercial-policy/commercial-policy.service';
+import { ModuleRef } from '@nestjs/core';
+import { AiManagerService } from '../ai/ai-manager.service';
+import { AiService } from '../ai/ai.service';
 
 @Controller()
 export class RecordingsController {
@@ -33,6 +36,9 @@ export class RecordingsController {
     private readonly accessControlService: AccessControlService,
     private readonly auditService: AuditService,
     private readonly commercialPolicy: CommercialPolicyService,
+    // ModuleRef resolve AiManagerService/AiService em runtime, evitando o ciclo
+    // de módulos Recordings→Ai→Cameras→Recordings (que o Nest não instancia).
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   private extractBearerToken(req: Request): string | null {
@@ -100,6 +106,17 @@ export class RecordingsController {
     await this.commercialPolicy.assertFeature('localRecording', user);
     const enabled = body?.enabled !== false;
     const result = await this.recordingManager.setMotionRecording(cameraId, enabled);
+    // Liga/desliga a detecção de movimento (leve, MOG2 — sem YOLO) APENAS nesta
+    // câmera. Armar na aba de gravação passa a ser o liga/desliga por câmera:
+    // sem câmera armada, o ai-service não analisa nada (custo zero). Best-effort:
+    // se o ai-service estiver fora do ar, a gravação manual continua funcionando.
+    if (enabled) {
+      const aiManager = this.moduleRef.get(AiManagerService, { strict: false });
+      await aiManager.startCamera(cameraId).catch(() => undefined);
+    } else {
+      const aiService = this.moduleRef.get(AiService, { strict: false });
+      await aiService.stopAnalysis(cameraId).catch(() => undefined);
+    }
     await this.auditService.log(user.id, enabled ? 'recording.motion.enable' : 'recording.motion.disable', 'Camera', cameraId, { status: result.status }, req);
     return result;
   }
@@ -212,6 +229,32 @@ export class RecordingsController {
     await this.recordingManager.stopAll();
     const result = await this.recordingsService.deleteAllRecordings();
     await this.auditService.log(user.id, 'recording.delete_all', 'Recording', null, result, req);
+    return result;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
+  @Post('recordings/maintenance/reconcile')
+  async reconcileRecordingMetadata(
+    @CurrentUser() user: AuthUser,
+    @Body() body: { limit?: number },
+    @Req() req: Request,
+  ) {
+    const result = await this.recordingsService.reconcileRecordingMetadata(body?.limit ?? 2_000);
+    await this.auditService.log(user.id, 'recording.metadata.reconcile', 'Recording', null, result, req);
+    return result;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
+  @Post('recordings/maintenance/thumbnails/backfill')
+  async backfillRecordingThumbnails(
+    @CurrentUser() user: AuthUser,
+    @Body() body: { limit?: number },
+    @Req() req: Request,
+  ) {
+    const result = await this.recordingsService.enqueueMissingThumbnails(body?.limit ?? 2_000);
+    await this.auditService.log(user.id, 'recording.thumbnail.backfill', 'Recording', null, result, req);
     return result;
   }
 

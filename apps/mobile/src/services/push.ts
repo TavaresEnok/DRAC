@@ -44,8 +44,9 @@ async function ensureAndroidChannel() {
  * Retorna o token Expo (para desregistrar no logout) ou null se indisponível.
  * NUNCA lança — falha de push jamais deve quebrar o login.
  */
-export async function registerForPush(apiUrl: string, authToken: string): Promise<string | null> {
+export async function registerForPush(apiUrl: string, authToken: string, signal?: AbortSignal): Promise<string | null> {
   try {
+    if (signal?.aborted) return null;
     await ensureAndroidChannel();
 
     // Push real só funciona em aparelho físico (emulador não recebe).
@@ -67,11 +68,13 @@ export async function registerForPush(apiUrl: string, authToken: string): Promis
     }
 
     const { data: expoToken } = await Notifications.getExpoPushTokenAsync({ projectId });
+    if (signal?.aborted) return null;
     cachedExpoToken = expoToken;
 
     await request(apiUrl, '/notifications/devices', authToken, {
       method: 'POST',
       body: JSON.stringify({ token: expoToken, platform: Platform.OS }),
+      signal,
     });
     return expoToken;
   } catch (error) {
@@ -103,12 +106,27 @@ export async function unregisterFromPush(apiUrl: string, authToken: string, expo
 export function subscribeToNotificationTaps(
   onOpenAlarm: (data: { alarmId?: string; cameraId?: string }) => void,
 ) {
-  const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+  let active = true;
+  const handled = new Set<string>();
+  const handle = (response: Notifications.NotificationResponse | null) => {
+    if (!active || !response) return;
+    const notificationId = response.notification.request.identifier;
+    if (handled.has(notificationId)) return;
+    handled.add(notificationId);
     const data = (response.notification.request.content.data ?? {}) as {
       alarmId?: string;
       cameraId?: string;
     };
     onOpenAlarm(data);
-  });
-  return () => sub.remove();
+    void Notifications.clearLastNotificationResponseAsync().catch(() => undefined);
+  };
+
+  // O listener cobre app aberto/background. A última resposta cobre o cold start
+  // (usuário tocou no push quando o processo ainda não existia).
+  void Notifications.getLastNotificationResponseAsync().then(handle).catch(() => undefined);
+  const sub = Notifications.addNotificationResponseReceivedListener(handle);
+  return () => {
+    active = false;
+    sub.remove();
+  };
 }

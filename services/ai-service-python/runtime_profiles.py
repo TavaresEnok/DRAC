@@ -68,6 +68,7 @@ MOTION_PROFILE = {
     "analysis_height": 180,
     "motion_trigger": "SYSTEM",
     "motion_pixels_threshold": 1800,
+    "motion_min_consecutive_hits": 3,
     "motion_warmup_frames": 60,
     "event_debounce_seconds": 30,
     "show_after_hits": 1,

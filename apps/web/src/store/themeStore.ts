@@ -7,12 +7,13 @@ interface ThemeState {
   setTheme: (theme: Theme) => void;
 }
 
-const STORAGE_KEY = 'nexusguard-theme';
+const STORAGE_KEY = 'drac-theme';
+const LEGACY_STORAGE_KEY = 'nexusguard-theme';
 
 function getInitialTheme(): Theme {
   if (typeof window === 'undefined') return 'dark';
 
-  const stored = window.localStorage.getItem(STORAGE_KEY);
+  const stored = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
   if (stored === 'dark' || stored === 'light' || stored === 'dim') return stored;
 
   return 'dark';
@@ -23,6 +24,7 @@ export const useThemeStore = create<ThemeState>((set) => ({
   setTheme: (theme) => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(STORAGE_KEY, theme);
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
     }
     set({ theme });
   },

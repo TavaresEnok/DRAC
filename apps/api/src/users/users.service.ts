@@ -36,7 +36,13 @@ export class UsersService {
   }
 
   private sanitize(user: User) {
-    const { passwordHash, ...safe } = user;
+    const {
+      passwordHash: _passwordHash,
+      resetTokenHash: _resetTokenHash,
+      resetTokenExpiresAt: _resetTokenExpiresAt,
+      authVersion: _authVersion,
+      ...safe
+    } = user;
     return safe;
   }
 
@@ -167,7 +173,12 @@ export class UsersService {
         email: dto.email?.trim().toLowerCase(),
         role: dto.role,
         isActive: dto.isActive,
-        ...(dto.password ? { passwordHash: await bcrypt.hash(dto.password, 10) } : {}),
+        ...(dto.password
+          ? {
+              passwordHash: await bcrypt.hash(dto.password, 10),
+              authVersion: { increment: 1 },
+            }
+          : {}),
       },
     });
 
@@ -187,7 +198,10 @@ export class UsersService {
 
     await this.assertPasswordStrength(dto.newPassword);
     const passwordHash = await bcrypt.hash(dto.newPassword, 10);
-    await this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash, authVersion: { increment: 1 } },
+    });
     return { success: true };
   }
 
@@ -210,7 +224,7 @@ export class UsersService {
 
     const user = await this.prisma.user.update({
       where: { id },
-      data: { isActive: false },
+      data: { isActive: false, authVersion: { increment: 1 } },
     });
 
     return this.sanitize(user);

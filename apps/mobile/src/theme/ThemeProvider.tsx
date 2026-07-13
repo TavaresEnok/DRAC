@@ -1,7 +1,6 @@
 /**
- * ThemeProvider — disponibiliza o tema (base escuro único) + a marca (branding)
- * aplicada em runtime a partir do servidor. O tema claro/escuro foi removido: a
- * aparência vem 100% do branding por cima do base.
+ * ThemeProvider — disponibiliza as paletas clara/escura da instalação e mantém
+ * a preferência escolhida pelo usuário neste aparelho.
  *
  * Uso:
  *   <ThemeProvider>
@@ -10,12 +9,19 @@
  *
  *   const { theme, branding, applyBranding } = useTheme();
  */
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import { type Theme, baseTheme } from './theme';
-import { EMPTY_BRANDING, type RuntimeBranding, darkenHex, isValidHex, shiftHex, withAlpha } from '../services/branding';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useColorScheme } from 'react-native';
+import { type Theme, darkTheme, lightTheme } from './theme';
+import { EMPTY_BRANDING, type BrandingPalette, type RuntimeBranding, darkenHex, ensureReadableText, isValidHex, shiftHex, withAlpha } from '../services/branding';
+
+export type ThemeMode = 'dark' | 'light' | 'system';
+const THEME_MODE_KEY = '@drac:theme-mode:v1';
 
 interface ThemeContextValue {
   theme: Theme;
+  themeMode: ThemeMode;
+  setThemeMode: (mode: ThemeMode) => void;
   /** Marca em runtime (logo/nome/cores) lida do servidor. */
   branding: RuntimeBranding;
   /** Aplica a marca recebida do servidor (cores entram no tema na hora). */
@@ -39,9 +45,16 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
  *   borderColor        → border
  *   success/warning/dangerColor → cores de status
  */
-function withBranding(base: Theme, branding: RuntimeBranding): Theme {
+function withBranding(base: Theme, branding: BrandingPalette): Theme {
   let theme = base;
-  const isDark = theme.mode === 'dark';
+  if (isValidHex(branding.backgroundColor)) {
+    // bg2 segue bg por padrão (fundo sólido); a 2ª cor abaixo transforma em gradiente.
+    theme = { ...theme, bg: branding.backgroundColor, bg2: branding.backgroundColor };
+  }
+  if (isValidHex(branding.backgroundColor2)) {
+    theme = { ...theme, bg2: branding.backgroundColor2 };
+  }
+  const isDark = base.mode === 'dark';
   if (isValidHex(branding.primaryColor)) {
     theme = {
       ...theme,
@@ -52,13 +65,6 @@ function withBranding(base: Theme, branding: RuntimeBranding): Theme {
   }
   if (isValidHex(branding.buttonTextColor)) {
     theme = { ...theme, textOnAccent: branding.buttonTextColor };
-  }
-  if (isValidHex(branding.backgroundColor)) {
-    // bg2 segue bg por padrão (fundo sólido); a 2ª cor abaixo transforma em gradiente.
-    theme = { ...theme, bg: branding.backgroundColor, bg2: branding.backgroundColor };
-  }
-  if (isValidHex(branding.backgroundColor2)) {
-    theme = { ...theme, bg2: branding.backgroundColor2 };
   }
   if (isValidHex(branding.backgroundTextColor)) {
     theme = { ...theme, bgText: branding.backgroundTextColor };
@@ -115,19 +121,48 @@ function withBranding(base: Theme, branding: RuntimeBranding): Theme {
   if (isValidHex(branding.primaryTextColor) && !isValidHex(branding.backgroundTextColor)) {
     theme = { ...theme, bgText: branding.primaryTextColor };
   }
+  // White-label não pode produzir texto invisível. Mantém as cores do cliente
+  // quando passam em contraste AA; caso contrário escolhe preto/branco.
+  theme = {
+    ...theme,
+    text: ensureReadableText(theme.text, [theme.surface]),
+    textSub: ensureReadableText(theme.textSub, [theme.surface]),
+    bgText: ensureReadableText(theme.bgText, [theme.bg, theme.bg2]),
+    menuText: ensureReadableText(theme.menuText, [theme.menu]),
+    textOnAccent: ensureReadableText(theme.textOnAccent, [theme.accent, theme.accentDark]),
+  };
   return theme;
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [branding, setBranding] = useState<RuntimeBranding>(EMPTY_BRANDING);
+  const [themeMode, setThemeModeState] = useState<ThemeMode>('system');
+  const systemScheme = useColorScheme();
+
+  useEffect(() => {
+    void AsyncStorage.getItem(THEME_MODE_KEY).then((stored) => {
+      if (stored === 'dark' || stored === 'light' || stored === 'system') setThemeModeState(stored);
+    }).catch(() => undefined);
+  }, []);
 
   const applyBranding = useCallback((next: RuntimeBranding) => {
     setBranding(next);
   }, []);
+  const setThemeMode = useCallback((mode: ThemeMode) => {
+    setThemeModeState(mode);
+    void AsyncStorage.setItem(THEME_MODE_KEY, mode);
+  }, []);
 
+  const resolvedMode: 'dark' | 'light' = themeMode === 'system' ? (systemScheme === 'light' ? 'light' : 'dark') : themeMode;
   const value = useMemo<ThemeContextValue>(
-    () => ({ theme: withBranding(baseTheme, branding), branding, applyBranding }),
-    [branding, applyBranding],
+    () => ({
+      theme: withBranding(resolvedMode === 'light' ? lightTheme : darkTheme, branding[resolvedMode]),
+      themeMode,
+      setThemeMode,
+      branding,
+      applyBranding,
+    }),
+    [themeMode, resolvedMode, setThemeMode, branding, applyBranding],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

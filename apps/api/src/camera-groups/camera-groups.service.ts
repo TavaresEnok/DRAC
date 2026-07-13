@@ -76,6 +76,19 @@ export class CameraGroupsService {
     return { groupId, enabled, affected: result.count };
   }
 
+  /**
+   * Define a retenção (dias) de TODAS as câmeras do grupo de uma vez. Isto
+   * SOBRESCREVE o valor individual de cada câmera — a UI avisa antes de aplicar.
+   */
+  async setRetentionForGroup(groupId: string, retentionDays: number) {
+    await this.ensureExists(groupId);
+    const result = await this.prisma.camera.updateMany({
+      where: { groupId },
+      data: { retentionDays },
+    });
+    return { groupId, retentionDays, affected: result.count };
+  }
+
   async addCamera(groupId: string, cameraId: string) {
     const group = await this.prisma.cameraGroup.findUnique({ where: { id: groupId } });
     if (!group) throw new NotFoundException('Grupo não encontrado.');

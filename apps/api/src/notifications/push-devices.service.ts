@@ -66,7 +66,36 @@ export class PushDevicesService {
     const userIds = Array.from(
       new Set([...privileged.map((u) => u.id), ...perms.map((p) => p.userId)]),
     );
-    return this.tokensForUsers(userIds);
+    // Remove quem silenciou as notificações DESTA câmera (mute por usuário).
+    const muted = await this.prisma.notificationMute.findMany({
+      where: { cameraId, userId: { in: userIds } },
+      select: { userId: true },
+    });
+    const mutedSet = new Set(muted.map((m) => m.userId));
+    return this.tokensForUsers(userIds.filter((id) => !mutedSet.has(id)));
+  }
+
+  /** Este usuário silenciou as notificações desta câmera? */
+  async isMuted(userId: string, cameraId: string): Promise<boolean> {
+    const row = await this.prisma.notificationMute.findUnique({
+      where: { userId_cameraId: { userId, cameraId } },
+      select: { id: true },
+    });
+    return Boolean(row);
+  }
+
+  /** Liga/desliga o silenciamento de notificações desta câmera p/ o usuário. */
+  async setMute(userId: string, cameraId: string, muted: boolean): Promise<{ muted: boolean }> {
+    if (muted) {
+      await this.prisma.notificationMute.upsert({
+        where: { userId_cameraId: { userId, cameraId } },
+        create: { userId, cameraId },
+        update: {},
+      });
+    } else {
+      await this.prisma.notificationMute.deleteMany({ where: { userId, cameraId } });
+    }
+    return { muted };
   }
 
   private async tokensForPrivileged(): Promise<string[]> {

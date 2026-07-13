@@ -121,6 +121,9 @@ class StreamProcessor:
         self.frame_queue = Queue(maxsize=1)
         self.last_event_by_type = {}
         self.last_seen = 0
+        self.last_capture_success_at = 0.0
+        self.last_capture_failure_at = 0.0
+        self.consecutive_capture_failures = 0
         self.last_advanced_infer_at = 0
         self.motion_detector = MotionDetector()
         self.last_error = None
@@ -479,6 +482,36 @@ class StreamProcessor:
             "buffer_size": 1,
             "queue_size": self.frame_queue.qsize(),
             "dropped_frames": self.capture_frames_dropped,
+            "last_capture_success_at": self.last_capture_success_at,
+            "last_capture_failure_at": self.last_capture_failure_at,
+            "consecutive_capture_failures": self.consecutive_capture_failures,
+        }
+
+    def readiness_state(self, max_frame_age_seconds: float = 20.0) -> dict:
+        now = time.time()
+        awake = self._is_awake()
+        startup_grace = max(0.0, now - self._started_at) < max_frame_age_seconds
+        frame_age_seconds = None if self.last_seen <= 0 else max(0.0, now - self.last_seen)
+        ready = bool(self.running)
+        reason = None
+        if not self.running:
+            ready = False
+            reason = "processor_stopped"
+        elif awake and not startup_grace and self.last_seen <= 0:
+            ready = False
+            reason = "no_frame_received"
+        elif awake and frame_age_seconds is not None and frame_age_seconds > max_frame_age_seconds:
+            ready = False
+            reason = "last_frame_stale"
+        elif awake and self.consecutive_capture_failures >= 3:
+            ready = False
+            reason = "capture_repeatedly_failed"
+        return {
+            "ready": ready,
+            "reason": reason,
+            "awake": awake,
+            "frame_age_seconds": round(frame_age_seconds, 3) if frame_age_seconds is not None else None,
+            "consecutive_capture_failures": self.consecutive_capture_failures,
         }
 
     def _is_awake(self):
@@ -708,6 +741,9 @@ class StreamProcessor:
             # e evita que FFmpeg/OpenCV consuma CPU decodificando frames descartados.
             ret, frame = cap.read()
             if not ret:
+                self.consecutive_capture_failures += 1
+                self.last_capture_failure_at = time.time()
+                self.last_error = f"capture_failed ({self.consecutive_capture_failures} consecutive)"
                 print(f"[{self.camera_id}] Falha na captura, reconectando em 5s...")
                 cap.release()
                 time.sleep(5)
@@ -716,6 +752,10 @@ class StreamProcessor:
             
             capture_timestamp = time.time()
             self.last_seen = capture_timestamp
+            self.last_capture_success_at = capture_timestamp
+            self.consecutive_capture_failures = 0
+            if isinstance(self.last_error, str) and self.last_error.startswith("capture_failed"):
+                self.last_error = None
             self._capture_timestamps.append(capture_timestamp)
             self._update_capture_stream_info(cap, frame)
             

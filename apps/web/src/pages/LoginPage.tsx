@@ -4,6 +4,7 @@ import { Eye, EyeOff, Lock, Mail, User, AlertCircle, ShieldCheck, X } from 'luci
 import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
 import { getApiBaseUrl } from '../lib/api-base';
+import { useBrandingStore } from '../store/brandingStore';
 
 function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
   const [email, setEmail] = useState('');
@@ -96,6 +97,8 @@ export default function LoginPage() {
   const { login, isAuthenticated } = useAuthStore();
   const [, setLocation] = useLocation();
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const facilityName = useBrandingStore((state) => state.facilityName);
+  const logoDataUrl = useBrandingStore((state) => state.logoDataUrl);
 
   const getLoginErrorMessage = (err: unknown) => {
     if (!axios.isAxiosError(err)) return 'Não foi possível autenticar agora. Tente novamente.';
@@ -174,11 +177,11 @@ export default function LoginPage() {
               className="relative flex h-full w-full items-center justify-center overflow-hidden"
               style={{ borderRadius: 17, background: 'linear-gradient(150deg, var(--acc-dim), transparent)', border: '1px solid var(--acc-bdr)' }}
             >
-              <LogoDrac size={30} />
+              {logoDataUrl ? <img src={logoDataUrl} alt="" className="h-12 w-12 object-contain" /> : <LogoDrac size={30} />}
             </div>
           </div>
-          <h1 className="text-[23px] font-bold" style={{ color: 'var(--tx)', letterSpacing: '-0.01em' }}>DRAC VMS</h1>
-          <p className="mt-1 font-mono text-[9px] uppercase" style={{ color: 'var(--tx-4)', letterSpacing: '0.22em' }}>Command Center</p>
+          <h1 className="text-[23px] font-bold" style={{ color: 'var(--tx)', letterSpacing: '-0.01em' }}>{facilityName}</h1>
+          <p className="mt-1 font-mono text-[9px] uppercase" style={{ color: 'var(--tx-4)', letterSpacing: '0.22em' }}>DRAC VMS · Command Center</p>
         </div>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
@@ -192,7 +195,7 @@ export default function LoginPage() {
                 type="text"
                 value={username}
                 onChange={(e) => { setUsername(e.target.value); setError(''); }}
-                placeholder="admin@local.dev"
+                placeholder="seu@email.com"
                 autoFocus
                 data-testid="input-username"
               />

@@ -11,7 +11,8 @@
 //   GET  /builds                  → histórico (sem log completo)
 //   GET  /builds/:id              → job com log
 //
-// Variáveis: BUILD_AGENT_PORT (8780), BUILD_AGENT_TOKEN (obrigatório),
+// Variáveis: BUILD_AGENT_HOST (127.0.0.1), BUILD_AGENT_PORT (8780),
+//   BUILD_AGENT_TOKEN (obrigatório), PUBLIC_APK_BASE_OVERRIDE (preferencial),
 //   PUBLIC_APK_BASE (http://168.194.13.70:5173), MIN_FREE_GB (6).
 import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
@@ -29,8 +30,13 @@ const STATE_FILE = path.join(BUILDS_DIR, 'agent-state.json');
 const APK_PUBLISH_DIR = process.env.APK_PUBLISH_DIR || path.resolve(MOBILE_DIR, '../../infra/apk');
 
 const PORT = Number(process.env.BUILD_AGENT_PORT || 8780);
+const HOST = process.env.BUILD_AGENT_HOST || '127.0.0.1';
 const TOKEN = process.env.BUILD_AGENT_TOKEN || '';
-const PUBLIC_APK_BASE = (process.env.PUBLIC_APK_BASE || 'http://168.194.13.70:5173').replace(/\/+$/, '');
+const PUBLIC_APK_BASE = (
+  process.env.PUBLIC_APK_BASE_OVERRIDE
+  || process.env.PUBLIC_APK_BASE
+  || 'http://168.194.13.70:5173'
+).replace(/\/+$/, '');
 const MIN_FREE_GB = process.env.MIN_FREE_GB || '6';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}$/;
@@ -68,8 +74,10 @@ function processQueue() {
       job.status = 'done';
       const ver = /OK_VERSION=(.+)/.exec(log);
       const url = /OK_URL=(.+)/.exec(log);
+      const aab = /OK_AAB_URL=(.+)/.exec(log);
       job.version = ver ? ver[1].trim() : null;
       job.url = url ? PUBLIC_APK_BASE + url[1].trim() : null;
+      job.aabUrl = aab ? PUBLIC_APK_BASE + aab[1].trim() : null;
     } else {
       job.status = 'failed';
       job.error = `build saiu com código ${code}`;
@@ -88,6 +96,8 @@ function listClients() {
     let cfg = {};
     try { cfg = JSON.parse(fs.readFileSync(path.join(CLIENTS_DIR, slug, 'config.json'), 'utf8')); } catch { /* */ }
     const apk = path.join(APK_PUBLISH_DIR, `drac-${slug}.apk`);
+    const aab = path.join(APK_PUBLISH_DIR, `drac-${slug}.aab`);
+    const kit = path.join(APK_PUBLISH_DIR, `drac-${slug}-playstore-kit.zip`);
     const lastJob = [...state.jobs].reverse().find((j) => j.slug === slug);
     return {
       slug,
@@ -98,6 +108,10 @@ function listClients() {
       hasLogo: fs.existsSync(path.join(CLIENTS_DIR, slug, 'logo.png')),
       apkExists: fs.existsSync(apk),
       apkUrl: fs.existsSync(apk) ? `${PUBLIC_APK_BASE}/apk/drac-${slug}.apk` : null,
+      aabExists: fs.existsSync(aab),
+      aabUrl: fs.existsSync(aab) ? `${PUBLIC_APK_BASE}/apk/drac-${slug}.aab` : null,
+      kitExists: fs.existsSync(kit),
+      kitUrl: fs.existsSync(kit) ? `${PUBLIC_APK_BASE}/apk/drac-${slug}-playstore-kit.zip` : null,
       lastBuild: lastJob ? { status: lastJob.status, version: lastJob.version ?? null, finishedAt: lastJob.finishedAt ?? null } : null,
     };
   });
@@ -188,6 +202,14 @@ function deleteClient(slug) {
   rmrf(path.join(BUILDS_DIR, `drac-${slug}.apk`));
   rmrf(path.join(BUILDS_DIR, `drac-${slug}.apk.idsig`));
   rmrf(path.join(APK_PUBLISH_DIR, `drac-${slug}.apk`)); // remove do diretório servido
+  // Também remove o AAB e o kit (o delete antigo só limpava o APK → sobrava
+  // AAB/kit órfãos servíveis). NÃO remove a keystore (updates precisam dela)
+  // nem o contador `<slug>.versionCode` (a Play exige versionCode monotônico
+  // mesmo após apagar+regerar).
+  rmrf(path.join(BUILDS_DIR, `drac-${slug}.aab`));
+  rmrf(path.join(APK_PUBLISH_DIR, `drac-${slug}.aab`));
+  rmrf(path.join(BUILDS_DIR, `drac-${slug}-playstore-kit.zip`));
+  rmrf(path.join(APK_PUBLISH_DIR, `drac-${slug}-playstore-kit.zip`));
   state.jobs = state.jobs.filter((j) => j.slug !== slug);
   saveState();
 }
@@ -248,4 +270,4 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log(`build-agent ouvindo em :${PORT}`));
+server.listen(PORT, HOST, () => console.log(`build-agent ouvindo em ${HOST}:${PORT}`));

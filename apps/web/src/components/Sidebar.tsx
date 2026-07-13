@@ -12,6 +12,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useSidebarStore } from '../store/sidebarStore';
 import { useAuthStore } from '../store/authStore';
 import { useThemeStore } from '../store/themeStore';
+import { useIsMobile } from '../hooks/use-mobile';
+import { useBrandingStore } from '../store/brandingStore';
 
 type NavItem = {
   path: string;
@@ -52,7 +54,7 @@ const NAV_SECTIONS: NavSection[] = [
     icon: Users,
     items: [
       // Viewer vê "Minha conta" (perfil + gestão do próprio grupo se for group admin)
-      { path: '/profile', label: 'Minha conta', icon: UserCircle, roles: ['viewer'] },
+      { path: '/profile', label: 'Minha conta', icon: UserCircle },
       { path: '/users',   label: 'Usuários',    icon: Users,       roles: ['admin', 'operator'] },
       // Grupos: apenas admin global (Ajust Consulting gerencia grupos)
       { path: '/groups',  label: 'Grupos',      icon: FolderKey,   roles: ['admin'] },
@@ -78,12 +80,16 @@ export function Sidebar({
   onAtalhosOpen?: () => void;
   onSearchOpen?: () => void;
 }) {
-  const { isExpanded, toggle } = useSidebarStore();
+  const { isExpanded: storedExpanded, toggle } = useSidebarStore();
+  const isMobile = useIsMobile();
+  const isExpanded = storedExpanded && !isMobile;
   const { user, logout } = useAuthStore();
   const { theme, setTheme } = useThemeStore();
   const [location] = useLocation();
   const isDark = theme === 'dark' || theme === 'dim';
   const role = user?.role ?? 'operator';
+  const facilityName = useBrandingStore((state) => state.facilityName);
+  const logoDataUrl = useBrandingStore((state) => state.logoDataUrl);
 
   const roleColor = ROLE_COLOR[user?.role ?? 'operator'] ?? ROLE_COLOR.operator;
   const visibleSections = NAV_SECTIONS
@@ -104,7 +110,11 @@ export function Sidebar({
       <div className="sidebar-brand flex items-center h-14 px-3 shrink-0">
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
           <div className="sidebar-mark shrink-0 w-8 h-8 rounded-xl flex items-center justify-center">
-            <Shield className="w-3.5 h-3.5 text-[hsl(var(--primary))]" />
+            {logoDataUrl ? (
+              <img src={logoDataUrl} alt="" className="h-7 w-7 object-contain" />
+            ) : (
+              <Shield className="w-3.5 h-3.5 text-[hsl(var(--primary))]" />
+            )}
           </div>
           {isExpanded && (
             <motion.div
@@ -113,14 +123,15 @@ export function Sidebar({
               transition={{ delay: 0.08 }}
               className="min-w-0"
             >
-              <div className="text-[13px] font-semibold text-sidebar-foreground leading-tight tracking-tight">DRAC</div>
-              <div className="text-[10px] text-[hsl(var(--muted-foreground))]">VMS</div>
+              <div className="max-w-[150px] truncate text-[13px] font-semibold text-sidebar-foreground leading-tight tracking-tight" title={facilityName}>{facilityName}</div>
+              <div className="text-[10px] text-[hsl(var(--muted-foreground))]">DRAC VMS</div>
             </motion.div>
           )}
         </div>
         <button
           onClick={toggle}
-          className="sidebar-toggle shrink-0 w-7 h-7 flex items-center justify-center rounded-xl transition-colors"
+          aria-label={isExpanded ? 'Recolher menu lateral' : 'Expandir menu lateral'}
+          className="sidebar-toggle shrink-0 w-7 h-7 hidden md:flex items-center justify-center rounded-xl transition-colors"
           data-testid="button-sidebar-toggle"
         >
           {isExpanded ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -141,7 +152,7 @@ export function Sidebar({
               {section.items.map(({ path, label, icon: Icon }) => {
                 const isActive = location === path || (path !== '/live' && location.startsWith(path));
                 return isExpanded ? (
-                  <Link key={path} href={path}>
+                  <Link key={path} href={path} aria-current={isActive ? 'page' : undefined}>
                     <div
                       data-testid={`nav-${label.toLowerCase().replace(/[^a-z]/g, '-')}`}
                       className={`sidebar-item relative flex items-center gap-3 h-10 px-3 rounded-lg cursor-pointer transition-colors duration-150 group
@@ -157,7 +168,7 @@ export function Sidebar({
                 ) : (
                   <Tooltip key={path} delayDuration={0}>
                     <TooltipTrigger asChild>
-                      <Link href={path}>
+                      <Link href={path} aria-label={label} aria-current={isActive ? 'page' : undefined}>
                         <div
                           className={`relative flex items-center justify-center h-10 w-10 rounded-lg cursor-pointer transition-colors duration-150 mx-auto
                             ${isActive
@@ -227,6 +238,7 @@ export function Sidebar({
             {isExpanded && (
               <button
                 onClick={logout}
+                aria-label="Sair da conta"
                 className="shrink-0 w-7 h-7 flex items-center justify-center rounded-xl text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive)_/_0.08)] transition-colors"
                 data-testid="button-logout"
               >
@@ -234,6 +246,17 @@ export function Sidebar({
               </button>
             )}
           </div>
+        )}
+        {user && !isExpanded && (
+          <button
+            type="button"
+            onClick={logout}
+            aria-label="Sair da conta"
+            title="Sair"
+            className="sidebar-footer-btn flex h-9 w-9 mx-auto items-center justify-center rounded-lg text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))]"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
         )}
       </div>
     </motion.aside>

@@ -112,6 +112,10 @@ async function fetchMe(accessToken: string) {
   return mapUser(data);
 }
 
+function isAuthenticationRejection(error: unknown) {
+  return axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403);
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: getStoredUser(),
   accessToken: typeof window === 'undefined' ? null : (window.localStorage.getItem(TOKEN_STORAGE_KEY) ?? window.sessionStorage.getItem(TOKEN_STORAGE_KEY)),
@@ -132,12 +136,26 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const user = await fetchMe(accessToken);
       persistSession(accessToken, user);
       set({ user, isAuthenticated: true, isLoading: false, isBootstrapped: true });
-    } catch {
-      persistSession(null, null);
+    } catch (error) {
+      if (isAuthenticationRejection(error)) {
+        persistSession(null, null);
+        set({
+          user: null,
+          accessToken: null,
+          isAuthenticated: false,
+          isLoading: false,
+          isBootstrapped: true,
+        });
+        return;
+      }
+
+      // Uma indisponibilidade momentânea da API não invalida uma sessão que ainda
+      // pode ser válida. Mantemos a identidade em cache e a UI disponível; o
+      // polling operacional sinaliza que os dados estão desatualizados.
+      const cachedUser = get().user ?? getStoredUser();
       set({
-        user: null,
-        accessToken: null,
-        isAuthenticated: false,
+        user: cachedUser,
+        isAuthenticated: Boolean(cachedUser && accessToken),
         isLoading: false,
         isBootstrapped: true,
       });
@@ -164,14 +182,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const user = await fetchMe(accessToken);
       persistSession(accessToken, user);
       set({ user, isAuthenticated: true, isBootstrapped: true });
-    } catch {
-      persistSession(null, null);
-      set({
-        user: null,
-        accessToken: null,
-        isAuthenticated: false,
-        isBootstrapped: true,
-      });
+    } catch (error) {
+      if (isAuthenticationRejection(error)) {
+        persistSession(null, null);
+        set({
+          user: null,
+          accessToken: null,
+          isAuthenticated: false,
+          isBootstrapped: true,
+        });
+      }
     }
   },
   login: async (email, password) => {

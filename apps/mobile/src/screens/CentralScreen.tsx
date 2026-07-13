@@ -29,6 +29,7 @@ interface CentralScreenProps {
   onRefresh: () => void;
   onOpenCamera: (camera: Camera) => void;
   onOpenAlarms: () => void;
+  onPosterError?: (cameraId: string) => void;
 }
 
 function initialsOf(name?: string): string {
@@ -43,7 +44,7 @@ function todayLabel(): string {
 }
 
 export function CentralScreen({
-  cameras, user, streamPosters, operationalMessages, alarmCount, refreshing, onRefresh, onOpenCamera, onOpenAlarms,
+  cameras, user, streamPosters, operationalMessages, alarmCount, refreshing, onRefresh, onOpenCamera, onOpenAlarms, onPosterError,
 }: CentralScreenProps) {
   const { theme, branding } = useTheme();
   const { favorites, isFavorite, toggleFavorite } = useLibrary();
@@ -176,6 +177,7 @@ export function CentralScreen({
             variant="large"
             showPlay
             onPress={() => onOpenCamera(featured)}
+            onPosterError={onPosterError}
             favorite={isFavorite(featured.id)}
             onToggleFavorite={() => toggleFavorite(featured.id)}
           />
@@ -188,6 +190,7 @@ export function CentralScreen({
                     posterUrl={streamPosters[cam.id]}
                     height={124}
                     onPress={() => onOpenCamera(cam)}
+                    onPosterError={onPosterError}
                     favorite={isFavorite(cam.id)}
                     onToggleFavorite={() => toggleFavorite(cam.id)}
                   />
@@ -234,6 +237,7 @@ export function CentralScreen({
                   posterUrl={streamPosters[cam.id]}
                   height={104}
                   onPress={() => onOpenCamera(cam)}
+                  onPosterError={onPosterError}
                   favorite={isFavorite(cam.id)}
                   onToggleFavorite={() => toggleFavorite(cam.id)}
                 />

@@ -15,6 +15,30 @@ import { PushDevicesService } from '../../notifications/push-devices.service';
 
 type NotificationChannel = 'webhook' | 'email' | 'push';
 
+// Rótulos humanos (PT-BR) por tipo de evento — usados no corpo do push para não
+// mostrar textos técnicos ("MOTION DETECTED", "motion (0.27)") ao usuário final.
+const EVENT_LABELS_PT: Record<string, string> = {
+  MOTION_DETECTED: 'Movimento detectado',
+  MOTION_RECORDING_STARTED: 'Gravação por movimento iniciada',
+  MOTION_RECORDING_STOPPED: 'Gravação por movimento encerrada',
+  MOTION_RECORDING_FAILED: 'Falha na gravação por movimento',
+  PERSON_DETECTED: 'Pessoa detectada',
+  VEHICLE_DETECTED: 'Veículo detectado',
+  FACE_DETECTED: 'Rosto detectado',
+  LINE_CROSSING: 'Cruzamento de linha detectado',
+  INTRUSION: 'Intrusão detectada',
+  HEALTH_CAMERA_OFFLINE: 'Câmera ficou offline',
+  HEALTH_CAMERA_RECOVERED: 'Câmera voltou ao normal',
+  HEALTH_AUTO_RECOVERED: 'Câmera recuperada automaticamente',
+};
+
+// Corpo humano do alerta: rótulo mapeado; senão o tipo humanizado (sem
+// underscores/maiúsculas cruas). Nunca vaza texto técnico interno.
+function friendlyEventBody(type: string): string {
+  return EVENT_LABELS_PT[type]
+    ?? type.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+}
+
 type AlarmNotificationJob = {
   alarmId: string;
   ruleId?: string | null;
@@ -161,13 +185,13 @@ export class AlarmNotificationProcessor extends WorkerHost {
     await transporter.sendMail({
       from,
       to: emailTo,
-      subject: `[Alarme ${alarm.priority}] ${alarm.title} - camera ${alarm.cameraId ?? 'desconhecida'}`,
+      subject: `[Alarme ${alarm.priority}] ${alarm.title} - câmera ${(alarm as any).camera?.name ?? alarm.cameraId ?? 'desconhecida'}`,
       text: [
         'Novo alarme detectado',
         '',
         `Titulo: ${alarm.title}`,
         `Mensagem: ${alarm.message}`,
-        `Camera: ${alarm.cameraId ?? 'desconhecida'}`,
+        `Camera: ${(alarm as any).camera?.name ?? alarm.cameraId ?? 'desconhecida'}`,
         `Tipo: ${alarm.type}`,
         `Prioridade: ${alarm.priority}`,
         `Severidade: ${alarm.severity}`,
@@ -187,9 +211,12 @@ export class AlarmNotificationProcessor extends WorkerHost {
     if (!tokens.length) {
       return { skipped: true, reason: 'no_registered_devices' } as const;
     }
+    const cameraName = (alarm as any).camera?.name as string | undefined;
     const { invalidTokens } = await this.pushService.sendToTokens(tokens, {
-      title: `${alarm.priority} · ${alarm.title}`,
-      body: alarm.message,
+      // Título = NOME da câmera (o que o usuário reconhece na hora).
+      // Corpo = descrição humana do evento. Ex.: "Grupo Flash Cam-12" / "Movimento detectado".
+      title: cameraName ?? 'Câmera',
+      body: friendlyEventBody(alarm.type),
       data: {
         alarmId: alarm.id,
         cameraId: alarm.cameraId,
@@ -206,7 +233,10 @@ export class AlarmNotificationProcessor extends WorkerHost {
   }
 
   async process(job: Job<AlarmNotificationJob>) {
-    const alarm = await this.prisma.alarmInstance.findUnique({ where: { id: job.data.alarmId } });
+    const alarm = await this.prisma.alarmInstance.findUnique({
+      where: { id: job.data.alarmId },
+      include: { camera: { select: { name: true } } },
+    });
     if (!alarm) return;
     const rule = job.data.ruleId ? await this.prisma.alarmRule.findUnique({ where: { id: job.data.ruleId } }) : null;
     const payload = this.buildPayload(alarm);

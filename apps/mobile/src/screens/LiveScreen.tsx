@@ -10,7 +10,7 @@
  */
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useState } from 'react';
-import { Alert, type LayoutChangeEvent, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, type LayoutChangeEvent, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DetectionOverlay } from '../components/DetectionOverlay';
 import { Icon, type IconName } from '../components/Icon';
@@ -21,7 +21,7 @@ import { withAlpha } from '../services/branding';
 import type { SavedClip } from '../services/clips';
 import type { ActivePlayback, Camera, Direction, LiveDetection, Recording } from '../types';
 import { areaLabel } from '../utils/camera-view';
-import { formatBytes, formatDateLabel, formatDuration, formatTime } from '../utils/format';
+import { formatBytes, formatDateLabel, formatDuration, formatTime, localDateKey } from '../utils/format';
 
 interface LiveScreenProps {
   camera: Camera;
@@ -37,6 +37,10 @@ interface LiveScreenProps {
   ptzActive: Direction | null;
   ptzFeedback: string | null;
   recordings: Recording[];
+  recordingsTotal: number;
+  recordingsLoading: boolean;
+  recordingsLoadingMore: boolean;
+  recordingsError: string | null;
   /** "Minhas gravações" — clipes gravados pelo app (locais), desta câmera. */
   myRecordings: SavedClip[];
   onPlayLocal: (clip: SavedClip) => void;
@@ -44,15 +48,26 @@ interface LiveScreenProps {
   recordingDate: string;
   activePlayback: ActivePlayback | null;
   recordingActive: boolean;
+  recordingBusy: boolean;
   onBack: () => void;
   onSendPtz: (direction: Direction) => void;
   onToggleRecording: (camera: Camera) => void;
   onSnapshot: (camera: Camera) => void;
   onOpenPlayback: (recording: Recording) => void;
   onClosePlayback: () => void;
+  onRetryPlayback: () => void;
   onDownloadRecording: (recording: Recording) => void;
   onPreviousDate: () => void;
   onNextDate: () => void;
+  onLoadMoreRecordings: () => void;
+  onRetryRecordings: () => void;
+  onThumbnailError?: (recording: Recording) => void;
+  onRefreshStream: () => void;
+  canPlayback: boolean;
+  canDownload: boolean;
+  downloadingIds: string[];
+  notificationsMuted: boolean;
+  onToggleNotifications: (camera: Camera) => void;
 }
 
 const VIDEO_TEXT = '#fff';
@@ -94,9 +109,13 @@ function tokensFor(glass: boolean, theme: Theme): ControlTokens {
 
 export function LiveScreen({
   camera, topInset = 0, streamUrl, whepUrl, posterUrl, hdUrl, onRequestHd, onExitHd, detections, ptzActive, ptzFeedback,
-  recordings, myRecordings, onPlayLocal, onDeleteLocal, recordingDate, activePlayback, recordingActive,
+  recordings, recordingsTotal, recordingsLoading, recordingsLoadingMore, recordingsError,
+  myRecordings, onPlayLocal, onDeleteLocal, recordingDate, activePlayback, recordingActive, recordingBusy,
   onBack, onSendPtz, onToggleRecording, onSnapshot,
-  onOpenPlayback, onClosePlayback, onDownloadRecording, onPreviousDate, onNextDate,
+  onOpenPlayback, onClosePlayback, onRetryPlayback, onDownloadRecording, onPreviousDate, onNextDate,
+  onLoadMoreRecordings, onRetryRecordings, onThumbnailError, onRefreshStream,
+  canPlayback, canDownload, downloadingIds,
+  notificationsMuted, onToggleNotifications,
 }: LiveScreenProps) {
   const { theme } = useTheme();
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('idle');
@@ -147,7 +166,7 @@ export function LiveScreen({
       ? 'Sem permissão para PTZ'
       : 'Controle PTZ ativo';
   const ptzWarn = !ptzSupported || !canControl;
-  const isToday = recordingDate >= new Date().toISOString().slice(0, 10);
+  const isToday = recordingDate >= localDateKey();
 
   const onVideoLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -168,7 +187,7 @@ export function LiveScreen({
   const videoEl = (
     <>
       {playing ? (
-        <PlaybackVideo uri={activePlayback!.url} style={StyleSheet.absoluteFill} />
+        <PlaybackVideo uri={activePlayback!.url} posterUri={activePlayback!.recording.thumbnailUrl} onRetry={onRetryPlayback} style={StyleSheet.absoluteFill} />
       ) : hdActive ? (
         // Máxima qualidade: HLS H.265 puro (whepUri=null força o caminho HLS).
         <LiveVideo
@@ -183,6 +202,7 @@ export function LiveScreen({
           emptyTitleStyle={styles.videoEmptyTitle}
           emptyTextStyle={styles.videoEmptyText}
           onStatusChange={setLiveStatus}
+          onNeedRefresh={onRequestHd}
         />
       ) : (
         <LiveVideo
@@ -198,6 +218,7 @@ export function LiveScreen({
           emptyTextStyle={styles.videoEmptyText}
           onStatusChange={setLiveStatus}
           onAudioAvailable={setAudioAvailable}
+          onNeedRefresh={onRefreshStream}
         />
       )}
       {!playing && isLive ? (
@@ -230,6 +251,9 @@ export function LiveScreen({
     <Pressable
       onPress={toggleHd}
       hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={hdMode ? 'Desativar máxima qualidade' : 'Ativar máxima qualidade'}
+      accessibilityState={{ selected: hdMode }}
       style={[styles.hdPill, hdMode ? { backgroundColor: theme.accent, borderColor: theme.accent } : null]}
     >
       <Icon name="aperture" size={11} color="#fff" strokeWidth={2.4} />
@@ -243,6 +267,9 @@ export function LiveScreen({
       style={[styles.ptzArrow, style, ptzActive === dir && { backgroundColor: withAlpha(c.accent, 0.4) ?? undefined }]}
       onPress={() => onSendPtz(dir)}
       hitSlop={6}
+      accessibilityRole="button"
+      accessibilityLabel={`Mover câmera ${dir === 'Up' ? 'para cima' : dir === 'Down' ? 'para baixo' : dir === 'Left' ? 'para a esquerda' : 'para a direita'}`}
+      accessibilityState={{ disabled: !canPtz }}
     >
       <Icon name={icon} size={20} color={canPtz ? c.text : c.sub} strokeWidth={2.2} />
     </Pressable>
@@ -264,10 +291,10 @@ export function LiveScreen({
         <View style={[styles.zoomBar, { backgroundColor: c.barBg, borderColor: c.barBorder }, !canPtz && { opacity: 0.5 }]}>
           <Text style={[styles.zoomLabel, { color: c.text }]}>Zoom</Text>
           <View style={styles.zoomCtrls}>
-            <Pressable disabled={!canPtz} style={[styles.zoomBtn, { backgroundColor: c.surface }, ptzActive === 'ZoomOut' && { backgroundColor: withAlpha(c.accent, 0.5) ?? undefined }]} onPress={() => onSendPtz('ZoomOut')} hitSlop={6}>
+            <Pressable disabled={!canPtz} accessibilityRole="button" accessibilityLabel="Diminuir zoom" accessibilityState={{ disabled: !canPtz }} style={[styles.zoomBtn, { backgroundColor: c.surface }, ptzActive === 'ZoomOut' && { backgroundColor: withAlpha(c.accent, 0.5) ?? undefined }]} onPress={() => onSendPtz('ZoomOut')} hitSlop={6}>
               <Icon name="minus" size={16} color={c.text} />
             </Pressable>
-            <Pressable disabled={!canPtz} style={[styles.zoomBtn, { backgroundColor: c.surface }, ptzActive === 'ZoomIn' && { backgroundColor: withAlpha(c.accent, 0.5) ?? undefined }]} onPress={() => onSendPtz('ZoomIn')} hitSlop={6}>
+            <Pressable disabled={!canPtz} accessibilityRole="button" accessibilityLabel="Aumentar zoom" accessibilityState={{ disabled: !canPtz }} style={[styles.zoomBtn, { backgroundColor: c.surface }, ptzActive === 'ZoomIn' && { backgroundColor: withAlpha(c.accent, 0.5) ?? undefined }]} onPress={() => onSendPtz('ZoomIn')} hitSlop={6}>
               <Icon name="plus" size={16} color={c.text} />
             </Pressable>
           </View>
@@ -290,7 +317,7 @@ export function LiveScreen({
           <LinearGradient colors={['rgba(0,0,0,0.55)', 'transparent']} style={styles.topShade} pointerEvents="none" />
           <View style={[styles.topBar, { paddingTop: topInset + 10, paddingLeft: 20 + insets.left, paddingRight: 20 + insets.right }]}>
             <View style={styles.topLeft}>
-              <Pressable style={styles.backGlass} onPress={onBack} hitSlop={8}>
+              <Pressable style={styles.backGlass} onPress={onBack} hitSlop={8} accessibilityRole="button" accessibilityLabel="Voltar">
                 <Icon name="chevronLeft" size={20} color="#fff" strokeWidth={2.1} />
               </Pressable>
               <View style={{ flexShrink: 1 }}>
@@ -330,9 +357,10 @@ export function LiveScreen({
                 </View>
               ) : null}
               <View style={styles.ctrlRow}>
-                <RecordButton recording={recordingActive} c={c} onPress={() => onToggleRecording(camera)} />
+                <RecordButton recording={recordingActive} busy={recordingBusy} disabled={playing && !recordingActive} c={c} onPress={() => onToggleRecording(camera)} />
                 <ControlButton label="Foto" icon="camera" c={c} onPress={() => onSnapshot(camera)} />
-                <ControlButton label="Áudio" icon="mic" c={c} active={!muted && audioAvailable !== false} onPress={toggleAudio} />
+                <ControlButton label="Áudio" icon="mic" c={c} active={!muted && audioAvailable !== false} disabled={playing} onPress={toggleAudio} />
+                <ControlButton label="Alertas" icon="bell" c={c} active={!notificationsMuted} onPress={() => onToggleNotifications(camera)} />
                 <ControlButton label="Tela" icon="expand" c={c} active onPress={() => setFullscreen(false)} />
               </View>
               <PtzControls c={c} />
@@ -348,7 +376,7 @@ export function LiveScreen({
   return (
     <View style={[styles.rootSheet, { backgroundColor: theme.bg }]}>
       <View style={[styles.header, { paddingTop: topInset + 4, borderBottomColor: theme.border }]}>
-        <Pressable style={[styles.headerBack, { backgroundColor: theme.surfaceAlt }]} onPress={onBack} hitSlop={8}>
+        <Pressable style={[styles.headerBack, { backgroundColor: theme.surfaceAlt }]} onPress={onBack} hitSlop={8} accessibilityRole="button" accessibilityLabel="Voltar">
           <Icon name="chevronLeft" size={20} color={theme.text} strokeWidth={2.1} />
         </Pressable>
         <View style={{ flex: 1, minWidth: 0 }}>
@@ -371,9 +399,10 @@ export function LiveScreen({
       </View>
 
       <View style={styles.actionRow}>
-        <RecordButton recording={recordingActive} c={c} onPress={() => onToggleRecording(camera)} />
+        <RecordButton recording={recordingActive} busy={recordingBusy} disabled={playing && !recordingActive} c={c} onPress={() => onToggleRecording(camera)} />
         <ControlButton label="Foto" icon="camera" c={c} onPress={() => onSnapshot(camera)} />
-        <ControlButton label="Áudio" icon="mic" c={c} active={!muted && audioAvailable !== false} onPress={toggleAudio} />
+        <ControlButton label="Áudio" icon="mic" c={c} active={!muted && audioAvailable !== false} disabled={playing} onPress={toggleAudio} />
+        <ControlButton label="Alertas" icon="bell" c={c} active={!notificationsMuted} onPress={() => onToggleNotifications(camera)} />
         <ControlButton label="PTZ" icon="crosshair" c={c} active={lowerMode === 'ptz'} disabled={playing} onPress={() => setLowerMode((m) => (m === 'ptz' ? 'timeline' : 'ptz'))} />
         <ControlButton label="Tela" icon="expand" c={c} onPress={() => setFullscreen(true)} />
       </View>
@@ -398,6 +427,8 @@ export function LiveScreen({
                   key={tab}
                   style={[styles.recTab, recTab === tab && { backgroundColor: theme.surface }]}
                   onPress={() => setRecTab(tab)}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: recTab === tab }}
                 >
                   <Text style={[styles.recTabText, { color: recTab === tab ? theme.text : theme.textSub }]}>
                     {tab === 'system' ? 'Do sistema' : `Minhas${myRecordings.length ? ` · ${myRecordings.length}` : ''}`}
@@ -424,13 +455,20 @@ export function LiveScreen({
                         style={[styles.recRow, { backgroundColor: active ? theme.accentBg : theme.surface, borderColor: active ? theme.accent : theme.border }]}
                       >
                         <View style={[styles.recThumb, { backgroundColor: active ? theme.accent : theme.surfaceAlt }]}>
+                          {clip.thumbnailUri ? <Image source={{ uri: clip.thumbnailUri }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+                          {clip.thumbnailUri ? <View style={styles.recThumbShade} /> : null}
                           <Icon name="play" size={15} color={active ? '#fff' : theme.textSub} fill={active} />
                         </View>
                         <View style={{ flex: 1 }}>
                           <Text style={[styles.recRange, { color: theme.text }]}>{formatDateLabel(clip.createdAt.slice(0, 10))} · {formatTime(clip.createdAt)}</Text>
                           <Text style={[styles.recDuration, { color: theme.textSub }]}>Clipe salvo no celular</Text>
                         </View>
-                        <Pressable onPress={() => onDeleteLocal(clip)} hitSlop={8}>
+                        <Pressable
+                          onPress={(event) => { event.stopPropagation(); onDeleteLocal(clip); }}
+                          hitSlop={8}
+                          accessibilityRole="button"
+                          accessibilityLabel="Excluir clipe do aparelho"
+                        >
                           <Icon name="trash" size={18} color={theme.danger} strokeWidth={2} />
                         </Pressable>
                       </Pressable>
@@ -458,7 +496,23 @@ export function LiveScreen({
               </Pressable>
             </View>
 
-            {recordings.length === 0 ? (
+            {recordingsError ? (
+              <View style={[styles.inlineError, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                <Text style={[styles.inlineErrorText, { color: theme.text }]}>{recordingsError}</Text>
+                {canPlayback ? (
+                  <Pressable onPress={onRetryRecordings} accessibilityRole="button" hitSlop={6}>
+                    <Text style={[styles.inlineRetry, { color: theme.accent }]}>Tentar novamente</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
+
+            {recordingsLoading ? (
+              <View style={styles.loadingState}>
+                <ActivityIndicator color={theme.accent} />
+                <Text style={[styles.emptyText, { color: theme.textSub }]}>Carregando gravações…</Text>
+              </View>
+            ) : recordings.length === 0 && !recordingsError ? (
               <View style={[styles.empty, { borderColor: theme.border }]}>
                 <Icon name="clock" size={22} color={theme.textMuted} strokeWidth={1.8} />
                 <Text style={[styles.emptyText, { color: theme.textSub }]}>Nenhuma gravação neste dia.</Text>
@@ -468,13 +522,20 @@ export function LiveScreen({
                 {recordings.map((rec) => {
                   const active = activePlayback?.recording.id === rec.id;
                   const usable = rec.fileUsable !== false && rec.fileExists !== false;
+                  const downloading = downloadingIds.includes(rec.id);
                   return (
                     <Pressable
                       key={rec.id}
                       onPress={() => usable && onOpenPlayback(rec)}
+                      disabled={!usable}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Gravação de ${formatTime(rec.startedAt)}`}
+                      accessibilityState={{ disabled: !usable, selected: active }}
                       style={[styles.recRow, { backgroundColor: active ? theme.accentBg : theme.surface, borderColor: active ? theme.accent : theme.border }, !usable && { opacity: 0.5 }]}
                     >
                       <View style={[styles.recThumb, { backgroundColor: active ? theme.accent : theme.surfaceAlt }]}>
+                        {rec.thumbnailUrl ? <Image source={{ uri: rec.thumbnailUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" onError={() => onThumbnailError?.(rec)} /> : null}
+                        {rec.thumbnailUrl ? <View style={styles.recThumbShade} /> : null}
                         <Icon name="play" size={15} color={active ? '#fff' : theme.textSub} fill={active} />
                       </View>
                       <View style={{ flex: 1 }}>
@@ -483,16 +544,37 @@ export function LiveScreen({
                         </Text>
                         <View style={styles.recMeta}>
                           <Text style={[styles.recDuration, { color: theme.textSub }]}>{formatDuration(rec.durationSeconds)}</Text>
-                          <Text style={[styles.recDuration, { color: theme.textMuted }]}>{formatBytes(rec.sizeBytes)}</Text>
+                          <Text style={[styles.recDuration, { color: theme.textMuted }]}>{formatBytes(rec.actualSizeBytes ?? rec.sizeBytes)}</Text>
                           {!usable ? <Text style={[styles.recTag, { color: theme.warning, backgroundColor: 'rgba(245,158,11,0.14)' }]}>indisponível</Text> : null}
                         </View>
                       </View>
-                      <Pressable onPress={() => usable && onDownloadRecording(rec)} hitSlop={8} disabled={!usable}>
-                        <Icon name="download" size={19} color={theme.accent} strokeWidth={2} />
-                      </Pressable>
+                      {canDownload ? (
+                        <Pressable
+                          onPress={(event) => { event.stopPropagation(); if (usable && !downloading) onDownloadRecording(rec); }}
+                          hitSlop={8}
+                          disabled={!usable || downloading}
+                          accessibilityRole="button"
+                          accessibilityLabel={downloading ? 'Baixando gravação' : 'Baixar gravação'}
+                          accessibilityState={{ disabled: !usable || downloading, busy: downloading }}
+                        >
+                          {downloading ? <ActivityIndicator size="small" color={theme.accent} /> : <Icon name="download" size={19} color={theme.accent} strokeWidth={2} />}
+                        </Pressable>
+                      ) : null}
                     </Pressable>
                   );
                 })}
+                {recordings.length < recordingsTotal ? (
+                  <Pressable
+                    style={[styles.loadMore, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                    onPress={onLoadMoreRecordings}
+                    disabled={recordingsLoadingMore}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: recordingsLoadingMore, busy: recordingsLoadingMore }}
+                  >
+                    {recordingsLoadingMore ? <ActivityIndicator size="small" color={theme.accent} /> : null}
+                    <Text style={[styles.loadMoreText, { color: theme.accent }]}>{recordingsLoadingMore ? 'Carregando…' : `Carregar mais (${recordings.length} de ${recordingsTotal})`}</Text>
+                  </Pressable>
+                ) : null}
               </ScrollView>
             )}
             </>
@@ -506,11 +588,18 @@ export function LiveScreen({
 
 // Botão de gravação que reflete o estado REAL: cinza = parado, vermelho cheio
 // com quadrado (stop) = gravando.
-function RecordButton({ recording, disabled, onPress, c }: {
-  recording: boolean; disabled?: boolean; onPress: () => void; c: ControlTokens;
+function RecordButton({ recording, busy, disabled, onPress, c }: {
+  recording: boolean; busy?: boolean; disabled?: boolean; onPress: () => void; c: ControlTokens;
 }) {
   return (
-    <Pressable style={[styles.ctrl, disabled && { opacity: 0.4 }]} onPress={onPress} disabled={disabled}>
+    <Pressable
+      style={[styles.ctrl, (disabled || busy) && { opacity: 0.4 }]}
+      onPress={onPress}
+      disabled={disabled || busy}
+      accessibilityRole="button"
+      accessibilityLabel={busy ? 'Processando gravação' : recording ? 'Parar e salvar gravação' : 'Iniciar gravação'}
+      accessibilityState={{ disabled: !!disabled || !!busy, busy: !!busy }}
+    >
       <View style={[
         styles.ctrlCircle,
         recording
@@ -520,7 +609,7 @@ function RecordButton({ recording, disabled, onPress, c }: {
         {recording ? <View style={styles.recStop} /> : <View style={styles.recDot} />}
       </View>
       <Text style={[styles.ctrlLabel, { color: recording ? '#ef4444' : c.sub }]}>
-        {recording ? 'Gravando' : 'Gravar'}
+        {busy ? 'Aguarde' : recording ? 'Gravando' : 'Gravar'}
       </Text>
     </Pressable>
   );
@@ -530,7 +619,14 @@ function ControlButton({ label, icon, danger, active, disabled, onPress, c }: {
   label: string; icon?: IconName; danger?: boolean; active?: boolean; disabled?: boolean; onPress: () => void; c: ControlTokens;
 }) {
   return (
-    <Pressable style={[styles.ctrl, disabled && { opacity: 0.4 }]} onPress={onPress} disabled={disabled}>
+    <Pressable
+      style={[styles.ctrl, disabled && { opacity: 0.4 }]}
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled, selected: !!active }}
+    >
       <View style={[
         styles.ctrlCircle,
         { backgroundColor: c.surface, borderColor: c.border },
@@ -623,8 +719,15 @@ const styles = StyleSheet.create({
   listContent: { gap: 8 },
   empty: { borderWidth: 1, borderStyle: 'dashed', borderRadius: 16, paddingVertical: 26, paddingHorizontal: 20, alignItems: 'center', gap: 8, marginTop: 4 },
   emptyText: { fontSize: 12.5, fontWeight: '600', textAlign: 'center' },
+  loadingState: { alignItems: 'center', justifyContent: 'center', gap: 9, paddingVertical: 24 },
+  inlineError: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, padding: 11, marginBottom: 10, gap: 6 },
+  inlineErrorText: { fontSize: 11.5, fontWeight: '600', lineHeight: 16 },
+  inlineRetry: { fontSize: 11.5, fontWeight: '800' },
+  loadMore: { minHeight: 42, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, marginTop: 2 },
+  loadMoreText: { fontSize: 11.5, fontWeight: '800' },
   recRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 13, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 10, paddingHorizontal: 12 },
-  recThumb: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  recThumb: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  recThumbShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.2)' },
   recRange: { fontSize: 13, fontWeight: '700' },
   recMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3 },
   recDuration: { fontSize: 11, fontWeight: '600' },

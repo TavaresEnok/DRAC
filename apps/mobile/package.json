@@ -12,13 +12,13 @@
     "test:mobile": "tsx tests/mobile-critical.test.ts"
   },
   "dependencies": {
-    "@config-plugins/react-native-webrtc": "^15.0.1",
+    "@config-plugins/react-native-webrtc": "^13.0.0",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "expo": "~54.0.33",
+    "expo": "~54.0.35",
     "expo-build-properties": "~1.0.10",
     "expo-constants": "~18.0.13",
     "expo-device": "~8.0.10",
-    "expo-file-system": "~19.0.22",
+    "expo-file-system": "~19.0.23",
     "expo-linear-gradient": "~15.0.8",
     "expo-media-library": "~18.2.1",
     "expo-notifications": "~0.32.17",
@@ -27,6 +27,7 @@
     "expo-sharing": "~14.0.8",
     "expo-status-bar": "~3.0.9",
     "expo-video": "~3.0.16",
+    "expo-video-thumbnails": "~10.0.8",
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-safe-area-context": "~5.6.0",
@@ -37,6 +38,15 @@
     "@types/react": "~19.1.0",
     "tsx": "^4.19.4",
     "typescript": "~5.9.2"
+  },
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "react-native-webrtc"
+        ]
+      }
+    }
   },
   "private": true
 }

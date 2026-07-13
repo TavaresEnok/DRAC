@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { format } from 'date-fns';
@@ -305,7 +305,9 @@ export default function AlertasPage() {
   const { cameras, load } = useAlarmStore();
   const { accessToken } = useAuthStore();
   const [, setLocation] = useLocation();
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(() => window.localStorage.getItem('drac:alarm-sound-muted') === '1');
+  const seenAlarmIdsRef = useRef<Set<string> | null>(null);
+  const backgroundRefreshInFlightRef = useRef(false);
   const [workspaceMode, setWorkspaceMode] = useState<'operation' | 'advanced'>('operation');
   const [selectedAlarmId, setSelectedAlarmId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
@@ -362,10 +364,12 @@ export default function AlertasPage() {
     };
   }
 
-  async function loadAlarmsList() {
+  async function loadAlarmsList(background = false) {
     if (!accessToken) return;
-    setAlarmsLoading(true);
-    setAlarmsError(null);
+    if (background && backgroundRefreshInFlightRef.current) return;
+    if (background) backgroundRefreshInFlightRef.current = true;
+    if (!background) setAlarmsLoading(true);
+    if (!background) setAlarmsError(null);
     try {
       const params: Record<string, string | number> = { limit: 300, offset: 0 };
       if (cameraFilter !== 'all') params.cameraId = cameraFilter;
@@ -382,15 +386,72 @@ export default function AlertasPage() {
       setAlarmItems(mapped);
     } catch (error) {
       const msg = axios.isAxiosError(error) ? (error.response?.data?.message || error.message) : 'Falha ao carregar alarmes.';
-      setAlarmsError(Array.isArray(msg) ? msg.join(' | ') : String(msg));
+      if (!background) setAlarmsError(Array.isArray(msg) ? msg.join(' | ') : String(msg));
     } finally {
-      setAlarmsLoading(false);
+      if (background) backgroundRefreshInFlightRef.current = false;
+      if (!background) setAlarmsLoading(false);
     }
   }
 
   useEffect(() => {
     void loadAlarmsList();
-  }, [accessToken, cameraFilter, zoneFilter, statusFilter, priorityFilter, severityFilter, sourceFilter, typeFilter, fromFilter, toFilter]);
+  }, [accessToken, cameraFilter, cameras, zoneFilter, statusFilter, priorityFilter, severityFilter, sourceFilter, typeFilter, fromFilter, toFilter]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void loadAlarmsList(true);
+    };
+    const timer = window.setInterval(refresh, 5_000);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [accessToken, cameraFilter, cameras, client, fromFilter, priorityFilter, severityFilter, sourceFilter, statusFilter, toFilter, typeFilter, zoneFilter]);
+
+  useEffect(() => {
+    const currentIds = new Set(alarmItems.map((alarm) => alarm.id));
+    if (!seenAlarmIdsRef.current) {
+      seenAlarmIdsRef.current = currentIds;
+      return;
+    }
+    const hasNewUrgentAlarm = alarmItems.some((alarm) => (
+      !seenAlarmIdsRef.current!.has(alarm.id)
+      && alarm.status === 'active'
+      && (alarm.priority === 'P1' || alarm.priority === 'P2')
+      && Date.now() - new Date(alarm.triggeredAt).getTime() < 30_000
+    ));
+    for (const id of currentIds) seenAlarmIdsRef.current.add(id);
+    if (muted || !hasNewUrgentAlarm) return;
+
+    const AudioContextCtor = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return;
+    const context = new AudioContextCtor();
+    void context.resume().then(() => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.setValueAtTime(880, context.currentTime);
+      gain.gain.setValueAtTime(0.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.35);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.36);
+      oscillator.addEventListener('ended', () => void context.close(), { once: true });
+    }).catch(() => void context.close());
+  }, [alarmItems, muted]);
+
+  function toggleAlarmSound() {
+    setMuted((current) => {
+      const next = !current;
+      window.localStorage.setItem('drac:alarm-sound-muted', next ? '1' : '0');
+      return next;
+    });
+  }
 
   const zoneOptions = useMemo(() => ['all', ...Array.from(new Set(cameras.map((camera) => camera.zone))).sort()], [cameras]);
 
@@ -583,7 +644,7 @@ export default function AlertasPage() {
 
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="px-6 py-3 border-b border-border shrink-0 flex items-center justify-end gap-2">
+        <div className="px-3 sm:px-6 py-3 border-b border-border shrink-0 flex items-center justify-end gap-2">
           <button
             onClick={() => setWorkspaceMode('advanced')}
             className="btn btn-secondary btn-sm"
@@ -591,7 +652,7 @@ export default function AlertasPage() {
             <Settings2 className="h-3.5 w-3.5" /> Filtros e regras
           </button>
           <button
-            onClick={() => setMuted((value) => !value)}
+            onClick={toggleAlarmSound}
             className="btn btn-secondary btn-sm btn-icon"
             title={muted ? 'Ativar som' : 'Silenciar alertas'}
           >
@@ -599,8 +660,8 @@ export default function AlertasPage() {
           </button>
         </div>
 
-        <div className="flex min-h-0 flex-1">
-          <aside className="flex w-72 shrink-0 flex-col overflow-hidden border-r border-border bg-card">
+        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+          <aside className="flex max-h-56 w-full shrink-0 flex-col overflow-hidden border-b border-border bg-card md:max-h-none md:w-72 md:border-b-0 md:border-r">
             <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
               {statusTabs.map((tab) => (
                 <button
@@ -662,7 +723,7 @@ export default function AlertasPage() {
                 <p className="text-sm">Selecione um alarme para ver detalhes</p>
               </div>
             ) : (
-              <div className="flex max-w-3xl flex-col gap-5 p-6">
+              <div className="flex max-w-3xl flex-col gap-5 p-4 sm:p-6">
                 <div>
                   <div className="mb-2 flex flex-wrap items-center gap-2">
                     <span className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold ${PRIORITY_STYLES[selectedAlarm.priority].badge}`}>
@@ -676,7 +737,7 @@ export default function AlertasPage() {
                   <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">{selectedAlarm.description}</p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {[
                     ['Câmera', selectedCamera?.name ?? selectedAlarm.cameraId],
                     ['Zona', selectedAlarm.zone],
@@ -692,7 +753,7 @@ export default function AlertasPage() {
 
                 {selectedCamera && (
                   <button
-                    onClick={() => setLocation(`/playback?cameraId=${selectedCamera.id}`)}
+                    onClick={() => setLocation(`/playback?cameraId=${encodeURIComponent(selectedCamera.id)}&at=${encodeURIComponent(selectedAlarm.triggeredAt)}`)}
                     className="flex w-full items-center gap-3 rounded-lg border border-border px-4 py-3 text-left transition-colors hover:bg-accent"
                   >
                     <div className="min-w-0 flex-1">
@@ -778,7 +839,7 @@ export default function AlertasPage() {
             {deletingAllAlarms ? 'Apagando...' : 'Apagar todos'}
           </button>
           <button
-            onClick={() => setMuted((m) => !m)}
+            onClick={toggleAlarmSound}
             className={`btn btn-sm ${
               muted
                 ? 'border-[hsl(38_58%_54%_/_0.4)] text-[hsl(38,58%,62%)] bg-[hsl(38_58%_54%_/_0.07)]'

@@ -57,34 +57,34 @@ enum RecordingSource {
 }
 
 model Camera {
-  id                String       @id @default(uuid())
-  name              String
-  ip                String
-  rtspPort          Int          @default(554)
-  onvifPort         Int?
-  username          String
-  passwordEncrypted String
-  rtspPath          String?
-  onvifPath         String?
-  onvifProfileToken String?
-  channel           Int          @default(1)
-  subtype           Int          @default(0)
-  liveChannel       Int?
-  liveSubtype       Int?
-  recordingChannel  Int?
-  recordingSubtype  Int?
-  analyticsChannel  Int?
-  analyticsSubtype  Int?
-  status            CameraStatus @default(UNKNOWN)
-  lastSeenAt        DateTime?
-  siteId            String?
-  areaId            String?
-  groupId           String?
-  recordingEnabled  Boolean      @default(true)
-  recordingMode     String       @default("continuous")
-  retentionDays     Int          @default(7)
-  preferredRtspTransport String  @default("tcp")
-  preferredLiveProtocol  String  @default("webrtc")
+  id                     String       @id @default(uuid())
+  name                   String
+  ip                     String
+  rtspPort               Int          @default(554)
+  onvifPort              Int?
+  username               String
+  passwordEncrypted      String
+  rtspPath               String?
+  onvifPath              String?
+  onvifProfileToken      String?
+  channel                Int          @default(1)
+  subtype                Int          @default(0)
+  liveChannel            Int?
+  liveSubtype            Int?
+  recordingChannel       Int?
+  recordingSubtype       Int?
+  analyticsChannel       Int?
+  analyticsSubtype       Int?
+  status                 CameraStatus @default(UNKNOWN)
+  lastSeenAt             DateTime?
+  siteId                 String?
+  areaId                 String?
+  groupId                String?
+  recordingEnabled       Boolean      @default(true)
+  recordingMode          String       @default("continuous")
+  retentionDays          Int          @default(7)
+  preferredRtspTransport String       @default("tcp")
+  preferredLiveProtocol  String       @default("webrtc")
   streamVideoCodec       String?
   streamWidth            Int?
   streamHeight           Int?
@@ -105,17 +105,17 @@ model Camera {
   detectedHeight         Int?
   detectedFps            Int?
   detectedBitrateKbps    Int?
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
 
-  site       Site?          @relation(fields: [siteId], references: [id], onDelete: SetNull)
-  area       Area?          @relation(fields: [areaId], references: [id], onDelete: SetNull)
-  group      CameraGroup?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  site          Site?              @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  area          Area?              @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  group         CameraGroup?       @relation(fields: [groupId], references: [id], onDelete: SetNull)
   recordings    Recording[]
   exportedClips ExportedClip[]
   events        CameraEvent[]
-  alarms     AlarmInstance[]
-  permissions CameraPermission[]
+  alarms        AlarmInstance[]
+  permissions   CameraPermission[]
 
   @@index([siteId])
   @@index([areaId])
@@ -124,9 +124,9 @@ model Camera {
 }
 
 model Recording {
-  id              String   @id @default(uuid())
+  id              String          @id @default(uuid())
   cameraId        String
-  camera          Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  camera          Camera          @relation(fields: [cameraId], references: [id], onDelete: Cascade)
   source          RecordingSource @default(UNKNOWN)
   exportedClips   ExportedClip[]
   startedAt       DateTime
@@ -134,7 +134,7 @@ model Recording {
   filePath        String
   durationSeconds Int?
   sizeBytes       BigInt?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime        @default(now())
 
   @@unique([filePath])
   @@index([cameraId, startedAt])
@@ -142,12 +142,12 @@ model Recording {
 }
 
 model ExportedClip {
-  id                String   @id @default(uuid())
+  id                String    @id @default(uuid())
   cameraId          String
-  camera            Camera   @relation(fields: [cameraId], references: [id], onDelete: Cascade)
+  camera            Camera    @relation(fields: [cameraId], references: [id], onDelete: Cascade)
   sourceRecordingId String
   sourceRecording   Recording @relation(fields: [sourceRecordingId], references: [id], onDelete: Cascade)
-  filePath          String   @unique
+  filePath          String    @unique
   startedAt         DateTime
   endedAt           DateTime
   durationSeconds   Int
@@ -155,7 +155,7 @@ model ExportedClip {
   fileSha256        String?
   createdByUserId   String?
   createdByUserName String?
-  createdAt         DateTime @default(now())
+  createdAt         DateTime  @default(now())
 
   @@index([cameraId, startedAt])
   @@index([sourceRecordingId])
@@ -174,6 +174,9 @@ model CameraEvent {
   createdAt  DateTime @default(now())
 
   alarms AlarmInstance[]
+
+  @@index([cameraId, type, occurredAt])
+  @@index([occurredAt])
 }
 
 model AlarmRule {
@@ -230,22 +233,38 @@ model AlarmInstance {
 }
 
 model User {
-  id           String    @id @default(uuid())
+  id           String   @id @default(uuid())
   name         String
-  email        String    @unique
+  email        String   @unique
   passwordHash String
-  role         UserRole  @default(VIEWER)
-  isActive     Boolean   @default(true)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  authVersion  Int      @default(0)
+  role         UserRole @default(VIEWER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   resetTokenHash      String?
   resetTokenExpiresAt DateTime?
 
-  auditLogs          AuditLog[]
-  cameraPermissions  CameraPermission[]
-  investigations     Investigation[]
-  pushDevices        PushDevice[]
+  auditLogs         AuditLog[]
+  cameraPermissions CameraPermission[]
+  investigations    Investigation[]
+  pushDevices       PushDevice[]
+  liveLayouts       LiveLayout[]
+}
+
+model LiveLayout {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  gridSize   String
+  cameraIds  Json
+  lastUsedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId, updatedAt])
 }
 
 /// Dispositivo móvel registrado para receber push de alarmes (Expo Push).
@@ -263,11 +282,25 @@ model PushDevice {
   @@index([userId])
 }
 
+/// Silenciamento de notificações push POR USUÁRIO e POR CÂMERA. Se existe uma
+/// linha (userId, cameraId), aquele usuário NÃO recebe push daquela câmera —
+/// os outros usuários seguem recebendo normalmente. As FKs são criadas na
+/// migração (sem relação Prisma p/ não exigir campos reversos em User/Camera).
+model NotificationMute {
+  id        String   @id @default(uuid())
+  userId    String
+  cameraId  String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, cameraId])
+  @@index([cameraId])
+}
+
 model AiSettings {
-  id             String   @id @default("global")
-  enabled        Boolean  @default(true)
-  mode           String   @default("motion")
-  updatedAt      DateTime @updatedAt
+  id        String   @id @default("global")
+  enabled   Boolean  @default(true)
+  mode      String   @default("motion")
+  updatedAt DateTime @updatedAt
 }
 
 model AuditLog {
@@ -288,21 +321,21 @@ model AuditLog {
 }
 
 model Investigation {
-  id                String              @id @default(uuid())
+  id                String   @id @default(uuid())
   title             String
-  status            String              @default("OPEN")
+  status            String   @default("OPEN")
   summary           String?
   selectedCameraIds Json
   timeStart         DateTime
   timeEnd           DateTime
-  playbackSpeed     String              @default("1x")
-  activeTrackTime   Int                 @default(0)
+  playbackSpeed     String   @default("1x")
+  activeTrackTime   Int      @default(0)
   createdByUserId   String?
   createdByUserName String?
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  createdBy User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdBy User?               @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
   items     InvestigationItem[]
 
   @@index([createdAt])
@@ -341,22 +374,22 @@ model Site {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  areas   Area[]
-  cameras Camera[]
+  areas      Area[]
+  cameras    Camera[]
   mapLayouts SiteMapLayout[]
 
   @@index([name])
 }
 
 model SiteMapLayout {
-  id        String   @id @default(uuid())
-  siteId    String
-  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
-  floor     String
+  id         String   @id @default(uuid())
+  siteId     String
+  site       Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  floor      String
   svgDataUrl String?
-  markers   Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  markers    Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@unique([siteId, floor])
   @@index([siteId])
@@ -412,12 +445,12 @@ model CameraPermission {
 model SystemSetting {
   key             String   @id
   value           String
-  updatedAt       DateTime @updatedAt @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
   updatedByUserId String?
 }
 
 model RolePermission {
   role        UserRole @id
   permissions Json
-  updatedAt   DateTime @updatedAt @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
 }

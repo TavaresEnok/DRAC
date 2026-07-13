@@ -3,11 +3,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job } from 'bullmq';
 import { existsSync, mkdirSync } from 'node:fs';
+import { rename, rm, stat } from 'node:fs/promises';
 import { dirname, extname } from 'node:path';
-import { spawnSync } from 'child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { THUMBNAIL_GENERATION_QUEUE } from '../queues/thumbnail-generation.queue';
 import { ensureFileUnderRoot } from '../../recordings/helpers/safe-file.helper';
+
+const execFileAsync = promisify(execFile);
 
 type ThumbnailJobPayload = {
   recordingId: string;
@@ -39,39 +43,62 @@ export class ThumbnailGenerationProcessor extends WorkerHost {
     const inputPath = ensureFileUnderRoot(recordingsRoot, recording.filePath);
     if (!existsSync(inputPath)) {
       this.logger.warn(`Arquivo não encontrado para thumbnail recording=${recordingId}`);
-      return;
+      throw new Error('thumbnail_source_missing');
     }
 
-    const outputPath = `${inputPath.replace(new RegExp(`${extname(inputPath)}$`), '')}.thumb.jpg`;
+    const extension = extname(inputPath);
+    const outputPath = `${extension ? inputPath.slice(0, -extension.length) : inputPath}.thumb.jpg`;
     mkdirSync(dirname(outputPath), { recursive: true });
 
-    const thumbSecondConfig = this.configService.get<number>('recordingThumbnailSecond') ?? 2;
-    const seekSeconds = Math.max(0, Math.min(thumbSecondConfig, (recording.durationSeconds ?? 10) - 1));
-
-    const ffmpeg = spawnSync(
-      'ffmpeg',
-      [
-        '-hide_banner',
-        '-loglevel',
-        'error',
-        '-ss',
-        String(seekSeconds),
-        '-i',
-        inputPath,
-        '-frames:v',
-        '1',
-        '-vf',
-        'scale=640:-1',
-        '-q:v',
-        '3',
-        '-y',
-        outputPath,
-      ],
-      { stdio: 'pipe' },
-    );
-
-    if (ffmpeg.status !== 0) {
-      this.logger.warn(`Falha ao gerar thumbnail recording=${recordingId}`);
+    try {
+      if ((await stat(outputPath)).size > 0) return;
+    } catch {
+      // Ainda não existe; gera abaixo.
     }
+
+    const thumbSecondConfig = this.configService.get<number>('recordingThumbnailSecond') ?? 2;
+    const seekSeconds = Math.max(0, Math.min(thumbSecondConfig, Math.max(0, (recording.durationSeconds ?? 10) - 0.25)));
+    const timeoutMs = Math.max(5_000, Number(process.env.RECORDING_THUMBNAIL_TIMEOUT_MS ?? 20_000));
+    const temporaryPath = `${outputPath}.${process.pid}.${String(job.id ?? Date.now())}.tmp.jpg`;
+
+    let lastError: unknown = null;
+    try {
+      for (const second of [...new Set([seekSeconds, 0])]) {
+        await rm(temporaryPath, { force: true }).catch(() => undefined);
+        try {
+          await execFileAsync('ffmpeg', [
+            '-hide_banner',
+            '-loglevel',
+            'error',
+            '-ss',
+            String(second),
+            '-i',
+            inputPath,
+            '-frames:v',
+            '1',
+            '-vf',
+            'scale=640:-2',
+            '-q:v',
+            '3',
+            '-y',
+            temporaryPath,
+          ], {
+            timeout: timeoutMs,
+            maxBuffer: 1024 * 1024,
+          });
+          const result = await stat(temporaryPath);
+          if (result.size <= 0) throw new Error('FFmpeg produziu imagem vazia.');
+          await rename(temporaryPath, outputPath);
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+    } finally {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
+
+    this.logger.warn(`Falha ao gerar thumbnail recording=${recordingId}; o BullMQ fará nova tentativa.`);
+    throw new Error(lastError instanceof Error ? `thumbnail_ffmpeg_failed: ${lastError.message}` : 'thumbnail_ffmpeg_failed');
   }
 }

@@ -9,6 +9,7 @@ import { CamerasService } from '../../cameras/cameras.service';
 import { RecordingProcessManagerService } from '../../recordings/recording-process-manager.service';
 import { FfmpegMjpegService } from '../../camera-stream/ffmpeg-mjpeg.service';
 import { GRID_LIVE_TARGET_FPS } from '../../camera-stream/helpers/live-delivery-profile.helper';
+import { AlarmsService } from '../../alarms/alarms.service';
 
 @Processor(CAMERA_HEALTH_CHECK_QUEUE)
 @Injectable()
@@ -21,6 +22,7 @@ export class CameraHealthCheckProcessor extends WorkerHost {
     private readonly camerasService: CamerasService,
     private readonly recordingManager: RecordingProcessManagerService,
     private readonly streamService: FfmpegMjpegService,
+    private readonly alarmsService: AlarmsService,
   ) {
     super();
   }
@@ -77,7 +79,9 @@ export class CameraHealthCheckProcessor extends WorkerHost {
     }
 
     await this.checkRecordingStaleness();
+    await this.checkMotionDetectorHealth();
     await this.checkLiveStreamHealth();
+    await this.alarmsService.resolveStaleMotionAlarms();
 
     const autoRemediationEnabled = this.configService.get<boolean>('healthAutoRemediationEnabled') ?? true;
     if (!autoRemediationEnabled) {
@@ -133,7 +137,9 @@ export class CameraHealthCheckProcessor extends WorkerHost {
     const reconnectCooldownAt = new Date(Date.now() - autoReconnectCooldownSeconds * 1000);
 
     const cameras = await this.prisma.camera.findMany({
-      where: { recordingEnabled: true },
+      // Em modo motion, recordingEnabled representa processo ATIVO, não o
+      // armamento. Esse modo possui health próprio baseado em frames da IA.
+      where: { recordingEnabled: true, recordingMode: { not: 'motion' } },
       select: { id: true, name: true, status: true },
     });
     if (!cameras.length) return;
@@ -276,6 +282,99 @@ export class CameraHealthCheckProcessor extends WorkerHost {
     return !recent;
   }
 
+  private async checkMotionDetectorHealth() {
+    const cameras = await this.prisma.camera.findMany({
+      where: { recordingMode: 'motion', motionTrigger: 'SYSTEM' },
+      select: { id: true, name: true, status: true },
+      take: 500,
+    });
+    if (!cameras.length) return;
+
+    const staleSeconds = Math.max(15, Number(process.env.HEALTH_MOTION_FRAME_STALE_SECONDS ?? 45));
+    const cooldownSeconds = Math.max(60, Number(process.env.HEALTH_MOTION_EVENT_COOLDOWN_SECONDS ?? 300));
+    let processors: Record<string, any> = {};
+    let serviceReachable = false;
+    let serviceStatus: string | null = null;
+    try {
+      const baseUrl = String(process.env.AI_BASE_URL ?? 'http://ai-service:8000').replace(/\/+$/, '');
+      const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5_000) });
+      if (response.ok) {
+        const health = await response.json() as { status?: string; processors?: Record<string, any> };
+        serviceReachable = Boolean(health && typeof health === 'object');
+        serviceStatus = typeof health.status === 'string' ? health.status : null;
+        processors = health.processors && typeof health.processors === 'object' ? health.processors : {};
+      }
+    } catch {
+      serviceReachable = false;
+    }
+
+    const nowSeconds = Date.now() / 1000;
+    for (const camera of cameras) {
+      const processor = processors[camera.id];
+      const lastFrameSeconds = Number(processor?.last_seen ?? 0);
+      const frameAgeSeconds = lastFrameSeconds > 0 ? Math.max(0, Math.floor(nowSeconds - lastFrameSeconds)) : null;
+      const running = Boolean(processor?.running);
+      const readiness = processor?.readiness && typeof processor.readiness === 'object'
+        ? processor.readiness as { ready?: unknown; reason?: unknown }
+        : null;
+      const processorReady = typeof readiness?.ready === 'boolean' ? readiness.ready : null;
+      const readinessReason = typeof readiness?.reason === 'string' ? readiness.reason : null;
+      // `health.status=degraded` é agregado: uma câmera ruim não deve degradar
+      // todas as demais. Serviço alcançável e estado individual são avaliados
+      // separadamente; versões antigas sem `readiness` usam running/last_seen.
+      const stale = !serviceReachable
+        || !processor
+        || !running
+        || processorReady === false
+        || frameAgeSeconds == null
+        || frameAgeSeconds > staleSeconds;
+
+      if (stale) {
+        if (await this.shouldEmitWithCooldown(camera.id, 'HEALTH_MOTION_DETECTOR_STALE', cooldownSeconds)) {
+          await this.camerasService.registerEvent(
+            camera.id,
+            'HEALTH_MOTION_DETECTOR_STALE',
+            camera.status === CameraStatus.ONLINE ? 'ERROR' : 'WARNING',
+            'Câmera armada por movimento sem frames recentes no detector.',
+            {
+              aiServiceOnline: serviceReachable,
+              aiServiceStatus: serviceStatus,
+              processorRunning: running,
+              processorReady,
+              readinessReason,
+              frameAgeSeconds,
+              staleThresholdSeconds: staleSeconds,
+              captureFramesEnqueued: Number(processor?.capture_frames_enqueued ?? 0),
+            },
+          );
+        }
+        continue;
+      }
+
+      const [lastStale, lastRecovery] = await Promise.all([
+        this.prisma.cameraEvent.findFirst({
+          where: { cameraId: camera.id, type: 'HEALTH_MOTION_DETECTOR_STALE' },
+          orderBy: { occurredAt: 'desc' },
+          select: { occurredAt: true },
+        }),
+        this.prisma.cameraEvent.findFirst({
+          where: { cameraId: camera.id, type: 'HEALTH_MOTION_DETECTOR_RECOVERED' },
+          orderBy: { occurredAt: 'desc' },
+          select: { occurredAt: true },
+        }),
+      ]);
+      if (lastStale && (!lastRecovery || lastRecovery.occurredAt < lastStale.occurredAt)) {
+        await this.camerasService.registerEvent(
+          camera.id,
+          'HEALTH_MOTION_DETECTOR_RECOVERED',
+          'INFO',
+          'Detector de movimento voltou a receber frames.',
+          { frameAgeSeconds, staleThresholdSeconds: staleSeconds },
+        );
+      }
+    }
+  }
+
   private async checkLiveStreamHealth() {
     const maxPerRun = Math.max(1, Number(process.env.HEALTH_STREAM_CHECK_MAX_PER_RUN ?? 40));
     const cooldownSeconds = Math.max(30, Number(process.env.HEALTH_STREAM_EVENT_COOLDOWN_SECONDS ?? 300));
@@ -287,7 +386,7 @@ export class CameraHealthCheckProcessor extends WorkerHost {
     const fpsAutoRemediationCooldownSeconds = Math.max(60, Number(process.env.HEALTH_STREAM_FPS_REMEDIATION_COOLDOWN_SECONDS ?? 900));
     const fpsRemediationCooldownAt = new Date(Date.now() - fpsAutoRemediationCooldownSeconds * 1000);
     const cameras = await this.prisma.camera.findMany({
-      where: { recordingEnabled: true },
+      where: { OR: [{ recordingEnabled: true }, { recordingMode: 'motion' }] },
       select: { id: true, name: true, preferredLiveProtocol: true, streamFps: true, recordingEnabled: true },
       take: maxPerRun,
       orderBy: { updatedAt: 'asc' },

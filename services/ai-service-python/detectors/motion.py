@@ -17,6 +17,11 @@ class MotionDetector(Detector):
         # Durante o warm-up o MOG2 aprende o fundo com taxa alta para eliminar fantasmas
         self._warmup_frames = 0
         self._warmup_total = int(MOTION_PROFILE["motion_warmup_frames"])
+        # Confirmação: só dispara movimento se ele persistir por N frames de
+        # análise SEGUIDOS. Mata falso positivo de 1 frame (ruído/flicker/
+        # compressão). A 2 fps, 3 hits = ~1.5s de movimento real.
+        self._consecutive_hits = 0
+        self._min_consecutive = int(MOTION_PROFILE.get("motion_min_consecutive_hits", 3))
 
     def load(self) -> None:
         if self.fgbg is None:
@@ -55,6 +60,12 @@ class MotionDetector(Detector):
         motion_pixels = int(np.count_nonzero(fgmask))
 
         if motion_pixels <= self.motion_pixels_threshold:
+            self._consecutive_hits = 0  # quebrou a sequência → zera
+            return []
+
+        # Movimento neste frame; só confirma após N frames seguidos.
+        self._consecutive_hits += 1
+        if self._consecutive_hits < self._min_consecutive:
             return []
 
         return [

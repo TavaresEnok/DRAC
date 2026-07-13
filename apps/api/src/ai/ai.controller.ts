@@ -8,6 +8,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AuthUser } from '../common/types/auth-user.type';
 import { AccessControlService } from '../access-control/access-control.service';
 import { CommercialPolicyService } from '../commercial-policy/commercial-policy.service';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 
 type UpdateAiSettingsBody = {
   enabled?: boolean;
@@ -31,11 +32,30 @@ export class AiController {
 
   @Roles(UserRole.OPERATOR)
   @Get('health')
-  async getHealth() {
-    return this.aiService.getHealth();
+  async getHealth(@CurrentUser() user: AuthUser) {
+    const [health, accessibleCameraIds] = await Promise.all([
+      this.aiService.getHealth(),
+      this.accessControlService.getAccessibleCameraIds(user),
+    ]);
+    if (!health || typeof health !== 'object') return health;
+    const allowed = new Set(accessibleCameraIds);
+    const processors = health.processors && typeof health.processors === 'object'
+      ? Object.fromEntries(Object.entries(health.processors as Record<string, unknown>).filter(([cameraId]) => allowed.has(cameraId)))
+      : {};
+    return {
+      ...health,
+      active_processors: Array.isArray(health.active_processors)
+        ? health.active_processors.filter((cameraId: unknown) => typeof cameraId === 'string' && allowed.has(cameraId))
+        : Object.keys(processors),
+      degraded_processors: Array.isArray(health.degraded_processors)
+        ? health.degraded_processors.filter((cameraId: unknown) => typeof cameraId === 'string' && allowed.has(cameraId))
+        : [],
+      processors,
+    };
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Get('rollout/summary')
   async getRolloutSummary() {
     return this.aiService.getRolloutSummary();
@@ -64,13 +84,15 @@ export class AiController {
     return this.aiManagerService.getCameraIntelligence(cameraId);
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Patch('settings')
   async updateSettings(@Body() body: UpdateAiSettingsBody) {
     return this.aiManagerService.updateSettings(body);
   }
 
-  @Roles(UserRole.OPERATOR)
+  @Roles(UserRole.ADMIN)
+  @RequirePermission('serverConfig')
   @Post('sync')
   async sync() {
     await this.commercialPolicy.assertFeature('aiAdvanced');

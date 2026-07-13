@@ -3,12 +3,14 @@ import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from 'wo
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/toaster';
+import { MotionConfig } from 'framer-motion';
 
 import { AppLayout } from './layouts/AppLayout';
 
 import { useAuthStore } from './store/authStore';
 import { useThemeStore } from './store/themeStore';
 import { useVmsDataStore } from './store/vmsDataStore';
+import { useBrandingStore } from './store/brandingStore';
 
 const queryClient = new QueryClient();
 
@@ -168,10 +170,27 @@ function ThemeSync() {
     const root = document.documentElement;
     if (theme === 'dark' || theme === 'dim') {
       root.classList.add('dark');
+      root.style.colorScheme = 'dark';
     } else {
       root.classList.remove('dark');
+      root.style.colorScheme = 'light';
     }
   }, [theme]);
+
+  return null;
+}
+
+function BrandingSync() {
+  const facilityName = useBrandingStore((state) => state.facilityName);
+  const loadBranding = useBrandingStore((state) => state.load);
+
+  useEffect(() => {
+    void loadBranding();
+  }, [loadBranding]);
+
+  useEffect(() => {
+    document.title = facilityName === 'DRAC VMS' ? facilityName : `${facilityName} · DRAC VMS`;
+  }, [facilityName]);
 
   return null;
 }
@@ -249,6 +268,7 @@ function App() {
   const revalidate = useAuthStore((state) => state.revalidate);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const loadData = useVmsDataStore((state) => state.load);
+  const refreshOperational = useVmsDataStore((state) => state.refreshOperational);
 
   useEffect(() => {
     void bootstrap();
@@ -275,18 +295,39 @@ function App() {
     }
   }, [isAuthenticated, loadData]);
 
+  // A API ainda não expõe SSE/WebSocket para o estado operacional. Atualizamos
+  // apenas os recursos leves em segundo plano, sem desmontar players ao vivo.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshOperational();
+    };
+    const interval = window.setInterval(refreshWhenVisible, 12_000);
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [isAuthenticated, refreshOperational]);
+
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <ThemeSync />
-          <Suspense fallback={<AppFallback />}>
-            <AppRoutes />
-          </Suspense>
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <MotionConfig reducedMotion="user">
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+            <ThemeSync />
+            <BrandingSync />
+            <Suspense fallback={<AppFallback />}>
+              <AppRoutes />
+            </Suspense>
+          </WouterRouter>
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </MotionConfig>
   );
 }
 

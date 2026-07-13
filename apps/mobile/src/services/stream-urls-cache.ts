@@ -1,12 +1,23 @@
 // Cache for stream URLs to prevent duplicate requests during grid view load
-const streamUrlsCache = new Map<string, { data: any; expiresAt: number }>();
+const streamUrlsCache = new Map<string, { cameraId: string; data: unknown; expiresAt: number }>();
+const inFlightRequests = new Map<string, { promise: Promise<unknown>; controller: AbortController; id: symbol }>();
 const CACHE_TTL_MS = 8000; // 8 second cache
 
 export function clearStreamUrlsCache(cameraId?: string) {
   if (cameraId) {
-    streamUrlsCache.delete(cameraId);
+    for (const [key, entry] of streamUrlsCache) {
+      if (entry.cameraId === cameraId) streamUrlsCache.delete(key);
+    }
+    for (const [key, pending] of inFlightRequests) {
+      if (key.includes(`::${cameraId}::`)) {
+        pending.controller.abort();
+        inFlightRequests.delete(key);
+      }
+    }
   } else {
+    for (const pending of inFlightRequests.values()) pending.controller.abort();
     streamUrlsCache.clear();
+    inFlightRequests.clear();
   }
 }
 
@@ -19,46 +30,74 @@ export async function requestCachedStreamUrls<T>(
 ): Promise<T> {
   // A chave inclui o modo — 'original' (máxima qualidade/H.265) usa outro caminho
   // no MediaMTX e não pode compartilhar cache com o modo normal (WebRTC/H.264).
-  const cacheKey = viewMode && viewMode !== 'selected' ? `${cameraId}::${viewMode}` : cameraId;
+  // Servidor e credencial fazem parte da chave para que uma troca de conta ou
+  // instalação nunca reutilize URLs/tokens emitidos para outra sessão.
+  const normalizedApiUrl = apiUrl.replace(/\/+$/, '');
+  const mode = viewMode ?? 'selected';
+  const cacheKey = `${normalizedApiUrl}::${token ?? 'anonymous'}::${cameraId}::${mode}`;
   const cached = streamUrlsCache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.data as T;
   }
 
+  const pending = inFlightRequests.get(cacheKey);
+  if (pending) return pending.promise as Promise<T>;
+
   // Make actual request
   const controller = new AbortController();
+  const externalSignal = init?.signal;
+  const abortFromExternal = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  else externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
   const timeout = setTimeout(() => controller.abort(), 15_000);
   const query = viewMode ? `?viewMode=${encodeURIComponent(viewMode)}` : '';
+  const requestId = Symbol(cacheKey);
 
-  try {
-    const response = await fetch(`${apiUrl}/camera-stream/${cameraId}/urls${query}`, {
-      ...init,
-      signal: init?.signal ?? controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(init?.headers ?? {}),
-      },
-    });
-    const text = await response.text();
-    const data = text ? JSON.parse(text) : null;
-    if (!response.ok) {
-      throw new Error(data?.message ?? `HTTP ${response.status}`);
+  const run = (async () => {
+    try {
+      const response = await fetch(`${apiUrl}/camera-stream/${cameraId}/urls${query}`, {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(init?.headers ?? {}),
+        },
+      });
+      const text = await response.text();
+      let data: any = null;
+      if (text) {
+        try { data = JSON.parse(text); }
+        catch { data = { message: text.slice(0, 300) }; }
+      }
+      if (!response.ok) {
+        throw new Error(data?.message ?? `HTTP ${response.status}`);
+      }
+
+      // Se clearStreamUrlsCache abortou esta sessão, não repopula o cache.
+      if (!controller.signal.aborted) {
+        streamUrlsCache.set(cacheKey, {
+          cameraId,
+          data: data as T,
+          expiresAt: Date.now() + CACHE_TTL_MS,
+        });
+      }
+
+      return data as T;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Tempo esgotado. Verifique a conexão.');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      externalSignal?.removeEventListener('abort', abortFromExternal);
+      // Um clear seguido imediatamente de uma nova chamada pode criar outro
+      // request com a mesma chave enquanto este ainda termina. O request antigo
+      // não deve apagar a referência do novo no finally.
+      if (inFlightRequests.get(cacheKey)?.id === requestId) inFlightRequests.delete(cacheKey);
     }
-
-    // Cache the successful response
-    streamUrlsCache.set(cacheKey, {
-      data: data as T,
-      expiresAt: Date.now() + CACHE_TTL_MS,
-    });
-
-    return data as T;
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Tempo esgotado. Verifique a conexão.');
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
+  })();
+  inFlightRequests.set(cacheKey, { promise: run, controller, id: requestId });
+  return run;
 }

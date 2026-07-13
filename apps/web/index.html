@@ -1,8 +1,15 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      try {
+        const theme = localStorage.getItem('drac-theme') || localStorage.getItem('nexusguard-theme') || 'dark';
+        document.documentElement.classList.toggle('dark', theme === 'dark' || theme === 'dim');
+        document.documentElement.style.colorScheme = theme === 'dark' || theme === 'dim' ? 'dark' : 'light';
+      } catch (_) {}
+    </script>
     <title>DRAC VMS</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

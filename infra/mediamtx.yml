@@ -3,20 +3,9 @@ logLevel: info
 api: yes
 apiAddress: :9997
 
-authMethod: internal
-authInternalUsers:
-  - user: any
-    permissions:
-      - action: read
-      - action: playback
-  - user: ${MEDIAMTX_API_USER}
-    pass: ${MEDIAMTX_API_PASS}
-    permissions:
-      - action: publish
-      - action: read
-      - action: playback
-      - action: api
-      - action: metrics
+authMethod: http
+authHTTPAddress: http://api:3000/camera-stream/mediamtx-auth
+authHTTPExclude: []
 
 metrics: yes
 metricsAddress: :9998

@@ -19,7 +19,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import { addMinutes, format, isSameDay, startOfDay } from 'date-fns';
+import { addMinutes, format, startOfDay } from 'date-fns';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Dialog,
@@ -34,6 +34,7 @@ import { toast } from '../hooks/use-toast';
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
 import { useVmsDataStore } from '../store/vmsDataStore';
+import { localDayRange } from '../lib/web-operational';
 
 type TimelineSegment = {
   recordingId?: string;
@@ -127,6 +128,16 @@ type ExportedClip = {
   investigationItemId: string | null;
 };
 
+type PlaybackEvent = {
+  timestamp: string;
+  severity: string;
+};
+
+type PaginatedResponse<T> = {
+  items: T[];
+  total: number;
+};
+
 const API_URL = getApiBaseUrl();
 const SPEEDS = ['0.25x', '0.5x', '1x', '2x', '4x', '8x'];
 const TOTAL_MINS = 24 * 60;
@@ -162,7 +173,7 @@ function buildTimelineSegments(recordings: RecordingItem[], events: Array<{ time
   }
   if (cursor < TOTAL_MINS) gaps.push({ start: cursor, end: TOTAL_MINS, type: 'gap' });
 
-  const eventMarkers: TimelineSegment[] = events.slice(0, 80).map((event) => {
+  const eventMarkers: TimelineSegment[] = events.map((event) => {
     const point = clamp(minuteOfDay(event.timestamp), 0, TOTAL_MINS);
     return {
       start: Math.max(0, point - 0.6),
@@ -176,6 +187,31 @@ function buildTimelineSegments(recordings: RecordingItem[], events: Array<{ time
 
 function authHeaders(accessToken: string | null) {
   return accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined;
+}
+
+async function fetchAllPages<T>(
+  client: ReturnType<typeof axios.create>,
+  path: string,
+  params: Record<string, string | number>,
+  pageSize: number,
+) {
+  const items: T[] = [];
+  let offset = 0;
+  let total = Number.POSITIVE_INFINITY;
+
+  while (offset < total) {
+    const { data } = await client.get<PaginatedResponse<T>>(path, {
+      params: { ...params, limit: pageSize, offset },
+      timeout: API_TIMEOUT_MS,
+    });
+    const page = Array.isArray(data.items) ? data.items : [];
+    total = Number.isFinite(Number(data.total)) ? Number(data.total) : offset + page.length;
+    items.push(...page);
+    offset += page.length;
+    if (!page.length || page.length < pageSize) break;
+  }
+
+  return items;
 }
 
 async function createPlaybackToken(recordingId: string, accessToken: string) {
@@ -222,7 +258,6 @@ export default function PlaybackPage() {
   const [location] = useLocation();
   const accessToken = useAuthStore((state) => state.accessToken);
   const cameras = useVmsDataStore((state) => state.cameras);
-  const events = useVmsDataStore((state) => state.events);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const client = useMemo(() => axios.create({ baseURL: API_URL, headers: authHeaders(accessToken), timeout: API_TIMEOUT_MS }), [accessToken]);
 
@@ -242,6 +277,9 @@ export default function PlaybackPage() {
   const [compatMode, setCompatMode] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
+  const [playbackEvents, setPlaybackEvents] = useState<PlaybackEvent[]>([]);
+  const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>({});
+  const [thumbnailRefreshNonce, setThumbnailRefreshNonce] = useState(0);
   const [diagnosticsByRecordingId, setDiagnosticsByRecordingId] = useState<Record<string, RecordingDiagnostics>>({});
   const [healthSummary, setHealthSummary] = useState<RecordingHealthSummary | null>(null);
   const [preparingCompatibleId, setPreparingCompatibleId] = useState<string | null>(null);
@@ -271,11 +309,18 @@ export default function PlaybackPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [clipDownload, setClipDownload] = useState<{ url: string; clipId: string } | null>(null);
   const [clipDownloadReason, setClipDownloadReason] = useState('');
+  const lastThumbnailRetryRef = useRef(0);
 
-  const requestedCameraId = useMemo(() => {
+  const requestedContext = useMemo(() => {
     if (typeof window === 'undefined') return null;
-    return new URLSearchParams(window.location.search).get('cameraId');
+    const params = new URLSearchParams(window.location.search);
+    return {
+      cameraId: params.get('cameraId'),
+      at: params.get('at'),
+    };
   }, [location]);
+  const requestedCameraId = requestedContext?.cameraId ?? null;
+  const requestedAt = requestedContext?.at ?? null;
 
   useEffect(() => {
     if (!cameras.length) return;
@@ -289,6 +334,14 @@ export default function PlaybackPage() {
   }, [cameras, requestedCameraId, selectedCamId]);
 
   useEffect(() => {
+    if (!requestedAt) return;
+    const target = new Date(requestedAt);
+    if (Number.isNaN(target.getTime())) return;
+    setSelectedDate(format(target, 'yyyy-MM-dd'));
+    setPlayhead(clamp(minuteOfDay(target), 0, TOTAL_MINS));
+  }, [requestedAt]);
+
+  useEffect(() => {
     if (!accessToken) return;
     void client.get<{ items: InvestigationOption[] }>('/investigations')
       .then(({ data }) => setInvestigations(Array.isArray(data.items) ? data.items.map((item) => ({ id: item.id, title: item.title })) : []))
@@ -296,7 +349,7 @@ export default function PlaybackPage() {
   }, [accessToken, client]);
 
   useEffect(() => {
-    if (!accessToken || !selectedCamId) return;
+    if (!accessToken || !selectedCamId || requestedAt) return;
     let cancelled = false;
     void client.get<{ items: RecordingItem[] }>(`/recordings?cameraId=${encodeURIComponent(selectedCamId)}&limit=1&sort=desc`, { timeout: API_TIMEOUT_MS })
       .then(({ data }) => {
@@ -311,7 +364,7 @@ export default function PlaybackPage() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, client, selectedCamId]);
+  }, [accessToken, client, requestedAt, selectedCamId]);
 
   useEffect(() => {
     if (!accessToken || !selectedCamId || !selectedDate) return;
@@ -320,11 +373,15 @@ export default function PlaybackPage() {
     setLastExportedClip(null);
     setDiagnosticsByRecordingId({});
 
-    void client
-      .get<{ items: RecordingItem[] }>(`/recordings?cameraId=${encodeURIComponent(selectedCamId)}&date=${encodeURIComponent(selectedDate)}&limit=200&sort=asc`, { timeout: API_TIMEOUT_MS })
-      .then(({ data }) => {
+    const range = localDayRange(selectedDate);
+    void fetchAllPages<RecordingItem>(client, '/recordings', {
+      cameraId: selectedCamId,
+      from: range.from,
+      to: range.to,
+      sort: 'asc',
+    }, 200)
+      .then((items) => {
         if (cancelled) return;
-        const items = Array.isArray(data.items) ? data.items : [];
         setRecordings(items);
         if (!items.length) {
           setSelectedRecordingId(null);
@@ -338,7 +395,11 @@ export default function PlaybackPage() {
           setVideoError('As gravações deste dia foram listadas, mas os arquivos estão ausentes, vazios ou incompletos no disco.');
           return;
         }
-        setPlayhead(clamp(Math.round(minuteOfDay(items[items.length - 1].startedAt)), 0, TOTAL_MINS));
+        const requestedTarget = requestedAt ? new Date(requestedAt) : null;
+        const useRequestedTarget = requestedTarget
+          && !Number.isNaN(requestedTarget.getTime())
+          && format(requestedTarget, 'yyyy-MM-dd') === selectedDate;
+        setPlayhead(clamp(Math.round(useRequestedTarget ? minuteOfDay(requestedTarget) : minuteOfDay(items[items.length - 1].startedAt)), 0, TOTAL_MINS));
       })
       .catch((error) => {
         if (cancelled) return;
@@ -353,6 +414,33 @@ export default function PlaybackPage() {
         if (!cancelled) setLoadingRecordings(false);
       });
 
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, client, requestedAt, selectedCamId, selectedDate]);
+
+  useEffect(() => {
+    if (!accessToken || !selectedCamId || !selectedDate) {
+      setPlaybackEvents([]);
+      return;
+    }
+    let cancelled = false;
+    const range = localDayRange(selectedDate);
+    void fetchAllPages<any>(client, '/cameras/events-feed', {
+      cameraId: selectedCamId,
+      from: range.from,
+      to: range.to,
+    }, 500)
+      .then((items) => {
+        if (cancelled) return;
+        setPlaybackEvents(items.map((event) => ({
+          timestamp: event.occurredAt,
+          severity: String(event.severity ?? 'info').toLowerCase(),
+        })));
+      })
+      .catch(() => {
+        if (!cancelled) setPlaybackEvents([]);
+      });
     return () => {
       cancelled = true;
     };
@@ -385,6 +473,61 @@ export default function PlaybackPage() {
   }, [accessToken, client, recordings]);
 
   useEffect(() => {
+    if (!accessToken || !recordings.length) {
+      setThumbnailUrls({});
+      return;
+    }
+
+    let cancelled = false;
+    const ids = recordings.map((item) => item.id);
+    const batches: string[][] = [];
+    for (let index = 0; index < ids.length; index += 100) batches.push(ids.slice(index, index + 100));
+
+    void Promise.all(
+      batches.map((recordingIds) => client.post<Record<string, string>>('/recordings/thumbnail-tokens', { recordingIds })),
+    )
+      .then((responses) => {
+        if (cancelled) return;
+        const tokens: Record<string, string> = Object.assign({}, ...responses.map((response) => response.data));
+        const urls: Record<string, string> = {};
+        for (const [recordingId, token] of Object.entries(tokens)) {
+          urls[recordingId] = `${API_URL}/recordings/${encodeURIComponent(recordingId)}/thumbnail?token=${encodeURIComponent(token)}`;
+        }
+        setThumbnailUrls(urls);
+      })
+      .catch(() => {
+        // Mantém as URLs anteriores durante falhas transitórias. Se expirarem, o
+        // onError abaixo agenda uma nova emissão de tokens.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, client, recordings, thumbnailRefreshNonce]);
+
+  useEffect(() => {
+    if (!accessToken || !recordings.length) return;
+    const renew = () => {
+      if (document.visibilityState === 'visible') setThumbnailRefreshNonce((value) => value + 1);
+    };
+    const timer = window.setInterval(renew, 4 * 60 * 1000);
+    window.addEventListener('focus', renew);
+    document.addEventListener('visibilitychange', renew);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', renew);
+      document.removeEventListener('visibilitychange', renew);
+    };
+  }, [accessToken, recordings.length]);
+
+  const retryExpiredThumbnails = useCallback(() => {
+    const now = Date.now();
+    if (now - lastThumbnailRetryRef.current < 5_000) return;
+    lastThumbnailRetryRef.current = now;
+    setThumbnailRefreshNonce((value) => value + 1);
+  }, []);
+
+  useEffect(() => {
     if (!accessToken || !selectedCamId || !selectedDate) {
       setHealthSummary(null);
       return;
@@ -414,11 +557,14 @@ export default function PlaybackPage() {
     if (!ids.length) return;
     let cancelled = false;
     void Promise.all(ids.map(async (cameraId) => {
-      const { data } = await client.get<{ items: RecordingItem[] }>(
-        `/recordings?cameraId=${encodeURIComponent(cameraId)}&date=${encodeURIComponent(selectedDate)}&limit=200&sort=asc`,
-        { timeout: API_TIMEOUT_MS },
-      );
-      return [cameraId, Array.isArray(data.items) ? data.items : []] as const;
+      const range = localDayRange(selectedDate);
+      const items = await fetchAllPages<RecordingItem>(client, '/recordings', {
+        cameraId,
+        from: range.from,
+        to: range.to,
+        sort: 'asc',
+      }, 200);
+      return [cameraId, items] as const;
     }))
       .then((entries) => {
         if (cancelled) return;
@@ -436,12 +582,7 @@ export default function PlaybackPage() {
   const selectedDay = useMemo(() => new Date(`${selectedDate}T00:00:00`), [selectedDate]);
   const dayStart = useMemo(() => startOfDay(selectedDay), [selectedDay]);
 
-  const relevantEvents = useMemo(
-    () => events.filter((event) => event.cameraId === selectedCamId && isSameDay(new Date(event.timestamp), selectedDay)).slice(0, 40),
-    [events, selectedCamId, selectedDay],
-  );
-
-  const timelineSegments = useMemo(() => buildTimelineSegments(recordings, relevantEvents), [recordings, relevantEvents]);
+  const timelineSegments = useMemo(() => buildTimelineSegments(recordings, playbackEvents), [recordings, playbackEvents]);
   const compareCameraItems = useMemo(() => (
     Array.from(new Set([selectedCamId, ...compareCameraIds].filter(Boolean)))
       .slice(0, 4)
@@ -451,7 +592,7 @@ export default function PlaybackPage() {
 
   const compareRows = useMemo(() => compareCameraItems.map((camera) => {
     const items = compareRecordingsByCamera[camera.id] ?? (camera.id === selectedCamId ? recordings : []);
-    const eventsForCamera = events.filter((event) => event.cameraId === camera.id && isSameDay(new Date(event.timestamp), selectedDay)).slice(0, 40);
+    const eventsForCamera = camera.id === selectedCamId ? playbackEvents : [];
     const segments = buildTimelineSegments(items, eventsForCamera);
     const current = items.find((recording) => {
       const start = minuteOfDay(recording.startedAt);
@@ -459,7 +600,7 @@ export default function PlaybackPage() {
       return playhead >= start && playhead <= end;
     });
     return { camera, items, segments, current };
-  }), [compareCameraItems, compareRecordingsByCamera, events, playhead, recordings, selectedCamId, selectedDay]);
+  }), [compareCameraItems, compareRecordingsByCamera, playbackEvents, playhead, recordings, selectedCamId]);
   useEffect(() => {
     if (!recordings.length) {
       setSelectedRecordingId(null);
@@ -487,6 +628,8 @@ export default function PlaybackPage() {
   }, [recordings, playhead]);
 
   const selectedRecording = useMemo(() => recordings.find((recording) => recording.id === selectedRecordingId) ?? null, [recordings, selectedRecordingId]);
+  const selectedThumbnailUrl = selectedRecordingId ? thumbnailUrls[selectedRecordingId] ?? null : null;
+  const standbyThumbnailUrl = selectedThumbnailUrl ?? (recordings.length ? thumbnailUrls[recordings[recordings.length - 1].id] ?? null : null);
   const selectedDiagnostics = useMemo(() => (selectedRecordingId ? diagnosticsByRecordingId[selectedRecordingId] ?? null : null), [diagnosticsByRecordingId, selectedRecordingId]);
   const playbackMayUseCompatible = compatMode || Boolean(selectedDiagnostics?.compatibleRecommended);
   const recordingById = useMemo(() => new Map(recordings.map((recording) => [recording.id, recording] as const)), [recordings]);
@@ -923,7 +1066,7 @@ export default function PlaybackPage() {
   }, [accessToken, clipDownload, clipDownloadReason]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto xl:overflow-hidden">
       <div className="toolbar">
         <Select value={selectedCamId} onValueChange={setSelectedCamId}>
           <SelectTrigger className="h-9 w-[min(100%,300px)] text-xs">
@@ -1057,9 +1200,9 @@ export default function PlaybackPage() {
       </div>
 
 
-      <div className="flex flex-1 gap-4 min-h-0 p-4">
+      <div className="flex flex-1 flex-col gap-4 min-h-0 p-3 sm:p-4 xl:flex-row">
         <div ref={playerColumnRef} className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="relative min-h-[62vh] flex-1 overflow-hidden rounded-xl border border-border bg-[hsl(210,18%,7%)]">
+          <div className="relative min-h-[320px] sm:min-h-[50vh] xl:min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-[hsl(210,18%,7%)]">
             <div className="camera-scanline absolute inset-0 overflow-hidden pointer-events-none" />
 
             <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
@@ -1083,6 +1226,7 @@ export default function PlaybackPage() {
                   key={playbackUrl}
                   ref={videoRef}
                   src={playbackUrl}
+                  poster={selectedThumbnailUrl ?? undefined}
                   crossOrigin="use-credentials"
                   preload="metadata"
                   className="h-full w-full bg-black object-contain"
@@ -1144,6 +1288,8 @@ export default function PlaybackPage() {
 
             {!playbackUrl && !loadingPlayback && !loadingRecordings && (
               <div className="absolute inset-0 flex items-center justify-center">
+                {standbyThumbnailUrl ? <img src={standbyThumbnailUrl} onError={retryExpiredThumbnails} alt="Prévia da gravação" className="absolute inset-0 h-full w-full object-cover opacity-60" /> : null}
+                {standbyThumbnailUrl ? <div className="absolute inset-0 bg-black/35" /> : null}
                 <div className="text-center">
                   {recordings.length ? <CameraIcon className="mx-auto mb-2 h-10 w-10 text-white/10" /> : <VideoOff className="mx-auto mb-2 h-10 w-10 text-white/10" />}
                   <div className="text-xs text-white/30">
@@ -1339,7 +1485,7 @@ export default function PlaybackPage() {
               <span className="w-14 shrink-0 font-mono text-[11px] tabular-nums text-[hsl(var(--muted-foreground))]">{formatClock(videoDuration || selectedRecordingDuration)}</span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {/* Navegação entre segmentos */}
               <button type="button" onClick={() => jumpToAdjacentUsableRecording('prev')} disabled={!selectedRecordingId} title="Segmento anterior" className="flex h-8 items-center gap-1 rounded-lg border border-border px-2 text-[10px] text-[hsl(var(--muted-foreground))] transition-colors hover:bg-[hsl(var(--accent))] hover:text-foreground disabled:opacity-45">
                 <SkipBack className="h-3.5 w-3.5" /> Seg.
@@ -1397,7 +1543,7 @@ export default function PlaybackPage() {
           </div>
         </div>
 
-        <div className="hidden xl:flex w-80 shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
+        <div className="flex max-h-80 w-full shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card xl:max-h-none xl:w-80">
           <div className="border-b border-border px-3 py-2.5">
             <span className="text-xs font-semibold">Gravações do dia</span>
           </div>
@@ -1426,11 +1572,21 @@ export default function PlaybackPage() {
                       : 'hover:bg-[hsl(var(--accent))]'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className={`text-[11px] font-medium ${isSelected ? 'text-[hsl(var(--primary))]' : ''}`}>
-                      {startLabel} - {endLabel}
-                    </span>
-                    <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="relative h-11 w-[72px] shrink-0 overflow-hidden rounded-md bg-black/50">
+                      {thumbnailUrls[item.id] ? (
+                        <img src={thumbnailUrls[item.id]} onError={retryExpiredThumbnails} alt={`Prévia de ${startLabel}`} loading="lazy" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center"><CameraIcon className="h-4 w-4 text-white/25" /></div>
+                      )}
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/15"><Play className="h-3.5 w-3.5 fill-white text-white" /></div>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`text-[11px] font-medium ${isSelected ? 'text-[hsl(var(--primary))]' : ''}`}>
+                          {startLabel} - {endLabel}
+                        </span>
+                        <div className="flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={(event) => {
@@ -1444,10 +1600,12 @@ export default function PlaybackPage() {
                         {downloadingRecordingId === item.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                       </button>
                       <span className={`h-2 w-2 rounded-full ${usable ? 'bg-[hsl(var(--status-online)_/_0.8)]' : 'bg-[hsl(var(--destructive)_/_0.8)]'}`} />
+                        </div>
+                      </div>
+                      <div className="mt-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">
+                        {item.durationSeconds ? `${item.durationSeconds}s` : '--'} · {Math.round(Number(item.actualSizeBytes ?? item.sizeBytes ?? 0) / 1024 / 1024)} MB
+                      </div>
                     </div>
-                  </div>
-                  <div className="mt-1 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">
-                    {item.durationSeconds ? `${item.durationSeconds}s` : '--'} · {Math.round(Number(item.sizeBytes || 0) / 1024 / 1024)} MB
                   </div>
                 </div>
               );

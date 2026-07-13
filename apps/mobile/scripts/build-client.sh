@@ -97,6 +97,27 @@ TARGET_ABIS="$TARGET_ABIS" node -e '
   }
 '
 
+# versionCode auto-incremental POR CLIENTE. A Play recusa um AAB com versionCode
+# igual ou menor que um já publicado — então cada build sobe +1. O contador vive
+# em builds/<slug>.versionCode (fora do fluxo do agent, que reescreve
+# clients/<slug>/config.json a cada geração; e sobrevive a rebuilds). Piso = o
+# versionCode da configuração base. Override manual possível via env VERSION_CODE.
+VC_FILE="$BUILDS_DIR/$SLUG.versionCode"
+BASE_VC="$(node -e "process.stdout.write(String(require('$MOBILE_DIR/app.base.json').expo.android.versionCode||1))")"
+if [[ -n "${VERSION_CODE:-}" ]]; then
+  NEW_VC="$VERSION_CODE"
+else
+  PREV_VC=""
+  if [[ -f "$VC_FILE" ]]; then
+    PREV_VC="$(tr -dc '0-9' < "$VC_FILE" 2>/dev/null || true)"
+  fi
+  if [[ -n "$PREV_VC" ]]; then NEW_VC=$((PREV_VC + 1)); else NEW_VC="$BASE_VC"; fi
+fi
+[[ "$NEW_VC" -lt "$BASE_VC" ]] && NEW_VC="$BASE_VC"
+sed -i -E "s/versionCode[[:space:]]+[0-9]+/versionCode $NEW_VC/" android/app/build.gradle
+echo "$NEW_VC" > "$VC_FILE"
+echo ">> versionCode deste build: $NEW_VC (cliente $SLUG)"
+
 echo ">> gradle assembleRelease (baixa prioridade)…"
 ( cd android && nice -n 15 ionice -c3 ./gradlew assembleRelease \
     -PreactNativeArchitectures="$TARGET_ABIS" --no-daemon --console=plain >/dev/null )
@@ -135,3 +156,116 @@ VERSION="$($BUILD_TOOLS/aapt dump badging "$OUT" 2>/dev/null | sed -n "s/.*versi
 echo "OK_APK=$OUT"
 echo "OK_VERSION=$VERSION"
 echo "OK_URL=/apk/drac-$SLUG.apk"
+
+# ── AAB (Android App Bundle) — formato exigido pela Google Play Store ─────────
+# O APK acima serve p/ instalação direta (sideload); a Play só aceita AAB.
+# Gera o bundle, assina com a MESMA keystore do cliente (vira a "upload key" no
+# Play App Signing — updates futuros usam a mesma) e publica p/ download.
+echo ">> gradle bundleRelease (AAB para a Play Store)…"
+( cd android && nice -n 15 ionice -c3 ./gradlew bundleRelease \
+    -PreactNativeArchitectures="$TARGET_ABIS" --no-daemon --console=plain >/dev/null )
+AAB_UNSIGNED="$MOBILE_DIR/android/app/build/outputs/bundle/release/app-release.aab"
+if [[ -f "$AAB_UNSIGNED" ]]; then
+  AAB_OUT="$BUILDS_DIR/drac-$SLUG.aab"
+  # O gradle bundleRelease JÁ assina o AAB com a keystore de DEBUG (config
+  # padrão do Expo). Se só rodássemos o jarsigner por cima, o AAB ficaria com
+  # DUAS cadeias de certificado (debug + cliente) e a Play recusa ("mais de uma
+  # cadeia de certificados"). Então primeiro REMOVEMOS qualquer assinatura
+  # existente (META-INF/*.SF|RSA|DSA|EC) e só depois assinamos com a do cliente
+  # — o jarsigner ADICIONA assinatura (não substitui como o apksigner).
+  AAB_CLEAN="$(mktemp --suffix=.aab)"
+  python3 - "$AAB_UNSIGNED" "$AAB_CLEAN" <<'PY'
+import sys, zipfile, re
+src, dst = sys.argv[1], sys.argv[2]
+sig = re.compile(r'^META-INF/.*\.(SF|RSA|DSA|EC)$', re.I)
+with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED) as zout:
+    for it in zin.infolist():
+        if not sig.match(it.filename):
+            zout.writestr(it, zin.read(it.filename))
+PY
+  # AAB é assinado com jarsigner (JAR signing), não com apksigner. A senha é
+  # lida do arquivo p/ uma variável (host confiável; o .pass já vive ao lado).
+  KS_PASS="$(cat "$PASS_FILE")"
+  echo ">> assinando o AAB (cadeia única do cliente)…"
+  "$JAVA_HOME/bin/jarsigner" -keystore "$KS" \
+    -storepass "$KS_PASS" -keypass "$KS_PASS" \
+    -sigalg SHA256withRSA -digestalg SHA-256 \
+    -signedjar "$AAB_OUT" "$AAB_CLEAN" "$SLUG" >/dev/null
+  unset KS_PASS
+  rm -f "$AAB_CLEAN"
+  # Upload keys locais são autoassinadas; `-strict` retorna 4 nesse caso mesmo
+  # quando a assinatura é íntegra. A verificação normal valida a integridade e
+  # a checagem abaixo garante que não há um segundo signer.
+  "$JAVA_HOME/bin/jarsigner" -verify "$AAB_OUT" >/dev/null
+  # Depois da limpeza deve existir exatamente um bloco de assinatura. Isso
+  # detecta regressões que deixariam debug + cliente no mesmo AAB.
+  python3 - "$AAB_OUT" <<'PY'
+import re, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as bundle:
+    blocks = [n for n in bundle.namelist() if re.match(r'^META-INF/.*\.(RSA|DSA|EC)$', n, re.I)]
+if len(blocks) != 1:
+    raise SystemExit(f'AAB deve conter uma única assinatura; encontradas {len(blocks)}: {blocks}')
+PY
+  echo ">> assinatura única do AAB validada"
+  cp -f "$AAB_OUT" "$APK_PUBLISH_DIR/drac-$SLUG.aab"
+  echo "OK_AAB=$AAB_OUT"
+  echo "OK_AAB_URL=/apk/drac-$SLUG.aab"
+else
+  echo ">> aviso: AAB não gerado (bundleRelease falhou) — só o APK ficou disponível" >&2
+fi
+
+# ── Kit de publicação Play Store ─────────────────────────────────────────────
+# Junta num .zip tudo que dá p/ AUTOMATIZAR do que a Play pede: o AAB + ícone
+# 512×512 + URL da política + o checklist + um LEIA-ME com os dados do app. O
+# resto (screenshots, questionários de Data safety/classificação) é preenchido à
+# mão no Play Console. Best-effort num subshell (set +e): NUNCA derruba o build.
+if [[ -f "$APK_PUBLISH_DIR/drac-$SLUG.aab" ]] && KIT_STAGE="$(mktemp -d)"; then
+  echo ">> montando kit Play Store…"
+  (
+    set +e
+    cp "$APK_PUBLISH_DIR/drac-$SLUG.aab" "$KIT_STAGE/${APP_NAME}.aab"
+    ICON_SRC="$CLIENT_DIR/icon.png"; [[ -f "$ICON_SRC" ]] || ICON_SRC="$MOBILE_DIR/assets/icon.png"
+    [[ -f "$ICON_SRC" ]] && command -v ffmpeg >/dev/null 2>&1 && \
+      ffmpeg -y -loglevel error -i "$ICON_SRC" -vf "scale=512:512:flags=lanczos" "$KIT_STAGE/icone-512.png" 2>/dev/null
+    CHECKLIST="$MOBILE_DIR/../../docs/play-store-checklist.md"
+    [[ -f "$CHECKLIST" ]] && cp "$CHECKLIST" "$KIT_STAGE/checklist-play-store.md"
+    API_URL="$(node -e "process.stdout.write((require('$CONFIG').apiUrl||''))" 2>/dev/null)"
+    PRIV_URL="$(node -e "const a='$API_URL'.replace(/\/api\/*\$/,'').replace(/\/+\$/,''); process.stdout.write(a?a+'/privacidade.html':'(defina o dominio HTTPS do servidor)')" 2>/dev/null)"
+    cat > "$KIT_STAGE/LEIA-ME.txt" <<EOF
+Kit de publicação — $APP_NAME
+Gerado em: $(date '+%Y-%m-%d %H:%M')
+
+ARQUIVOS DESTE KIT
+- ${APP_NAME}.aab ............ suba ESTE arquivo no Play Console (é o app).
+- icone-512.png ............. ícone 512x512 p/ a listagem.
+- checklist-play-store.md ... passo a passo + Data safety.
+
+DADOS DO APP
+- Nome ....... $APP_NAME
+- Pacote ..... $PACKAGE_ID
+- Versão ..... ${VERSION:-?} (versionCode ${NEW_VC:-?} — auto-incrementa a cada build)
+
+PREENCHER NO PLAY CONSOLE (não são arquivos, é formulário):
+- Política de privacidade (URL): $PRIV_URL
+- Data safety: criptografado em trânsito = Sim (servidor usa HTTPS).
+- Screenshots do celular (2+) e feature graphic 1024x500.
+- Classificação de conteúdo (questionário).
+
+Sugestão: comece por TESTE INTERNO, valide num celular real, depois PRODUÇÃO.
+EOF
+    python3 - "$KIT_STAGE" "$BUILDS_DIR/drac-$SLUG-playstore-kit.zip" <<'PY'
+import sys, os, zipfile
+stage, out = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for name in sorted(os.listdir(stage)):
+        z.write(os.path.join(stage, name), name)
+PY
+  )
+  if [[ -f "$BUILDS_DIR/drac-$SLUG-playstore-kit.zip" ]]; then
+    cp -f "$BUILDS_DIR/drac-$SLUG-playstore-kit.zip" "$APK_PUBLISH_DIR/drac-$SLUG-playstore-kit.zip"
+    echo "OK_KIT_URL=/apk/drac-$SLUG-playstore-kit.zip"
+  else
+    echo ">> aviso: kit Play Store não gerado" >&2
+  fi
+  rm -rf "$KIT_STAGE"
+fi

@@ -199,9 +199,14 @@ interface VmsDataState {
     actor: string | null;
   }>;
   isLoading: boolean;
+  isRefreshing: boolean;
   loaded: boolean;
   error: string | null;
+  stale: boolean;
+  lastUpdatedAt: string | null;
+  resourceErrors: Record<string, string>;
   load: () => Promise<void>;
+  refreshOperational: () => Promise<void>;
   updateUserActive: (id: string, active: boolean) => Promise<void>;
   acknowledgeAlarm: (id: string, note?: string) => Promise<void>;
   resolveAlarm: (id: string, note?: string) => Promise<void>;
@@ -220,6 +225,141 @@ type RecordingRuntimeStatus = {
   lastSegmentAt?: string | null;
   lastSegmentAgeSeconds?: number | null;
 };
+
+type SettledResource<T> = {
+  data: T | null;
+  error: string | null;
+};
+
+async function fetchResource<T>(name: string, request: Promise<{ data: T }>): Promise<SettledResource<T>> {
+  try {
+    const response = await request;
+    return { data: response.data, error: null };
+  } catch (error) {
+    const message = axios.isAxiosError(error)
+      ? `${name}: ${error.response?.status ? `HTTP ${error.response.status}` : error.message}`
+      : `${name}: ${error instanceof Error ? error.message : 'falha inesperada'}`;
+    return { data: null, error: message };
+  }
+}
+
+function mapEventItems(rawEvents: any[]): VMSEvent[] {
+  return rawEvents.map((event: any) => ({
+    id: event.id,
+    type: event.type,
+    cameraId: event.cameraId,
+    cameraName: event.cameraName ?? event.camera?.name ?? 'Câmera',
+    timestamp: event.occurredAt,
+    severity: mapSeverity(event.severity),
+    acknowledged: Boolean(event.acknowledgedAt || event.acknowledgedBy),
+    description: event.message,
+  }));
+}
+
+function mapCameraItems(
+  rawCameras: any[],
+  rawEvents: any[],
+  runtimeStatuses: Map<string, RecordingRuntimeStatus>,
+  previousCameras: Camera[] = [],
+): Camera[] {
+  const previousById = new Map(previousCameras.map((camera) => [camera.id, camera] as const));
+  return rawCameras.map((camera: any, index: number) => {
+    const lastEvent = rawEvents.find((event: any) => event.cameraId === camera.id)?.occurredAt;
+    const runtime = runtimeStatuses.get(camera.id);
+    const previous = previousById.get(camera.id);
+    const configuredStreamWidth = camera.streamWidth ?? null;
+    const configuredStreamHeight = camera.streamHeight ?? null;
+    const detectedStreamWidth = camera.detectedWidth ?? configuredStreamWidth;
+    const detectedStreamHeight = camera.detectedHeight ?? configuredStreamHeight;
+    const effectiveFps = camera.streamFps ?? camera.detectedFps ?? 0;
+    const effectiveRecordingMode = (camera.recordingMode ?? (camera.recordingEnabled ? 'continuous' : 'manual')) as Camera['recordingMode'];
+    return {
+      id: camera.id,
+      code: camera.name,
+      name: camera.name,
+      location: camera.ip,
+      zone: camera.area?.name ?? camera.site?.name ?? previous?.zone ?? 'Sem zona',
+      building: camera.site?.name ?? previous?.building ?? 'Sem unidade',
+      floor: camera.group?.name ?? previous?.floor ?? '-',
+      ipAddress: camera.ip,
+      rtspPort: camera.rtspPort ?? 554,
+      model: `${formatCodec(camera.detectedVideoCodec ?? camera.streamVideoCodec)}${camera.rtspPath ? ' / RTSP' : ''}`,
+      status: mapCameraStatus(camera.status, camera.recordingEnabled, effectiveRecordingMode, runtime),
+      fps: effectiveFps ?? 0,
+      resolution: formatResolution(detectedStreamWidth, detectedStreamHeight),
+      storage: effectiveRecordingMode === 'motion'
+        ? `Por movimento · ${camera.retentionDays ?? 7} dias de retenção`
+        : camera.recordingEnabled
+          ? `${camera.retentionDays ?? 7} dias de retenção`
+          : 'Gravação desabilitada',
+      lastEvent: lastEvent ?? previous?.lastEvent,
+      ptzCapable: Boolean(camera.onvifPath || camera.onvifProfileToken),
+      hasAudio: Boolean(camera.audioEnabled),
+      aiEnabled: camera.aiEnabled !== false,
+      alarmsEnabled: camera.alarmsEnabled !== false,
+      isOnline: camera.status === 'ONLINE',
+      signalStrength: camera.status === 'ONLINE' ? 100 : 0,
+      recordingMode: effectiveRecordingMode,
+      retentionDays: camera.retentionDays ?? 7,
+      preferredRtspTransport: camera.preferredRtspTransport ?? 'tcp',
+      preferredLiveProtocol: camera.preferredLiveProtocol ?? 'webrtc',
+      rtspPath: camera.rtspPath ?? undefined,
+      liveChannel: camera.liveChannel ?? null,
+      liveSubtype: camera.liveSubtype ?? null,
+      recordingChannel: camera.recordingChannel ?? null,
+      recordingSubtype: camera.recordingSubtype ?? null,
+      analyticsChannel: camera.analyticsChannel ?? null,
+      analyticsSubtype: camera.analyticsSubtype ?? null,
+      streamVideoCodec: camera.streamVideoCodec ?? undefined,
+      streamWidth: configuredStreamWidth,
+      streamHeight: configuredStreamHeight,
+      streamFps: camera.streamFps ?? null,
+      streamBitrateKbps: camera.streamBitrateKbps ?? null,
+      recordingVideoCodec: camera.recordingVideoCodec ?? undefined,
+      recordingWidth: camera.recordingWidth ?? null,
+      recordingHeight: camera.recordingHeight ?? null,
+      recordingFps: camera.recordingFps ?? null,
+      recordingBitrateKbps: camera.recordingBitrateKbps ?? null,
+      detectedVideoCodec: camera.detectedVideoCodec ?? undefined,
+      detectedWidth: camera.detectedWidth ?? null,
+      detectedHeight: camera.detectedHeight ?? null,
+      detectedFps: camera.detectedFps ?? null,
+      detectedBitrateKbps: camera.detectedBitrateKbps ?? null,
+      lastMotion: lastEvent ?? previous?.lastMotion,
+      thumbnailColor: previous?.thumbnailColor ?? THUMBNAIL_COLORS[index % THUMBNAIL_COLORS.length],
+      recordingStatusDetail: runtime?.statusDetail ?? previous?.recordingStatusDetail,
+      recordingStale: runtime?.stale ?? previous?.recordingStale ?? false,
+      lastSegmentAt: runtime?.lastSegmentAt ?? previous?.lastSegmentAt ?? null,
+      lastSegmentAgeSeconds: typeof runtime?.lastSegmentAgeSeconds === 'number'
+        ? runtime.lastSegmentAgeSeconds
+        : previous?.lastSegmentAgeSeconds ?? null,
+    };
+  });
+}
+
+function mapAlarmItems(rawAlarms: any[], cameras: Camera[]): Alarm[] {
+  return rawAlarms.map((alarm: any) => ({
+    id: alarm.id,
+    name: alarm.title || `${alarm.type} — ${alarm.cameraName}`,
+    type: alarm.type,
+    status: alarm.status === 'RESOLVED' ? 'resolved' : alarm.status === 'ACKED' ? 'acknowledged' : 'active',
+    priority: alarm.priority ?? (alarm.severity === 'CRITICAL' ? 'P1' : alarm.severity === 'WARNING' ? 'P2' : 'P4'),
+    triggeredAt: alarm.occurredAt,
+    acknowledgedAt: alarm.acknowledgedAt ?? undefined,
+    acknowledgedBy: alarm.acknowledgedByUserName ?? undefined,
+    cameraId: alarm.cameraId,
+    zone: cameras.find((camera) => camera.id === alarm.cameraId)?.zone ?? 'Sem zona',
+    description: alarm.message,
+    notes: alarm.note ?? undefined,
+    isSnoozed: Boolean(alarm.isSnoozed),
+    snoozedUntil: alarm.snoozedUntil ?? undefined,
+    transitionHistory: Array.isArray(alarm.transitionHistory) ? alarm.transitionHistory : [],
+    notificationDelivery: Array.isArray(alarm.notificationDelivery) ? alarm.notificationDelivery : [],
+    lastNotificationStatus: typeof alarm.lastNotificationStatus === 'string' ? alarm.lastNotificationStatus : undefined,
+    occurrenceCount: typeof alarm.occurrenceCount === 'number' ? alarm.occurrenceCount : 1,
+    lastOccurredAt: alarm.lastOccurredAt ?? alarm.occurredAt ?? undefined,
+  }));
+}
 
 const API_URL = getApiBaseUrl();
 const THUMBNAIL_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
@@ -244,8 +384,19 @@ function mapSeverity(severity: string): VMSEvent['severity'] {
   return 'info';
 }
 
-function mapCameraStatus(status: string, recordingEnabled: boolean, runtime?: RecordingRuntimeStatus): Camera['status'] {
-  if (status === 'ONLINE') return (runtime?.isRecording ?? recordingEnabled) ? 'recording' : 'online';
+function mapCameraStatus(
+  status: string,
+  recordingEnabled: boolean,
+  recordingMode: Camera['recordingMode'],
+  runtime?: RecordingRuntimeStatus,
+): Camera['status'] {
+  if (status === 'ONLINE') {
+    if (runtime?.isRecording ?? recordingEnabled) return 'recording';
+    // Em modo motion, recordingEnabled indica processo FFmpeg ativo, não se a
+    // regra está armada. Exibir "Movimento" evita chamar uma câmera ociosa mas
+    // armada de "gravação desabilitada".
+    return recordingMode === 'motion' ? 'motion' : 'online';
+  }
   if (status === 'ERROR') return 'alarm';
   if (status === 'OFFLINE') return 'offline';
   return 'no_signal';
@@ -280,192 +431,143 @@ export const useVmsDataStore = create<VmsDataState>((set, get) => ({
   auditLogs: [],
   operationsTimeline: [],
   isLoading: false,
+  isRefreshing: false,
   loaded: false,
   error: null,
+  stale: true,
+  lastUpdatedAt: null,
+  resourceErrors: {},
   load: async () => {
     if (!useAuthStore.getState().accessToken) {
-      set({ cameras: [], users: [], events: [], alarms: [], recordings: [], layouts: [], overview: null, system: null, auditLogs: [], operationsTimeline: [], loaded: false });
+      set({
+        cameras: [], users: [], events: [], alarms: [], recordings: [], layouts: [],
+        overview: null, system: null, auditLogs: [], operationsTimeline: [], loaded: false,
+        isLoading: false, isRefreshing: false, stale: true, lastUpdatedAt: null, resourceErrors: {}, error: null,
+      });
       return;
     }
 
     set({ isLoading: true, error: null });
     const client = api();
+    const role = useAuthStore.getState().user?.role;
+    const [camerasRes, usersRes, overviewRes, eventsRes, alarmsRes, recordingsRes, operationsTimelineRes, recordingStatusesRes, systemRes, auditRes] = await Promise.all([
+      fetchResource<any[]>('câmeras', client.get('/cameras')),
+      role === 'viewer' ? Promise.resolve({ data: [] as any[], error: null }) : fetchResource<any[]>('usuários', client.get('/users')),
+      fetchResource<any>('resumo', client.get('/cameras/overview')),
+      fetchResource<any>('eventos', client.get('/cameras/events-feed?limit=100')),
+      fetchResource<any>('alarmes', client.get('/cameras/alarms?limit=100')),
+      fetchResource<any>('gravações', client.get('/recordings?limit=100&sort=desc')),
+      fetchResource<any>('linha operacional', client.get('/cameras/operations-timeline?limit=120')),
+      fetchResource<any>('estado de gravação', client.get('/recordings/statuses')),
+      fetchResource<any>('saúde', client.get('/health/system')),
+      role === 'admin' ? fetchResource<any>('auditoria', client.get('/audit-logs?limit=100')) : Promise.resolve({ data: { items: [] }, error: null }),
+    ]);
 
-    try {
-      const [
-        camerasRes,
-        usersRes,
-        overviewRes,
-        eventsRes,
-        alarmsRes,
-        recordingsRes,
-        operationsTimelineRes,
-        recordingStatusesRes,
-        systemRes,
-        auditRes,
-      ] = await Promise.all([
-        client.get('/cameras'),
-        client.get('/users').catch(() => ({ data: [] })),
-        client.get('/cameras/overview'),
-        client.get('/cameras/events-feed?limit=100'),
-        client.get('/cameras/alarms?limit=100'),
-        client.get('/recordings?limit=100&sort=desc'),
-        client.get('/cameras/operations-timeline?limit=120').catch(() => ({ data: { items: [] } })),
-        client.get('/recordings/statuses').catch(() => ({ data: { items: [] } })),
-        client.get('/health/system').catch(() => ({ data: null })),
-        client.get('/audit-logs?limit=100').catch(() => ({ data: { items: [] } })),
-      ]);
+    const previous = get();
+    const rawEvents = Array.isArray(eventsRes.data?.items) ? eventsRes.data.items : null;
+    const runtimeStatuses = new Map<string, RecordingRuntimeStatus>(
+      Array.isArray(recordingStatusesRes.data?.items)
+        ? recordingStatusesRes.data.items.map((item: RecordingRuntimeStatus) => [item.cameraId, item] as const)
+        : [],
+    );
+    const cameras = Array.isArray(camerasRes.data)
+      ? mapCameraItems(camerasRes.data, rawEvents ?? [], runtimeStatuses, previous.cameras)
+      : previous.cameras;
+    const events = rawEvents ? mapEventItems(rawEvents) : previous.events;
+    const rawAlarms = Array.isArray(alarmsRes.data?.items) ? alarmsRes.data.items : null;
+    const alarms = rawAlarms ? mapAlarmItems(rawAlarms, cameras) : previous.alarms;
+    const users: User[] = Array.isArray(usersRes.data)
+      ? usersRes.data.map((user: any) => ({
+          id: user.id, name: user.name, role: mapRole(user.role), email: user.email,
+          badge: `USR-${user.id.slice(0, 6).toUpperCase()}`, lastLogin: user.updatedAt,
+          shift: 'morning', active: Boolean(user.isActive),
+        }))
+      : previous.users;
+    const recordings: RecordingItem[] = Array.isArray(recordingsRes.data?.items) ? recordingsRes.data.items : previous.recordings;
+    const gridSize = cameraLayoutGridSize(cameras.length);
+    const layouts: SavedLayout[] = cameras.length ? [{
+      id: 'default-live-layout', name: 'Layout Atual', gridSize,
+      cameraIds: cameras.map((camera) => camera.id),
+      createdBy: useAuthStore.getState().user?.name ?? 'Sistema', lastUsed: new Date().toISOString(),
+    }] : [];
+    const namedResources = {
+      cameras: camerasRes,
+      users: usersRes,
+      overview: overviewRes,
+      events: eventsRes,
+      alarms: alarmsRes,
+      recordings: recordingsRes,
+      operationsTimeline: operationsTimelineRes,
+      recordingStatuses: recordingStatusesRes,
+      system: systemRes,
+      audit: auditRes,
+    };
+    const resourceErrors = Object.fromEntries(
+      Object.entries(namedResources).filter(([, result]) => result.error).map(([name, result]) => [name, result.error as string]),
+    );
+    const criticalErrors = [camerasRes, overviewRes, eventsRes, alarmsRes, recordingStatusesRes, systemRes].filter((result) => result.error);
+    const refreshedAt = new Date().toISOString();
 
-      const rawEvents = Array.isArray(eventsRes.data?.items) ? eventsRes.data.items : [];
-      const rawAlarms = Array.isArray(alarmsRes.data?.items) ? alarmsRes.data.items : [];
-      const runtimeStatuses = new Map<string, RecordingRuntimeStatus>(
-        Array.isArray(recordingStatusesRes.data?.items)
-          ? recordingStatusesRes.data.items.map((item: RecordingRuntimeStatus) => [item.cameraId, item] as const)
-          : [],
-      );
-      const cameras: Camera[] = (Array.isArray(camerasRes.data) ? camerasRes.data : []).map((camera: any, index: number) => {
-        const lastEvent = rawEvents.find((event: any) => event.cameraId === camera.id)?.occurredAt;
-        const runtime = runtimeStatuses.get(camera.id);
-        const configuredStreamWidth = camera.streamWidth ?? null;
-        const configuredStreamHeight = camera.streamHeight ?? null;
-        const detectedStreamWidth = camera.detectedWidth ?? configuredStreamWidth;
-        const detectedStreamHeight = camera.detectedHeight ?? configuredStreamHeight;
-        const effectiveFps = camera.streamFps ?? camera.detectedFps ?? (camera.status === 'ONLINE' ? 0 : 0);
-        const effectiveRecordingMode = (camera.recordingMode ?? (camera.recordingEnabled ? 'continuous' : 'manual')) as Camera['recordingMode'];
-        return {
-          id: camera.id,
-          code: camera.name,
-          name: camera.name,
-          location: camera.ip,
-          zone: camera.area?.name ?? camera.site?.name ?? 'Sem zona',
-          building: camera.site?.name ?? 'Sem unidade',
-          floor: camera.group?.name ?? '-',
-          ipAddress: camera.ip,
-          rtspPort: camera.rtspPort ?? 554,
-          model: `${formatCodec(camera.detectedVideoCodec ?? camera.streamVideoCodec)}${camera.rtspPath ? ' / RTSP' : ''}`,
-          status: mapCameraStatus(camera.status, camera.recordingEnabled, runtime),
-          fps: effectiveFps ?? 0,
-          resolution: formatResolution(detectedStreamWidth, detectedStreamHeight),
-          storage: camera.recordingEnabled ? `${camera.retentionDays ?? 7} dias de retenção` : 'Gravação desabilitada',
-          lastEvent,
-          ptzCapable: Boolean(camera.onvifPath || camera.onvifProfileToken),
-          hasAudio: Boolean(camera.audioEnabled),
-          aiEnabled: camera.aiEnabled !== false,
-          alarmsEnabled: camera.alarmsEnabled !== false,
-          isOnline: camera.status === 'ONLINE',
-          signalStrength: camera.status === 'ONLINE' ? 100 : 0,
-          recordingMode: effectiveRecordingMode,
-          retentionDays: camera.retentionDays ?? 7,
-          preferredRtspTransport: camera.preferredRtspTransport ?? 'tcp',
-          preferredLiveProtocol: camera.preferredLiveProtocol ?? 'webrtc',
-          rtspPath: camera.rtspPath ?? undefined,
-          liveChannel: camera.liveChannel ?? null,
-          liveSubtype: camera.liveSubtype ?? null,
-          recordingChannel: camera.recordingChannel ?? null,
-          recordingSubtype: camera.recordingSubtype ?? null,
-          analyticsChannel: camera.analyticsChannel ?? null,
-          analyticsSubtype: camera.analyticsSubtype ?? null,
-          streamVideoCodec: camera.streamVideoCodec ?? undefined,
-          streamWidth: configuredStreamWidth,
-          streamHeight: configuredStreamHeight,
-          streamFps: camera.streamFps ?? null,
-          streamBitrateKbps: camera.streamBitrateKbps ?? null,
-          recordingVideoCodec: camera.recordingVideoCodec ?? undefined,
-          recordingWidth: camera.recordingWidth ?? null,
-          recordingHeight: camera.recordingHeight ?? null,
-          recordingFps: camera.recordingFps ?? null,
-          recordingBitrateKbps: camera.recordingBitrateKbps ?? null,
-          detectedVideoCodec: camera.detectedVideoCodec ?? undefined,
-          detectedWidth: camera.detectedWidth ?? null,
-          detectedHeight: camera.detectedHeight ?? null,
-          detectedFps: camera.detectedFps ?? null,
-          detectedBitrateKbps: camera.detectedBitrateKbps ?? null,
-          lastMotion: lastEvent,
-          thumbnailColor: THUMBNAIL_COLORS[index % THUMBNAIL_COLORS.length],
-          recordingStatusDetail: undefined,
-          recordingStale: false,
-          lastSegmentAt: runtime?.lastSegmentAt ?? null,
-          lastSegmentAgeSeconds: typeof runtime?.lastSegmentAgeSeconds === 'number' ? runtime.lastSegmentAgeSeconds : null,
-        };
-      });
-
-      const users: User[] = (Array.isArray(usersRes.data) ? usersRes.data : []).map((user: any) => ({
-        id: user.id,
-        name: user.name,
-        role: mapRole(user.role),
-        email: user.email,
-        badge: `USR-${user.id.slice(0, 6).toUpperCase()}`,
-        lastLogin: user.updatedAt,
-        shift: 'morning',
-        active: Boolean(user.isActive),
-      }));
-
-      const events: VMSEvent[] = rawEvents.map((event: any) => ({
-        id: event.id,
-        type: event.type,
-        cameraId: event.cameraId,
-        cameraName: event.cameraName,
-        timestamp: event.occurredAt,
-        severity: mapSeverity(event.severity),
-        acknowledged: Boolean(event.acknowledgedAt || event.acknowledgedBy),
-        description: event.message,
-      }));
-
-      const alarms: Alarm[] = rawAlarms.map((alarm: any) => ({
-        id: alarm.id,
-        name: alarm.title || `${alarm.type} — ${alarm.cameraName}`,
-        type: alarm.type,
-        status: alarm.status === 'RESOLVED' ? 'resolved' : alarm.status === 'ACKED' ? 'acknowledged' : 'active',
-        priority: alarm.priority ?? (alarm.severity === 'CRITICAL' ? 'P1' : alarm.severity === 'WARNING' ? 'P2' : 'P4'),
-        triggeredAt: alarm.occurredAt,
-        acknowledgedAt: alarm.acknowledgedAt ?? undefined,
-        acknowledgedBy: alarm.acknowledgedByUserName ?? undefined,
-        cameraId: alarm.cameraId,
-        zone: cameras.find((camera) => camera.id === alarm.cameraId)?.zone ?? 'Sem zona',
-        description: alarm.message,
-        notes: alarm.note ?? undefined,
-        isSnoozed: Boolean(alarm.isSnoozed),
-        snoozedUntil: alarm.snoozedUntil ?? undefined,
-        transitionHistory: Array.isArray(alarm.transitionHistory) ? alarm.transitionHistory : [],
-        notificationDelivery: Array.isArray(alarm.notificationDelivery) ? alarm.notificationDelivery : [],
-        lastNotificationStatus: typeof alarm.lastNotificationStatus === 'string' ? alarm.lastNotificationStatus : undefined,
-      }));
-
-      const recordings: RecordingItem[] = Array.isArray(recordingsRes.data?.items) ? recordingsRes.data.items : [];
-      const gridSize = cameraLayoutGridSize(cameras.length);
-      const layouts: SavedLayout[] = cameras.length
-        ? [{
-            id: 'default-live-layout',
-            name: 'Layout Atual',
-            gridSize,
-            cameraIds: cameras.map((camera) => camera.id),
-            createdBy: useAuthStore.getState().user?.name ?? 'Sistema',
-            lastUsed: new Date().toISOString(),
-          }]
-        : [];
-
-      set({
-        cameras,
-        users,
-        events,
-        alarms,
-        recordings,
-        layouts,
-        overview: overviewRes.data?.summary ?? null,
-        system: systemRes.data ?? null,
-        auditLogs: Array.isArray(auditRes.data?.items) ? auditRes.data.items : [],
-        operationsTimeline: Array.isArray(operationsTimelineRes.data?.items) ? operationsTimelineRes.data.items : [],
-        isLoading: false,
-        loaded: true,
-        error: null,
-      });
-    } catch (error) {
-      set({
-        isLoading: false,
-        loaded: true,
-        error: error instanceof Error ? error.message : 'Falha ao carregar dados do sistema.',
-      });
-    }
+    set({
+      cameras, users, events, alarms, recordings, layouts,
+      overview: overviewRes.data?.summary ?? previous.overview,
+      system: systemRes.data ?? previous.system,
+      auditLogs: Array.isArray(auditRes.data?.items) ? auditRes.data.items : previous.auditLogs,
+      operationsTimeline: Array.isArray(operationsTimelineRes.data?.items) ? operationsTimelineRes.data.items : previous.operationsTimeline,
+      isLoading: false, loaded: true,
+      stale: criticalErrors.length > 0,
+      lastUpdatedAt: criticalErrors.length ? previous.lastUpdatedAt : refreshedAt,
+      resourceErrors,
+      error: criticalErrors.length ? criticalErrors.map((result) => result.error).filter(Boolean).join(' · ') : null,
+    });
+  },
+  refreshOperational: async () => {
+    if (!useAuthStore.getState().accessToken || get().isRefreshing || get().isLoading) return;
+    set({ isRefreshing: true });
+    const client = api();
+    const [camerasRes, overviewRes, eventsRes, alarmsRes, recordingStatusesRes, systemRes] = await Promise.all([
+      fetchResource<any[]>('câmeras', client.get('/cameras')),
+      fetchResource<any>('resumo', client.get('/cameras/overview')),
+      fetchResource<any>('eventos', client.get('/cameras/events-feed?limit=100')),
+      fetchResource<any>('alarmes', client.get('/cameras/alarms?limit=100')),
+      fetchResource<any>('estado de gravação', client.get('/recordings/statuses')),
+      fetchResource<any>('saúde', client.get('/health/system')),
+    ]);
+    const previous = get();
+    const rawEvents = Array.isArray(eventsRes.data?.items) ? eventsRes.data.items : null;
+    const runtimeStatuses = new Map<string, RecordingRuntimeStatus>(
+      Array.isArray(recordingStatusesRes.data?.items)
+        ? recordingStatusesRes.data.items.map((item: RecordingRuntimeStatus) => [item.cameraId, item] as const)
+        : [],
+    );
+    const cameras = Array.isArray(camerasRes.data)
+      ? mapCameraItems(camerasRes.data, rawEvents ?? [], runtimeStatuses, previous.cameras)
+      : previous.cameras;
+    const events = rawEvents ? mapEventItems(rawEvents) : previous.events;
+    const rawAlarms = Array.isArray(alarmsRes.data?.items) ? alarmsRes.data.items : null;
+    const alarms = rawAlarms ? mapAlarmItems(rawAlarms, cameras) : previous.alarms;
+    const resources = {
+      cameras: camerasRes,
+      overview: overviewRes,
+      events: eventsRes,
+      alarms: alarmsRes,
+      recordingStatuses: recordingStatusesRes,
+      system: systemRes,
+    };
+    const resourceErrors = Object.fromEntries(
+      Object.entries(resources).filter(([, result]) => result.error).map(([name, result]) => [name, result.error as string]),
+    );
+    const criticalErrors = [camerasRes, overviewRes, eventsRes, alarmsRes, recordingStatusesRes, systemRes].filter((result) => result.error);
+    set({
+      cameras, events, alarms,
+      overview: overviewRes.data?.summary ?? previous.overview,
+      system: systemRes.data ?? previous.system,
+      isRefreshing: false,
+      stale: criticalErrors.length > 0,
+      lastUpdatedAt: criticalErrors.length ? previous.lastUpdatedAt : new Date().toISOString(),
+      resourceErrors,
+      error: criticalErrors.length ? criticalErrors.map((result) => result.error).filter(Boolean).join(' · ') : null,
+    });
   },
   updateUserActive: async (id, active) => {
     await api().patch(`/users/${id}`, { isActive: active });

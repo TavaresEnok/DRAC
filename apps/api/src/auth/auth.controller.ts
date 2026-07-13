@@ -63,6 +63,7 @@ export class AuthController {
 
   @Post('logout')
   async logout(@CurrentUser() user: AuthUser, @Req() req: Request) {
+    await this.authService.logout(user.id);
     await this.auditService.log(user.id, 'auth.logout', 'User', user.id, undefined, req);
     return { success: true };
   }

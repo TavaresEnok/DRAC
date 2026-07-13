@@ -263,6 +263,7 @@ export class CamerasController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('alarmAck')
   @Post('incidents/:eventId/ack')
   async acknowledgeIncident(
     @CurrentUser() user: AuthUser,
@@ -278,6 +279,7 @@ export class CamerasController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('alarmAck')
   @Post('alarms/:eventId/ack')
   async acknowledgeAlarm(
     @CurrentUser() user: AuthUser,
@@ -295,6 +297,7 @@ export class CamerasController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('alarmAck')
   @Post('alarms/:eventId/resolve')
   async resolveAlarm(
     @CurrentUser() user: AuthUser,
@@ -312,6 +315,7 @@ export class CamerasController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('alarmAck')
   @Post('alarms/:eventId/snooze')
   async snoozeAlarm(
     @CurrentUser() user: AuthUser,
@@ -329,6 +333,7 @@ export class CamerasController {
   }
 
   @Roles(UserRole.OPERATOR)
+  @RequirePermission('alarmAck')
   @Post('alarms/:eventId/unsnooze')
   async unsnoozeAlarm(
     @CurrentUser() user: AuthUser,

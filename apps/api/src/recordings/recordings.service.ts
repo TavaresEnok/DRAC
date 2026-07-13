@@ -1,7 +1,8 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, NotFoundException, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, InternalServerErrorException, Logger, OnModuleInit } from '@nestjs/common';
 import { createReadStream, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
+import { rename, rm, stat } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { type Response } from 'express';
@@ -27,13 +28,33 @@ type RecordingHealthCacheEntry = {
 };
 
 @Injectable()
-export class RecordingsService {
+export class RecordingsService implements OnModuleInit {
+  private readonly logger = new Logger(RecordingsService.name);
+  private readonly thumbnailGenerationInFlight = new Map<string, Promise<void>>();
+  private readonly thumbnailGenerationWaiters: Array<() => void> = [];
+  private thumbnailGenerationActive = 0;
+  private readonly thumbnailGenerationConcurrency = Math.max(
+    1,
+    Math.min(4, Number(process.env.RECORDING_THUMBNAIL_CONCURRENCY ?? 2)),
+  );
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly authService: AuthService,
     private readonly accessControlService: AccessControlService,
     @InjectQueue(THUMBNAIL_GENERATION_QUEUE) private readonly thumbnailQueue: Queue,
   ) {}
+
+  onModuleInit() {
+    if (String(process.env.RECORDING_THUMBNAIL_BACKFILL_ENABLED ?? 'true') === 'false') return;
+    const timer = setTimeout(() => {
+      const limit = Math.max(1, Math.min(10_000, Number(process.env.RECORDING_THUMBNAIL_BACKFILL_LIMIT ?? 2_000)));
+      void this.enqueueMissingThumbnails(limit).catch((error) => {
+        this.logger.warn(`Falha ao agendar backfill de thumbnails: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }, 15_000);
+    timer.unref();
+  }
 
   async ensureRecordingExists(recordingId: string) {
     const recording = await this.prisma.recording.findUnique({ where: { id: recordingId }, include: { camera: true } });
@@ -83,9 +104,21 @@ export class RecordingsService {
       to = new Date(query.date);
       to.setHours(23, 59, 59, 999);
     }
+    // Filtro de câmera. Se veio um cameraId específico ele MANDA (mas só se o
+    // usuário tiver acesso a ele); senão restringe às câmeras acessíveis.
+    // BUG corrigido: antes os dois filtros usavam a mesma chave `cameraId` num
+    // spread e o segundo (acessíveis) SOBRESCREVIA o primeiro (câmera pedida) —
+    // p/ usuário não-admin o cameraId era ignorado e vinham gravações de TODAS
+    // as câmeras (selecionava a 15 e aparecia a 14).
+    const cameraFilter = query.cameraId
+      ? accessibleCameraIds && !accessibleCameraIds.includes(query.cameraId)
+        ? { cameraId: { in: [] as string[] } } // pediu câmera sem acesso → nada
+        : { cameraId: query.cameraId }
+      : accessibleCameraIds
+        ? { cameraId: { in: accessibleCameraIds } }
+        : {};
     const where = {
-      ...(query.cameraId ? { cameraId: query.cameraId } : {}),
-      ...(accessibleCameraIds ? { cameraId: { in: accessibleCameraIds } } : {}),
+      ...cameraFilter,
       ...(from || to
         ? {
             startedAt: {
@@ -361,25 +394,254 @@ export class RecordingsService {
       { recordingId },
       {
         jobId: force ? `thumb-${recordingId}-${Date.now()}` : `thumb-${recordingId}`,
-        attempts: 2,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5_000 },
         removeOnComplete: true,
-        removeOnFail: 50,
+        removeOnFail: 200,
       },
     );
     return { status: 'thumbnail_generation_queued', recordingId };
+  }
+
+  async enqueueMissingThumbnails(limit = 2_000) {
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
+    const boundedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
+    const jobs: Array<{ name: string; data: { recordingId: string }; opts: Record<string, unknown> }> = [];
+    let cursor: string | undefined;
+    let scanned = 0;
+    const retryBucket = new Date().toISOString().slice(0, 10);
+
+    while (jobs.length < boundedLimit) {
+      const batch = await this.prisma.recording.findMany({
+        orderBy: { id: 'asc' },
+        take: 250,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        select: { id: true, filePath: true },
+      });
+      if (!batch.length) break;
+      cursor = batch[batch.length - 1].id;
+      scanned += batch.length;
+
+      for (const recording of batch) {
+        const inputPath = ensureFileUnderRoot(recordingsRoot, recording.filePath);
+        if (!existsSync(inputPath)) continue;
+        const extension = extname(inputPath);
+        const thumbnailBase = extension ? inputPath.slice(0, -extension.length) : inputPath;
+        const thumbPath = `${thumbnailBase}.thumb.jpg`;
+        if (existsSync(thumbPath) && statSync(thumbPath).size > 0) continue;
+        jobs.push({
+          name: 'generate-thumbnail',
+          data: { recordingId: recording.id },
+          opts: {
+            // Um job definitivamente falho permanece no BullMQ para diagnóstico.
+            // O bucket diário permite que o backfill tente novamente no dia
+            // seguinte sem criar duplicatas a cada inicialização da API.
+            jobId: `thumb-backfill-${recording.id}-${retryBucket}`,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 5_000 },
+            removeOnComplete: true,
+            removeOnFail: 200,
+            priority: 10,
+          },
+        });
+        if (jobs.length >= boundedLimit) break;
+      }
+      if (batch.length < 250) break;
+    }
+
+    for (let index = 0; index < jobs.length; index += 100) {
+      await this.thumbnailQueue.addBulk(jobs.slice(index, index + 100) as any);
+    }
+    if (jobs.length) {
+      this.logger.log(`Backfill de thumbnails: ${jobs.length} job(s) agendado(s), ${scanned} gravação(ões) inspecionada(s).`);
+    }
+    return { scanned, queued: jobs.length, limit: boundedLimit };
+  }
+
+  private async probeFileMetadata(filePath: string) {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v',
+      'error',
+      '-show_entries',
+      'format=duration,size',
+      '-of',
+      'json',
+      filePath,
+    ], {
+      timeout: Math.max(5_000, Number(process.env.RECORDING_METADATA_PROBE_TIMEOUT_MS ?? 15_000)),
+      maxBuffer: 1024 * 1024,
+    });
+    const parsed = JSON.parse(stdout || '{}') as { format?: { duration?: string; size?: string } };
+    const duration = Number(parsed.format?.duration);
+    const probedSize = Number(parsed.format?.size);
+    return {
+      durationSecondsExact: Number.isFinite(duration) && duration > 0 ? duration : null,
+      sizeBytes: Number.isFinite(probedSize) && probedSize >= 0 ? probedSize : statSync(filePath).size,
+    };
+  }
+
+  async reconcileRecordingMetadata(limit = 2_000) {
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
+    const boundedLimit = Math.max(1, Math.min(10_000, Math.floor(limit)));
+    const records = await this.prisma.recording.findMany({
+      orderBy: { startedAt: 'desc' },
+      take: boundedLimit,
+      select: {
+        id: true,
+        filePath: true,
+        startedAt: true,
+        endedAt: true,
+        durationSeconds: true,
+        sizeBytes: true,
+      },
+    });
+    const result = { scanned: records.length, updated: 0, missing: 0, probeFailed: 0 };
+    let nextIndex = 0;
+    const concurrency = Math.max(1, Math.min(4, Number(process.env.RECORDING_METADATA_RECONCILE_CONCURRENCY ?? 2)));
+
+    const worker = async () => {
+      while (true) {
+        const index = nextIndex++;
+        const recording = records[index];
+        if (!recording) return;
+        const filePath = ensureFileUnderRoot(recordingsRoot, recording.filePath);
+        if (!existsSync(filePath)) {
+          result.missing += 1;
+          continue;
+        }
+        try {
+          const metadata = await this.probeFileMetadata(filePath);
+          if (metadata.durationSecondsExact == null) {
+            result.probeFailed += 1;
+            continue;
+          }
+          const durationSeconds = Math.max(1, Math.round(metadata.durationSecondsExact));
+          const endedAt = new Date(recording.startedAt.getTime() + metadata.durationSecondsExact * 1000);
+          const currentSize = Number(recording.sizeBytes ?? 0n);
+          const endedDiffMs = Math.abs((recording.endedAt?.getTime() ?? 0) - endedAt.getTime());
+          if (currentSize === metadata.sizeBytes && recording.durationSeconds === durationSeconds && endedDiffMs < 1_000) continue;
+          await this.prisma.recording.update({
+            where: { id: recording.id },
+            data: { sizeBytes: BigInt(metadata.sizeBytes), durationSeconds, endedAt },
+          });
+          result.updated += 1;
+        } catch {
+          result.probeFailed += 1;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    this.logger.log(
+      `Reconciliação de gravações: scanned=${result.scanned} updated=${result.updated} missing=${result.missing} probeFailed=${result.probeFailed}.`,
+    );
+    return result;
   }
 
   async streamThumbnail(recordingId: string, res: Response) {
     const recording = await this.ensureRecordingExists(recordingId);
     const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
     const filePath = ensureFileUnderRoot(recordingsRoot, recording.filePath);
-    const thumbPath = `${filePath.replace(new RegExp(`${extname(filePath)}$`), '')}.thumb.jpg`;
-    if (!existsSync(thumbPath)) {
-      throw new NotFoundException('Thumbnail ainda não foi gerada para esta gravação.');
-    }
+    const extension = extname(filePath);
+    const thumbnailBase = extension ? filePath.slice(0, -extension.length) : filePath;
+    const thumbPath = `${thumbnailBase}.thumb.jpg`;
+    await this.ensureThumbnailGenerated(recording.id, filePath, thumbPath, recording.durationSeconds);
     res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=60');
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Content-Length', String(statSync(thumbPath).size));
     createReadStream(thumbPath).pipe(res);
+  }
+
+  private async acquireThumbnailGenerationSlot() {
+    if (this.thumbnailGenerationActive < this.thumbnailGenerationConcurrency) {
+      this.thumbnailGenerationActive += 1;
+      return;
+    }
+    await new Promise<void>((resolve) => this.thumbnailGenerationWaiters.push(resolve));
+    this.thumbnailGenerationActive += 1;
+  }
+
+  private releaseThumbnailGenerationSlot() {
+    this.thumbnailGenerationActive = Math.max(0, this.thumbnailGenerationActive - 1);
+    this.thumbnailGenerationWaiters.shift()?.();
+  }
+
+  private async ensureThumbnailGenerated(
+    recordingId: string,
+    inputPath: string,
+    outputPath: string,
+    durationSeconds: number | null,
+  ) {
+    if (existsSync(outputPath) && statSync(outputPath).size > 0) return;
+    if (!existsSync(inputPath)) {
+      throw new NotFoundException('Arquivo de gravação não encontrado no disco.');
+    }
+
+    const current = this.thumbnailGenerationInFlight.get(recordingId);
+    if (current) return current;
+
+    const generation = (async () => {
+      await this.acquireThumbnailGenerationSlot();
+      try {
+        if (existsSync(outputPath) && statSync(outputPath).size > 0) return;
+        const temporaryPath = `${outputPath}.${process.pid}.${Date.now()}.tmp.jpg`;
+        const configuredSecond = Math.max(0, Number(process.env.RECORDING_THUMBNAIL_SECOND ?? 2));
+        const maximumSecond = Math.max(0, (durationSeconds ?? 10) - 0.25);
+        const seekSeconds = Math.min(configuredSecond, maximumSecond);
+        let lastError: unknown = null;
+        try {
+          for (const second of [...new Set([seekSeconds, 0])]) {
+            await rm(temporaryPath, { force: true }).catch(() => undefined);
+            try {
+              await execFileAsync(
+                'ffmpeg',
+                [
+                  '-hide_banner',
+                  '-loglevel',
+                  'error',
+                  '-ss',
+                  String(second),
+                  '-i',
+                  inputPath,
+                  '-frames:v',
+                  '1',
+                  '-vf',
+                  'scale=640:-2',
+                  '-q:v',
+                  '3',
+                  '-y',
+                  temporaryPath,
+                ],
+                { timeout: 15_000, maxBuffer: 1024 * 1024 },
+              );
+              const generated = await stat(temporaryPath);
+              if (generated.size <= 0) throw new Error('FFmpeg não produziu uma imagem válida.');
+              await rename(temporaryPath, outputPath);
+              break;
+            } catch (error) {
+              lastError = error;
+            }
+          }
+        } finally {
+          await rm(temporaryPath, { force: true }).catch(() => undefined);
+        }
+        if (!existsSync(outputPath) || statSync(outputPath).size <= 0) {
+          throw lastError instanceof Error ? lastError : new Error('FFmpeg não produziu uma imagem válida.');
+        }
+      } catch (error) {
+        throw new InternalServerErrorException(
+          error instanceof Error ? `Falha ao gerar thumbnail: ${error.message}` : 'Falha ao gerar thumbnail.',
+        );
+      } finally {
+        this.releaseThumbnailGenerationSlot();
+      }
+    })();
+
+    this.thumbnailGenerationInFlight.set(recordingId, generation);
+    try {
+      await generation;
+    } finally {
+      this.thumbnailGenerationInFlight.delete(recordingId);
+    }
   }
 
   async getRecordingDiagnostics(recordingId: string, force = false) {

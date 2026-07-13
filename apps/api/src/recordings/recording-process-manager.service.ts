@@ -7,12 +7,15 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectQueue } from '@nestjs/bullmq';
 import { RecordingSource, type Camera } from '@prisma/client';
-import { spawn, spawnSync, type ChildProcessByStdio } from 'child_process';
+import { type Queue } from 'bullmq';
+import { execFile, spawn, spawnSync, type ChildProcessByStdio } from 'child_process';
 import { mkdirSync, readdirSync, statSync } from 'node:fs';
 import { statfs, unlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { type Readable } from 'stream';
+import { promisify } from 'node:util';
 import Redis from 'ioredis';
 import { CamerasService } from '../cameras/cameras.service';
 import { CommercialPolicyService } from '../commercial-policy/commercial-policy.service';
@@ -20,6 +23,9 @@ import { buildRtspUrl, resolveRecordingRtspProfile } from '../cameras/helpers/rt
 import { CryptoService } from '../common/crypto/crypto.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { buildRecordingOutputDir, buildRecordingOutputPattern } from './helpers/recording-path.helper';
+import { THUMBNAIL_GENERATION_QUEUE } from '../jobs/queues/thumbnail-generation.queue';
+
+const execFileAsync = promisify(execFile);
 
 export type RecordingProcessState = {
   cameraId: string;
@@ -32,7 +38,8 @@ export type RecordingProcessState = {
   pid: number;
   watcher: NodeJS.Timeout;
   knownFiles: Set<string>;
-  pendingSizes: Map<string, number>;
+  scanInFlight: Promise<void> | null;
+  finalizePromise: Promise<void> | null;
 };
 
 type WorkerRecordingCommand = {
@@ -67,6 +74,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     private readonly cryptoService: CryptoService,
     private readonly prisma: PrismaService,
     private readonly commercialPolicy: CommercialPolicyService,
+    @InjectQueue(THUMBNAIL_GENERATION_QUEUE) private readonly thumbnailQueue: Queue,
   ) {
     this.recordingsRoot = this.configService.get<string>('recordingsRoot') ?? './storage/recordings';
     this.recordingFormat = this.configService.get<string>('ffmpegRecordingFormat') ?? 'mp4';
@@ -414,8 +422,16 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
         ? { videoCodec: 'copy', transcode: false, outputIsHevc: false }
         : { videoCodec: 'libx264', transcode: true, outputIsHevc: false };
     }
-    // 'copy' (padrão): preserva a fonte como está.
-    return { videoCodec: 'copy', transcode: false, outputIsHevc: sourceIsHevc };
+    // 'copy' (padrão): copia a fonte quando é seguro. MAS fonte HEVC NÃO pode
+    // ser copiada pro MP4 segmentado — o muxer `segment` não reinjeta VPS/SPS/PPS
+    // a cada corte, o ffmpeg falha ("VPS 0 does not exist" / "No start code is
+    // found"), sai com código 255 e o arquivo fica corrompido e sem registro no
+    // banco. Além disso o navegador não toca HEVC no playback. Então fonte HEVC
+    // é transcodada p/ H.264 (mesma decisão dos clipes). H.264 segue em copy.
+    if (sourceIsHevc) {
+      return { videoCodec: 'libx264', transcode: true, outputIsHevc: false };
+    }
+    return { videoCodec: 'copy', transcode: false, outputIsHevc: false };
   }
 
   private buildArgs(camera: Camera, rtspUrl: string, outputPattern: string, segmentSeconds: number, probedCodec: string | null): string[] {
@@ -476,7 +492,33 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
   }
 
 
-  private async registerSegment(cameraId: string, filePath: string, segmentSeconds: number, sizeBytesNumber?: number) {
+  private async probeRecordedFileMetadata(filePath: string) {
+    try {
+      const { stdout } = await execFileAsync('ffprobe', [
+        '-v',
+        'error',
+        '-show_entries',
+        'format=duration,size',
+        '-of',
+        'json',
+        filePath,
+      ], {
+        timeout: Math.max(5_000, Number(process.env.RECORDING_METADATA_PROBE_TIMEOUT_MS ?? 15_000)),
+        maxBuffer: 1024 * 1024,
+      });
+      const parsed = JSON.parse(stdout || '{}') as { format?: { duration?: string; size?: string } };
+      const duration = Number(parsed.format?.duration);
+      const size = Number(parsed.format?.size);
+      return {
+        durationSecondsExact: Number.isFinite(duration) && duration > 0 ? duration : null,
+        sizeBytes: Number.isFinite(size) && size >= 0 ? size : statSync(filePath).size,
+      };
+    } catch {
+      return { durationSecondsExact: null, sizeBytes: statSync(filePath).size };
+    }
+  }
+
+  private async registerSegment(cameraId: string, filePath: string, segmentSeconds: number) {
     const fileName = basename(filePath);
     const match = fileName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\./);
     if (!match) return;
@@ -491,28 +533,64 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
         Number(match[6]),
       ),
     );
-    const endedAt = new Date(startedAt.getTime() + segmentSeconds * 1000);
-    const sizeBytes = BigInt(sizeBytesNumber ?? statSync(filePath).size);
+    const metadata = await this.probeRecordedFileMetadata(filePath);
+    const durationSecondsExact = metadata.durationSecondsExact ?? segmentSeconds;
+    const durationSeconds = Math.max(1, Math.round(durationSecondsExact));
+    const endedAt = new Date(startedAt.getTime() + durationSecondsExact * 1000);
+    const sizeBytes = BigInt(metadata.sizeBytes);
 
+    let recording: { id: string };
+    let created = false;
     try {
-      await this.prisma.recording.create({
-        data: {
-          cameraId,
-          source: RecordingSource.LOCAL,
-          startedAt,
-          endedAt,
-          durationSeconds: segmentSeconds,
-          sizeBytes,
-          filePath,
+      const existing = await this.prisma.recording.findUnique({ where: { filePath }, select: { id: true } });
+      if (existing) {
+        recording = await this.prisma.recording.update({
+          where: { id: existing.id },
+          data: { endedAt, durationSeconds, sizeBytes },
+          select: { id: true },
+        });
+      } else {
+        recording = await this.prisma.recording.create({
+          data: {
+            cameraId,
+            source: RecordingSource.LOCAL,
+            startedAt,
+            endedAt,
+            durationSeconds,
+            sizeBytes,
+            filePath,
+          },
+          select: { id: true },
+        });
+        created = true;
+      }
+    } catch (error) {
+      this.logger.warn(`Falha ao registrar segmento camera=${cameraId} arquivo=${fileName}: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
+
+    if (!created) return;
+    try {
+      await this.thumbnailQueue.add(
+        'generate-thumbnail',
+        { recordingId: recording.id },
+        {
+          jobId: `thumb-${recording.id}`,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5_000 },
+          removeOnComplete: true,
+          removeOnFail: 200,
         },
-      });
-    } catch {
-      // Duplicidade protegida por unique(filePath)
+      );
+    } catch (error) {
+      // A miniatura também será recuperada sob demanda quando a gravação for listada.
+      this.logger.warn(`Falha ao enfileirar thumbnail recording=${recording.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  private scanAndRegister(state: RecordingProcessState) {
-    const { cameraId, cameraRootDir, segmentSeconds, knownFiles, pendingSizes } = state;
+  private async performSegmentScan(state: RecordingProcessState, finalize: boolean) {
+    const { cameraId, cameraRootDir, segmentSeconds, knownFiles } = state;
+    const files: string[] = [];
     const walk = (dir: string) => {
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
@@ -521,25 +599,96 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
           walk(fullPath);
           continue;
         }
-        if (!entry.name.endsWith(`.${this.recordingFormat}`) || knownFiles.has(fullPath)) continue;
-        const stats = statSync(fullPath);
-        if (stats.size <= 0) continue;
-        const lastSeenSize = pendingSizes.get(fullPath);
-        if (lastSeenSize == null || lastSeenSize !== stats.size) {
-          pendingSizes.set(fullPath, stats.size);
-          continue;
-        }
-        pendingSizes.delete(fullPath);
-        knownFiles.add(fullPath);
-        void this.registerSegment(cameraId, fullPath, segmentSeconds, stats.size);
+        if (entry.name.endsWith(`.${this.recordingFormat}`)) files.push(fullPath);
       }
     };
 
-    try {
-      walk(cameraRootDir);
-    } catch (error) {
-      this.logger.warn(`Falha ao varrer segmentos camera=${cameraId}: ${(error as Error).message}`);
+    walk(cameraRootDir);
+    files.sort((left, right) => left.localeCompare(right));
+    // O arquivo lexicograficamente mais novo é o segmento que o FFmpeg ainda
+    // pode estar escrevendo. Ele só é registrado depois da rotação, ou no close.
+    const candidates = finalize ? files : files.slice(0, -1);
+    for (const fullPath of candidates) {
+      if (knownFiles.has(fullPath)) continue;
+      if (statSync(fullPath).size <= 0) continue;
+      try {
+        await this.registerSegment(cameraId, fullPath, segmentSeconds);
+        knownFiles.add(fullPath);
+      } catch {
+        // Mantém fora de knownFiles para uma nova tentativa na próxima varredura.
+      }
     }
+  }
+
+  private async scanAndRegister(state: RecordingProcessState, finalize = false) {
+    if (state.scanInFlight) {
+      await state.scanInFlight;
+      if (!finalize) return;
+    }
+    const operation = this.performSegmentScan(state, finalize);
+    state.scanInFlight = operation;
+    try {
+      await operation;
+    } catch (error) {
+      this.logger.warn(`Falha ao varrer segmentos camera=${state.cameraId}: ${(error as Error).message}`);
+    } finally {
+      if (state.scanInFlight === operation) state.scanInFlight = null;
+    }
+  }
+
+  private finalizeRecordingState(cameraId: string, state: RecordingProcessState, exitCode?: number | null) {
+    if (state.finalizePromise) return state.finalizePromise;
+    state.finalizePromise = (async () => {
+      clearInterval(state.watcher);
+      await this.scanAndRegister(state, true);
+      if (this.active.get(cameraId) === state) this.active.delete(cameraId);
+      this.logger.log(`Gravação encerrada camera=${cameraId} code=${exitCode ?? 'null'}`);
+    })();
+    return state.finalizePromise;
+  }
+
+  private async stopProcessAndWait(state: RecordingProcessState) {
+    const proc = state.process;
+    if (proc.exitCode !== null || proc.signalCode !== null) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(forceTimer);
+        clearTimeout(giveUpTimer);
+        resolve();
+      };
+      proc.once('close', finish);
+      proc.once('error', finish);
+      proc.kill('SIGTERM');
+      const forceTimer = setTimeout(() => {
+        if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+      }, 2_500);
+      const giveUpTimer = setTimeout(finish, 7_500);
+      forceTimer.unref();
+      giveUpTimer.unref();
+    });
+  }
+
+  // Resolve o que gravar em `recordingMode` num start/stop. Uma gravação MANUAL
+  // ad-hoc NÃO pode desarmar uma câmera configurada para 'motion' — senão clicar
+  // "Gravar" numa câmera com gravação por movimento a deixa em 'manual' para
+  // sempre. Então um pedido 'manual' sobre uma câmera 'motion' é ignorado
+  // (preserva o armamento). Os demais modos seguem o pedido normalmente.
+  private async resolveRecordingModeUpdate(
+    cameraId: string,
+    requested?: Camera['recordingMode'],
+  ): Promise<{ recordingMode?: Camera['recordingMode'] }> {
+    if (!requested) return {};
+    if (requested === 'manual') {
+      const cam = await this.prisma.camera.findUnique({
+        where: { id: cameraId },
+        select: { recordingMode: true },
+      });
+      if (cam?.recordingMode === 'motion') return {};
+    }
+    return { recordingMode: requested };
   }
 
   async start(cameraId: string, segmentSeconds: number, options?: { recordingMode?: Camera['recordingMode'] }) {
@@ -553,7 +702,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       });
       await this.prisma.camera.update({
         where: { id: cameraId },
-        data: { recordingEnabled: true, ...(options?.recordingMode ? { recordingMode: options.recordingMode } : {}) },
+        data: { recordingEnabled: true, ...(await this.resolveRecordingModeUpdate(cameraId, options?.recordingMode)) },
       });
       await this.publishWorkerCommand({
         action: 'start',
@@ -572,13 +721,13 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     const camera = await this.camerasService.getCameraOrThrow(cameraId).catch(() => {
       throw new NotFoundException('Camera não encontrada.');
     });
-    await this.prisma.camera.update({
-      where: { id: cameraId },
-      data: { recordingEnabled: true, ...(options?.recordingMode ? { recordingMode: options.recordingMode } : {}) },
-    });
 
     if (this.active.has(cameraId)) {
       const state = this.active.get(cameraId)!;
+      await this.prisma.camera.update({
+        where: { id: cameraId },
+        data: { recordingEnabled: true, ...(await this.resolveRecordingModeUpdate(cameraId, options?.recordingMode)) },
+      });
       return {
         status: 'already_recording',
         cameraId,
@@ -609,30 +758,32 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     this.logger.log(`Iniciando gravação camera=${cameraId} mode=${this.recordingCodecMode} sourceCodec=${sourceCodec ?? 'unknown'} output=${outputVideoCodec} rtsp=${this.sanitizeRtspUrl(rtspUrl)}`);
 
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let state: RecordingProcessState | null = null;
     proc.stderr.on('data', (chunk) => {
       const msg = chunk.toString().trim();
       if (msg) this.logger.debug(`FFmpeg REC camera=${cameraId}: ${msg}`);
     });
 
     proc.on('close', (code) => {
-      this.logger.log(`Gravação encerrada camera=${cameraId} code=${code ?? 'null'}`);
-      const state = this.active.get(cameraId);
-      if (state) {
-        clearInterval(state.watcher);
-        this.scanAndRegister(state);
-        this.active.delete(cameraId);
-      }
+      const current = state ?? this.active.get(cameraId);
+      if (current) void this.finalizeRecordingState(cameraId, current, code);
+    });
+    proc.on('error', (error) => {
+      this.logger.error(`Falha no processo FFmpeg de gravação camera=${cameraId}: ${error.message}`);
+      void this.prisma.camera.update({ where: { id: cameraId }, data: { recordingEnabled: false } }).catch(() => undefined);
+      const current = state ?? this.active.get(cameraId);
+      if (current) void this.finalizeRecordingState(cameraId, current, proc.exitCode);
     });
 
     const watcher = setInterval(() => {
       const current = this.active.get(cameraId);
       if (current) {
-        this.scanAndRegister(current);
+        void this.scanAndRegister(current);
       }
     }, 5000);
     watcher.unref();
 
-    const state: RecordingProcessState = {
+    state = {
       cameraId,
       process: proc,
       startedAt: startDate,
@@ -643,10 +794,21 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       pid: proc.pid ?? -1,
       watcher,
       knownFiles: new Set<string>(),
-      pendingSizes: new Map<string, number>(),
+      scanInFlight: null,
+      finalizePromise: null,
     };
 
     this.active.set(cameraId, state);
+    try {
+      await this.prisma.camera.update({
+        where: { id: cameraId },
+        data: { recordingEnabled: true, ...(await this.resolveRecordingModeUpdate(cameraId, options?.recordingMode)) },
+      });
+    } catch (error) {
+      await this.stopProcessAndWait(state);
+      await this.finalizeRecordingState(cameraId, state, state.process.exitCode);
+      throw error;
+    }
 
     return {
       status: 'recording_started',
@@ -662,7 +824,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       });
       await this.prisma.camera.update({
         where: { id: cameraId },
-        data: { recordingEnabled: false, ...(options?.recordingMode ? { recordingMode: options.recordingMode } : {}) },
+        data: { recordingEnabled: false, ...(await this.resolveRecordingModeUpdate(cameraId, options?.recordingMode)) },
       });
       await this.publishWorkerCommand({
         action: 'stop',
@@ -681,7 +843,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     });
     await this.prisma.camera.update({
       where: { id: cameraId },
-      data: { recordingEnabled: false, ...(options?.recordingMode ? { recordingMode: options.recordingMode } : {}) },
+      data: { recordingEnabled: false, ...(await this.resolveRecordingModeUpdate(cameraId, options?.recordingMode)) },
     });
 
     const state = this.active.get(cameraId);
@@ -693,9 +855,8 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     }
 
     clearInterval(state.watcher);
-    this.killProcessSafely(state.process);
-    this.scanAndRegister(state);
-    this.active.delete(cameraId);
+    await this.stopProcessAndWait(state);
+    await this.finalizeRecordingState(cameraId, state, state.process.exitCode);
 
     return {
       status: 'recording_stopped',
@@ -838,10 +999,10 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
   }
 
   killProcessSafely(proc: ChildProcessByStdio<null, null, Readable>) {
-    if (!proc || proc.killed) return;
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
     proc.kill('SIGTERM');
     setTimeout(() => {
-      if (!proc.killed) {
+      if (proc.exitCode === null && proc.signalCode === null) {
         proc.kill('SIGKILL');
       }
     }, 1500).unref();

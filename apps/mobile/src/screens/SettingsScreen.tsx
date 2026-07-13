@@ -1,10 +1,10 @@
 /**
- * SettingsScreen — perfil real, conexão, preferências e logout.
- * O tema (claro/escuro) foi removido: a aparência vem do branding do servidor.
+ * SettingsScreen — perfil real, conexão, aparência e logout.
  */
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import Constants from 'expo-constants';
+import React from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Icon, type IconName } from '../components/Icon';
 import { useTheme } from '../theme/ThemeProvider';
 import type { User } from '../types';
@@ -12,6 +12,7 @@ import type { User } from '../types';
 interface SettingsScreenProps {
   user: User | null;
   apiUrl: string;
+  connected: boolean;
   onLogout: () => void;
 }
 
@@ -28,9 +29,8 @@ function initialsOf(name?: string): string {
   return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || 'DR';
 }
 
-export function SettingsScreen({ user, onLogout }: SettingsScreenProps) {
-  const { theme } = useTheme();
-  const [notifications, setNotifications] = useState(true);
+export function SettingsScreen({ user, connected, onLogout }: SettingsScreenProps) {
+  const { theme, themeMode, setThemeMode } = useTheme();
 
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -48,27 +48,64 @@ export function SettingsScreen({ user, onLogout }: SettingsScreenProps) {
         {user ? <Text style={[styles.roleChip, { color: theme.accent, backgroundColor: theme.accentBg }]}>{ROLE_LABEL[user.role] ?? user.role}</Text> : null}
       </View>
 
+      <Text style={[styles.groupLabel, { color: theme.textMuted }]}>APARÊNCIA</Text>
+      <View style={[styles.group, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+        <View style={styles.themeRow}>
+          {([
+            { id: 'system' as const, label: 'Sistema', icon: 'settings' as const },
+            { id: 'dark' as const, label: 'Escuro', icon: 'moon' as const },
+            { id: 'light' as const, label: 'Claro', icon: 'sun' as const },
+          ]).map((item) => {
+            const selected = themeMode === item.id;
+            return (
+              <Pressable
+                key={item.id}
+                onPress={() => setThemeMode(item.id)}
+                accessibilityRole="radio"
+                accessibilityLabel={`Tema ${item.label.toLowerCase()}`}
+                accessibilityState={{ checked: selected }}
+                style={[
+                  styles.themeOption,
+                  { backgroundColor: selected ? theme.accentBg : theme.surfaceAlt, borderColor: selected ? theme.accent : theme.border },
+                ]}
+              >
+                <Icon name={item.icon} size={17} color={selected ? theme.accent : theme.textSub} strokeWidth={2} />
+                <Text style={[styles.themeOptionText, { color: selected ? theme.accent : theme.textSub }]}>{item.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
       {/* Conexão */}
       <Text style={[styles.groupLabel, { color: theme.textMuted }]}>CONEXÃO</Text>
       <View style={[styles.group, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-        <Row icon="check" iconBg="rgba(34,197,94,0.14)" iconColor={theme.success} title="Conexão" subtitle="Conectado" subtitleColor={theme.success} theme={theme} />
-      </View>
-
-      {/* Preferências */}
-      <Text style={[styles.groupLabel, { color: theme.textMuted }]}>PREFERÊNCIAS</Text>
-      <View style={[styles.group, { backgroundColor: theme.surface, borderColor: theme.border }]}>
         <Row
-          icon="bell" iconBg={theme.surfaceAlt} iconColor={theme.textSub} title="Notificações push" theme={theme}
-          right={<Switch value={notifications} onValueChange={setNotifications} trackColor={{ true: theme.accent, false: theme.surfaceAlt }} thumbColor="#fff" />}
+          icon={connected ? 'check' : 'alert'}
+          iconBg={connected ? 'rgba(34,197,94,0.14)' : theme.dangerBg}
+          iconColor={connected ? theme.success : theme.danger}
+          title="Conexão"
+          subtitle={connected ? 'Conectado' : 'Servidor indisponível'}
+          subtitleColor={connected ? theme.success : theme.danger}
+          theme={theme}
         />
       </View>
 
+      {/* Preferências: "Notificações push" removido até o recurso funcionar de
+          verdade (evita mostrar um botão que não faz nada — e pergunta do
+          revisor da Play Store). Voltará quando o push (FCM) estiver ativo. */}
+
       {/* Logout */}
-      <Pressable onPress={onLogout} style={[styles.logout, { backgroundColor: theme.dangerBg, borderColor: 'rgba(239,68,68,0.28)' }]}>
+      <Pressable
+        onPress={onLogout}
+        accessibilityRole="button"
+        accessibilityLabel="Sair da conta"
+        style={[styles.logout, { backgroundColor: theme.dangerBg, borderColor: 'rgba(239,68,68,0.28)' }]}
+      >
         <Icon name="logout" size={18} color={theme.danger} strokeWidth={2} />
         <Text style={[styles.logoutText, { color: theme.danger }]}>Sair da conta</Text>
       </Pressable>
-      <Text style={[styles.version, { color: theme.textMuted }]}>DRAC VMS · versão 1.0.5</Text>
+      <Text style={[styles.version, { color: theme.textMuted }]}>DRAC VMS · versão {Constants.expoConfig?.version ?? '—'}</Text>
     </ScrollView>
   );
 }
@@ -104,6 +141,9 @@ const styles = StyleSheet.create({
   roleChip: { fontSize: 10, fontWeight: '800', paddingVertical: 5, paddingHorizontal: 10, borderRadius: 8, overflow: 'hidden', letterSpacing: 0.4 },
   groupLabel: { fontSize: 11, fontWeight: '800', letterSpacing: 0.6, marginLeft: 4, marginBottom: 8 },
   group: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden', marginBottom: 18 },
+  themeRow: { flexDirection: 'row', gap: 9, padding: 10 },
+  themeOption: { flex: 1, height: 42, borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  themeOptionText: { fontSize: 12.5, fontWeight: '800' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 13, paddingVertical: 14, paddingHorizontal: 15 },
   rowIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   rowTitle: { fontSize: 13.5, fontWeight: '700' },

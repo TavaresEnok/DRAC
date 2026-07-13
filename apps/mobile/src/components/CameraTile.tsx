@@ -4,7 +4,7 @@
  * placeholder determinístico. A estrela fixa a câmera na Central.
  */
 import { LinearGradient } from 'expo-linear-gradient';
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import type { Camera } from '../types';
@@ -20,12 +20,14 @@ interface CameraTileProps {
   onPress?: () => void;
   favorite?: boolean;
   onToggleFavorite?: () => void;
+  /** Pede ao pai um token/poster novo depois que retries locais falham. */
+  onPosterError?: (cameraId: string) => void;
 }
 
 const STAR_GOLD = '#fbbf24';
 
 export function CameraTile({
-  camera, posterUrl, height = 138, variant = 'tile', showPlay = false, onPress, favorite, onToggleFavorite,
+  camera, posterUrl, height = 138, variant = 'tile', showPlay = false, onPress, favorite, onToggleFavorite, onPosterError,
 }: CameraTileProps) {
   const { theme } = useTheme();
   const online = isOnlineStatus(camera.status);
@@ -33,39 +35,90 @@ export function CameraTile({
   const offline = !online && !nosignal;
   const large = variant === 'large';
   const tint = tintFor(camera);
+  const [posterRevision, setPosterRevision] = useState(0);
+  const [posterFailed, setPosterFailed] = useState(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    setPosterRevision(0);
+    setPosterFailed(false);
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, [posterUrl]);
+
+  const visiblePosterUrl = posterUrl
+    ? `${posterUrl}${posterUrl.includes('?') ? '&' : '?'}retry=${posterRevision}`
+    : null;
+
+  const retryPoster = () => {
+    if (posterRevision >= 2) {
+      setPosterFailed(true);
+      onPosterError?.(camera.id);
+      return;
+    }
+    retryTimerRef.current = setTimeout(() => {
+      setPosterRevision((current) => current + 1);
+    }, 700 * (posterRevision + 1));
+  };
 
   const Star = onToggleFavorite ? (
     <Pressable
       style={[styles.star, large && { width: 32, height: 32 }]}
-      onPress={onToggleFavorite}
+      onPress={(event) => {
+        event.stopPropagation();
+        onToggleFavorite();
+      }}
       hitSlop={6}
+      accessibilityRole="button"
+      accessibilityLabel={favorite ? `Remover ${camera.name} das favoritas` : `Adicionar ${camera.name} às favoritas`}
+      accessibilityState={{ selected: !!favorite }}
     >
       <Icon name="star" size={large ? 17 : 14} color={favorite ? STAR_GOLD : '#fff'} fill={!!favorite} strokeWidth={1.7} />
     </Pressable>
   ) : null;
 
-  if (nosignal) {
+  if (nosignal || offline) {
     return (
-      <View style={[styles.wrap, { height, backgroundColor: '#0d0f14', borderColor: theme.border }]}>
+      <Pressable
+        style={[styles.wrap, { height, backgroundColor: '#0d0f14', borderColor: theme.border }]}
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={`${camera.name}, ${nosignal ? 'sem sinal' : 'offline'}`}
+      >
         <View style={styles.offline}>
           <Icon name="videoOff" size={22} color="#4b5563" strokeWidth={1.8} />
           <Text style={styles.offlineName}>{camera.name}</Text>
-          <Text style={styles.offlineSub}>Sem sinal</Text>
+          <Text style={styles.offlineSub}>{nosignal ? 'Sem sinal' : 'Offline'}</Text>
         </View>
         {Star}
-      </View>
+      </Pressable>
     );
   }
 
   return (
-    <Pressable style={[styles.wrap, { height, borderColor: theme.border }]} onPress={onPress}>
+    <Pressable
+      style={[styles.wrap, { height, borderColor: theme.border }]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${camera.name}, ${online ? 'ao vivo' : 'offline'}`}
+    >
       <LinearGradient colors={tint} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={StyleSheet.absoluteFill} />
       {/* Marca d'água de câmera SEMPRE atrás: se o snapshot ainda não chegou (ou
           falhar ao carregar), o tile continua identificável em vez de ficar liso. */}
       <View style={styles.placeholder} pointerEvents="none">
         <Icon name="camera" size={large ? 34 : 26} color="rgba(255,255,255,0.28)" strokeWidth={1.6} />
       </View>
-      {posterUrl ? <Image source={{ uri: posterUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : null}
+      {visiblePosterUrl && !posterFailed ? (
+        <Image
+          key={visiblePosterUrl}
+          source={{ uri: visiblePosterUrl }}
+          style={StyleSheet.absoluteFill}
+          resizeMode="cover"
+          onError={retryPoster}
+        />
+      ) : null}
 
       {online ? (
         <View style={styles.liveBadge}>

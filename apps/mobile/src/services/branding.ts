@@ -8,9 +8,7 @@
  */
 import { request } from './api';
 
-export interface RuntimeBranding {
-  facilityName: string;
-  logoDataUrl: string;
+export interface BrandingPalette {
   primaryColor: string;
   backgroundColor: string;
   /** 2ª cor de fundo — se definida, o fundo vira gradiente (theme.bg2). */
@@ -37,6 +35,15 @@ export interface RuntimeBranding {
   dangerColor: string;
 }
 
+export interface RuntimeBranding {
+  facilityName: string;
+  logoDataUrl: string;
+  /** Chaves históricas sem prefixo: tema escuro. */
+  dark: BrandingPalette;
+  /** Chaves brandLight*: tema claro. */
+  light: BrandingPalette;
+}
+
 type BrandingResponse = {
   facilityName?: string;
   brandLogoDataUrl?: string;
@@ -54,11 +61,23 @@ type BrandingResponse = {
   brandSuccessColor?: string;
   brandWarningColor?: string;
   brandDangerColor?: string;
+  brandLightPrimaryColor?: string;
+  brandLightBackgroundColor?: string;
+  brandLightBackgroundColor2?: string;
+  brandLightSecondaryColor?: string;
+  brandLightPrimaryTextColor?: string;
+  brandLightSecondaryTextColor?: string;
+  brandLightBackgroundTextColor?: string;
+  brandLightMenuColor?: string;
+  brandLightMenuTextColor?: string;
+  brandLightButtonTextColor?: string;
+  brandLightBorderColor?: string;
+  brandLightSuccessColor?: string;
+  brandLightWarningColor?: string;
+  brandLightDangerColor?: string;
 };
 
-export const EMPTY_BRANDING: RuntimeBranding = {
-  facilityName: '',
-  logoDataUrl: '',
+export const EMPTY_PALETTE: BrandingPalette = {
   primaryColor: '',
   backgroundColor: '',
   backgroundColor2: '',
@@ -75,27 +94,38 @@ export const EMPTY_BRANDING: RuntimeBranding = {
   dangerColor: '',
 };
 
+export const EMPTY_BRANDING: RuntimeBranding = {
+  facilityName: '',
+  logoDataUrl: '',
+  dark: EMPTY_PALETTE,
+  light: EMPTY_PALETTE,
+};
+
 export async function fetchBranding(apiUrl: string): Promise<RuntimeBranding> {
   if (!apiUrl) return EMPTY_BRANDING;
   const data = await request<BrandingResponse>(apiUrl, '/settings/branding');
   const t = (v?: string) => (v ?? '').trim();
+  const palette = (prefix: '' | 'Light'): BrandingPalette => ({
+    primaryColor: t(data[`brand${prefix}PrimaryColor`]),
+    backgroundColor: t(data[`brand${prefix}BackgroundColor`]),
+    backgroundColor2: t(data[`brand${prefix}BackgroundColor2`]),
+    secondaryColor: t(data[`brand${prefix}SecondaryColor`]),
+    primaryTextColor: t(data[`brand${prefix}PrimaryTextColor`]),
+    secondaryTextColor: t(data[`brand${prefix}SecondaryTextColor`]),
+    backgroundTextColor: t(data[`brand${prefix}BackgroundTextColor`]),
+    menuColor: t(data[`brand${prefix}MenuColor`]),
+    menuTextColor: t(data[`brand${prefix}MenuTextColor`]),
+    buttonTextColor: t(data[`brand${prefix}ButtonTextColor`]),
+    borderColor: t(data[`brand${prefix}BorderColor`]),
+    successColor: t(data[`brand${prefix}SuccessColor`]),
+    warningColor: t(data[`brand${prefix}WarningColor`]),
+    dangerColor: t(data[`brand${prefix}DangerColor`]),
+  });
   return {
     facilityName: t(data.facilityName),
     logoDataUrl: t(data.brandLogoDataUrl),
-    primaryColor: t(data.brandPrimaryColor),
-    backgroundColor: t(data.brandBackgroundColor),
-    backgroundColor2: t(data.brandBackgroundColor2),
-    secondaryColor: t(data.brandSecondaryColor),
-    primaryTextColor: t(data.brandPrimaryTextColor),
-    secondaryTextColor: t(data.brandSecondaryTextColor),
-    backgroundTextColor: t(data.brandBackgroundTextColor),
-    menuColor: t(data.brandMenuColor),
-    menuTextColor: t(data.brandMenuTextColor),
-    buttonTextColor: t(data.brandButtonTextColor),
-    borderColor: t(data.brandBorderColor),
-    successColor: t(data.brandSuccessColor),
-    warningColor: t(data.brandWarningColor),
-    dangerColor: t(data.brandDangerColor),
+    dark: palette(''),
+    light: palette('Light'),
   };
 }
 
@@ -140,4 +170,38 @@ export function withAlpha(hex: string, alpha: number): string | null {
 
 export function isValidHex(hex: string): boolean {
   return HEX.test(hex.trim());
+}
+
+function relativeLuminance(hex: string): number | null {
+  const c = parseHex(hex);
+  if (!c) return null;
+  const channel = (value: number) => {
+    const normalized = value / 255;
+    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b);
+}
+
+export function contrastRatio(first: string, second: string): number | null {
+  const a = relativeLuminance(first);
+  const b = relativeLuminance(second);
+  if (a == null || b == null) return null;
+  const lighter = Math.max(a, b);
+  const darker = Math.min(a, b);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/** Mantém a cor pedida quando legível; caso contrário escolhe preto ou branco. */
+export function ensureReadableText(foreground: string, backgrounds: string[], minimum = 4.5): string {
+  const ratios = backgrounds.map((background) => contrastRatio(foreground, background));
+  if (ratios.every((ratio) => ratio == null || ratio >= minimum)) return foreground;
+  const candidates = ['#ffffff', '#0b0d12'];
+  return candidates.sort((a, b) => {
+    const score = (candidate: string) => Math.min(...backgrounds.map((bg) => contrastRatio(candidate, bg) ?? 0));
+    return score(b) - score(a);
+  })[0];
+}
+
+export function isLightColor(hex: string): boolean {
+  return (relativeLuminance(hex) ?? 0) > 0.45;
 }

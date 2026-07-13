@@ -696,6 +696,10 @@
     <div id="toast" class="toast"></div>
 
     <script>
+      const CENTRAL_BASE_PATH = window.location.pathname === '/central' || window.location.pathname.startsWith('/central/')
+        ? '/central'
+        : '';
+      const centralUrl = (path) => `${CENTRAL_BASE_PATH}${path.startsWith('/') ? path : `/${path}`}`;
       const state = {
         installations: [],
         selectedId: localStorage.getItem('drac-central-selected') || '',
@@ -706,7 +710,7 @@
         provision: null,
         summary: null,
       };
-      if (!['operacao', 'clientes', 'instalacao', 'contratos', 'alertas', 'auditoria'].includes(state.view)) state.view = 'operacao';
+      if (!['operacao', 'clientes', 'instalacao', 'contratos', 'alertas', 'auditoria', 'aplicativos', 'usuarios'].includes(state.view)) state.view = 'operacao';
 
       const els = {
         loginScreen: document.querySelector('#login-screen'),
@@ -1359,7 +1363,7 @@
           els.installLicense.value = state.provision.licenseKey || '';
         }
         document.querySelector('#install-local-url').textContent = server === 'IP_DO_SERVIDOR' ? 'detectado pelo instalador' : `http://${server}:5173`;
-        document.querySelector('#install-central-url').textContent = state.provision?.centralUrl || window.location.origin;
+        document.querySelector('#install-central-url').textContent = state.provision?.centralUrl || `${window.location.origin}${CENTRAL_BASE_PATH}`;
       }
       function resetProvisionIfEditing() {
         state.provision = null;
@@ -1396,7 +1400,7 @@
         els.loginButton.disabled = true;
         els.loginButton.textContent = 'Entrando...';
         try {
-          const res = await fetch('/api/auth/login', {
+          const res = await fetch(centralUrl('/api/auth/login'), {
             method: 'POST',
             credentials: 'include',
             headers: { 'content-type': 'application/json' },
@@ -1423,7 +1427,7 @@
       async function load() {
         try {
           if (!state.user) {
-            const me = await fetch('/api/auth/me', { credentials: 'include' }).catch(() => null);
+            const me = await fetch(centralUrl('/api/auth/me'), { credentials: 'include' }).catch(() => null);
             if (me?.ok) {
               const data = await me.json();
               state.user = data.authenticated ? data.user : null;
@@ -1434,7 +1438,7 @@
             return;
           }
           setAuthenticated(state.user);
-          const res = await fetch('/api/admin/installations', { credentials: 'include' });
+          const res = await fetch(centralUrl('/api/admin/installations'), { credentials: 'include' });
           if (!res.ok) {
             state.user = null;
             state.installations = [];
@@ -1444,14 +1448,14 @@
           }
           const data = await res.json();
           state.installations = Array.isArray(data.items) ? data.items : [];
-          const summaryRes = await fetch('/api/admin/summary', { credentials: 'include' }).catch(() => null);
+          const summaryRes = await fetch(centralUrl('/api/admin/summary'), { credentials: 'include' }).catch(() => null);
           if (summaryRes?.ok) {
             state.summary = await summaryRes.json();
           } else {
             state.summary = null;
           }
           if (state.view === 'auditoria') {
-            const auditRes = await fetch('/api/admin/audit', { credentials: 'include' });
+            const auditRes = await fetch(centralUrl('/api/admin/audit'), { credentials: 'include' });
             if (auditRes.ok) {
               const auditData = await auditRes.json();
               state.auditEvents = Array.isArray(auditData.items) ? auditData.items : [];
@@ -1479,7 +1483,7 @@
       async function applyContractChange() {
         const pending = state.pendingContract;
         if (!pending) return;
-        const res = await fetch(`/api/admin/installations/${encodeURIComponent(pending.id)}/license`, {
+        const res = await fetch(centralUrl(`/api/admin/installations/${encodeURIComponent(pending.id)}/license`), {
           method: 'PATCH',
           credentials: 'include',
           headers: { 'content-type': 'application/json' },
@@ -1506,7 +1510,7 @@
         document.querySelector('#generate-installation').disabled = true;
         document.querySelector('#generate-installation').textContent = 'Gerando...';
         try {
-          const res = await fetch('/api/admin/provision', {
+          const res = await fetch(centralUrl('/api/admin/provision'), {
             method: 'POST',
             credentials: 'include',
             headers: { 'content-type': 'application/json' },
@@ -1531,7 +1535,7 @@
       }
       async function deletePendingInstallation(id) {
         if (!confirm('Cancelar esta instalação pendente?')) return;
-        const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}`, {
+        const res = await fetch(centralUrl(`/api/admin/installations/${encodeURIComponent(id)}`), {
           method: 'DELETE',
           credentials: 'include',
         });
@@ -1545,7 +1549,7 @@
       }
       async function copyInstallerFor(id) {
         try {
-          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/installer`, {
+          const res = await fetch(centralUrl(`/api/admin/installations/${encodeURIComponent(id)}/installer`), {
             method: 'GET',
             credentials: 'include',
           });
@@ -1571,7 +1575,7 @@
       }
       async function copyDiagnosticsFor(id) {
         try {
-          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/diagnostics`, {
+          const res = await fetch(centralUrl(`/api/admin/installations/${encodeURIComponent(id)}/diagnostics`), {
             method: 'GET',
             credentials: 'include',
           });
@@ -1614,7 +1618,7 @@
 
       document.querySelector('#refresh').addEventListener('click', load);
       document.querySelector('#logout').addEventListener('click', async () => {
-        await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => undefined);
+        await fetch(centralUrl('/api/auth/logout'), { method: 'POST', credentials: 'include' }).catch(() => undefined);
         state.user = null;
         state.installations = [];
         setAuthenticated(null);
@@ -1664,7 +1668,7 @@
       async function loadApps() {
         const agentBySlug = {};
         try {
-          const res = await fetch('/api/admin/apk/clients', { credentials: 'include' });
+          const res = await fetch(centralUrl('/api/admin/apk/clients'), { credentials: 'include' });
           if (res.ok) (((await res.json()).clients) || []).forEach(c => { agentBySlug[c.slug] = c; });
         } catch { /* agente indisponível: segue só com os dados da Central */ }
         renderApps(state.installations, agentBySlug);
@@ -1691,8 +1695,14 @@
           const name = displayName(it);
           const pkg = app.packageId ? escapeHtml(app.packageId) : '<span class="subtext">definido ao gerar</span>';
           const dl = (ac && ac.apkUrl)
-            ? `<a href="/api/admin/apk/clients/${encodeURIComponent(slug)}/download">Baixar APK</a>`
+            ? `<a href="${centralUrl(`/api/admin/apk/clients/${encodeURIComponent(slug)}/download`)}">Baixar APK</a>`
             : '<span class="subtext">—</span>';
+          const dlAab = (ac && ac.aabUrl)
+            ? `<a href="${centralUrl(`/api/admin/apk/clients/${encodeURIComponent(slug)}/download-aab`)}">Baixar AAB (Play Store)</a>`
+            : '<span class="subtext">gere/atualize o app</span>';
+          const dlKit = (ac && ac.kitUrl)
+            ? `<a href="${centralUrl(`/api/admin/apk/clients/${encodeURIComponent(slug)}/download-kit`)}">Baixar kit Play Store (.zip)</a>`
+            : '<span class="subtext">gere/atualize o app</span>';
           return `<div class="section">
             <div class="detail-title">
               <div>
@@ -1705,6 +1715,8 @@
               <div>Pacote</div><div>${pkg}</div>
               <div>Servidor</div><div>${escapeHtml((ac && ac.apiUrl) || '—')}</div>
               <div>APK</div><div>${dl}</div>
+              <div>AAB</div><div>${dlAab}</div>
+              <div>Kit Play Store</div><div>${dlKit}</div>
             </div>
             <div class="license-actions" style="grid-template-columns:repeat(3,1fr);margin-top:12px">
               <button data-genapp="${escapeHtml(it.id)}" class="primary" ${building ? 'disabled' : ''}>${building ? 'Gerando…' : (ac ? 'Atualizar' : 'Gerar app')}</button>
@@ -1720,7 +1732,7 @@
       }
       async function buildApk(slug) {
         try {
-          const res = await fetch(`/api/admin/apk/clients/${encodeURIComponent(slug)}/build`, { method: 'POST', credentials: 'include' });
+          const res = await fetch(centralUrl(`/api/admin/apk/clients/${encodeURIComponent(slug)}/build`), { method: 'POST', credentials: 'include' });
           const data = await res.json();
           if (!res.ok) { showToast(data.message || data.error || 'Não foi possível iniciar o build.'); return; }
           showToast('Build do APK iniciado.');
@@ -1731,7 +1743,7 @@
       async function deleteApp(slug) {
         if (!confirm(`Apagar o app "${slug}"? O APK publicado também será removido.`)) return;
         try {
-          const res = await fetch(`/api/admin/apk/clients/${encodeURIComponent(slug)}`, { method: 'DELETE', credentials: 'include' });
+          const res = await fetch(centralUrl(`/api/admin/apk/clients/${encodeURIComponent(slug)}`), { method: 'DELETE', credentials: 'include' });
           const data = await res.json();
           if (!res.ok) { showToast(data.message || data.error || 'Falha ao apagar.'); return; }
           showToast('App apagado.');
@@ -1742,7 +1754,7 @@
       // Abre o diálogo de edição (nome + pacote) prefill com os valores efetivos.
       async function openAppEdit(id) {
         try {
-          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/app`, { credentials: 'include' });
+          const res = await fetch(centralUrl(`/api/admin/installations/${encodeURIComponent(id)}/app`), { credentials: 'include' });
           const data = await res.json();
           document.querySelector('#app-edit-id').value = id;
           document.querySelector('#app-edit-name').value = data.appName || '';
@@ -1757,7 +1769,7 @@
         const packageId = document.querySelector('#app-edit-pkg').value.trim();
         const apiUrl = document.querySelector('#app-edit-api').value.trim();
         try {
-          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/app`, {
+          const res = await fetch(centralUrl(`/api/admin/installations/${encodeURIComponent(id)}/app`), {
             method: 'PATCH', credentials: 'include', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ appName, packageId, apiUrl }),
           });
@@ -1772,7 +1784,7 @@
       async function loadUsers() {
         const box = document.querySelector('#users-list');
         try {
-          const res = await fetch('/api/admin/users', { credentials: 'include' });
+          const res = await fetch(centralUrl('/api/admin/users'), { credentials: 'include' });
           const data = await res.json();
           if (!res.ok) { box.innerHTML = '<div class="empty">Falha ao carregar usuários.</div>'; return; }
           renderUsers(data.users || []);
@@ -1801,7 +1813,7 @@
         const statusEl = document.querySelector('#user-form-status');
         if (!email) { statusEl.textContent = 'Informe o e-mail.'; return; }
         try {
-          const res = await fetch('/api/admin/users', { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, name, password }) });
+          const res = await fetch(centralUrl('/api/admin/users'), { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, name, password }) });
           const data = await res.json();
           if (!res.ok) { statusEl.textContent = data.message || data.error || 'Falha ao salvar.'; return; }
           statusEl.textContent = 'Usuário salvo.';
@@ -1814,7 +1826,7 @@
       async function deleteUser(email) {
         if (!confirm(`Remover o acesso de ${email}?`)) return;
         try {
-          const res = await fetch(`/api/admin/users/${encodeURIComponent(email)}`, { method: 'DELETE', credentials: 'include' });
+          const res = await fetch(centralUrl(`/api/admin/users/${encodeURIComponent(email)}`), { method: 'DELETE', credentials: 'include' });
           const data = await res.json();
           if (!res.ok) { showToast(data.message || data.error || 'Falha ao remover.'); return; }
           showToast('Usuário removido.');
@@ -1833,7 +1845,7 @@
       async function generateAppForClient(id) {
         showToast('Gerando app do cliente…');
         try {
-          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/generate-app`, { method: 'POST', credentials: 'include' });
+          const res = await fetch(centralUrl(`/api/admin/installations/${encodeURIComponent(id)}/generate-app`), { method: 'POST', credentials: 'include' });
           const data = await res.json();
           if (!res.ok) { showToast(data.message || data.error || 'Não foi possível gerar o app.'); return; }
           showToast('Build do app iniciado' + (data.brandingApplied ? ' (logo e cores do cliente aplicados).' : '.'));
@@ -1861,7 +1873,7 @@
         btn.disabled = true; btn.textContent = 'Instalando…';
         document.querySelector('#ri-log').value = '';
         try {
-          const res = await fetch(`/api/admin/installations/${encodeURIComponent(id)}/remote-install`, {
+          const res = await fetch(centralUrl(`/api/admin/installations/${encodeURIComponent(id)}/remote-install`), {
             method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ host, port, username, password }),
           });
@@ -1878,7 +1890,7 @@
         if (riPoll) clearInterval(riPoll);
         riPoll = setInterval(async () => {
           try {
-            const res = await fetch(`/api/admin/remote-installs/${encodeURIComponent(jobId)}`, { credentials: 'include' });
+            const res = await fetch(centralUrl(`/api/admin/remote-installs/${encodeURIComponent(jobId)}`), { credentials: 'include' });
             const job = await res.json();
             if (!res.ok) return;
             logEl.value = job.log || '';

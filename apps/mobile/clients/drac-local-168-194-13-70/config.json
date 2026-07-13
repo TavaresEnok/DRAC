@@ -2,6 +2,6 @@
   "appName": "Grupo Flash",
   "slug": "drac-drac-local-168-194-13-70",
   "packageId": "com.ajustconsulting.grupoflash",
-  "apiUrl": "http://168.194.13.70:5173/api",
-  "primaryColor": "#f97316"
+  "apiUrl": "https://ajustcam.ajustconsulting.com.br/api",
+  "primaryColor": "#0077a8"
 }

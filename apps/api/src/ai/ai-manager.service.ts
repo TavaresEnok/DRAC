@@ -154,7 +154,19 @@ export class AiManagerService implements OnModuleInit {
       }
 
       const cameras = await this.camerasService.findAllInternal();
-      const enabledCameras = cameras.filter((cam: any) => cam.aiEnabled !== false && isCameraAllowedByAiEnv(cam));
+      const enabledCameras = cameras.filter((cam: any) => {
+        if (cam.aiEnabled === false || !isCameraAllowedByAiEnv(cam)) return false;
+        // No modo 'motion' a detecção existe para servir à GRAVAÇÃO por
+        // movimento: analisa APENAS as câmeras armadas (recordingMode='motion')
+        // E que dependem da NOSSA detecção (motionTrigger='SYSTEM'). Câmeras com
+        // detecção própria (motionTrigger='CAMERA') usam o evento ONVIF e não
+        // gastam nossa CPU. Assim nada é analisado sem necessidade. Nos modos de
+        // objetos (general/face) segue analisando todas as câmeras habilitadas.
+        if (settings.mode === 'motion') {
+          return cam.recordingMode === 'motion' && cam.motionTrigger === 'SYSTEM';
+        }
+        return true;
+      });
       const runtimeMode = settings.mode === 'motion' ? 'motion' : `motion+${settings.mode}`;
       this.logger.log(`Iniciando IA modo '${runtimeMode}' para ${enabledCameras.length}/${cameras.length} câmeras...`);
       await this.aiService.stopAll().catch(() => undefined);
@@ -193,6 +205,11 @@ export class AiManagerService implements OnModuleInit {
     const cam = await this.camerasService.getCameraOrThrow(cameraId);
     if (cam.aiEnabled === false || !isCameraAllowedByAiEnv(cam)) {
       return { status: 'camera_disabled', cameraId };
+    }
+    // No modo 'motion', câmeras com detecção própria (motionTrigger='CAMERA')
+    // usam o evento ONVIF (OnvifEventsService) e NÃO consomem nossa CPU.
+    if (settings.mode === 'motion' && (cam as any).motionTrigger !== 'SYSTEM') {
+      return { status: 'camera_self_detection', cameraId };
     }
     const source = await this.buildAiSource(cam);
     return this.aiService.startAnalysisWithConfig(cameraId, source.rtspUrl, settings.mode, source.info);
@@ -712,10 +729,11 @@ export class AiManagerService implements OnModuleInit {
     const hevcFallbackEnabled = String(process.env.AI_ANALYTICS_HEVC_FALLBACK ?? 'true').toLowerCase() !== 'false';
 
     if (analyticsIsHevc && hevcFallbackEnabled) {
-      const fallback = await this.mediamtxProxy.ensurePathForCamera(cam.id);
+      const fallback = await this.mediamtxProxy.ensurePathForCamera(cam.id, 'grid');
       const fallbackRtspUrl = this.mediamtxProxy.buildInternalRtspUrl(fallback.pathName);
       if (fallbackRtspUrl) {
-        this.logger.warn(`IA analytics de ${cam.name} esta em HEVC (${analyticsCodec}); usando path H.264 existente do MediaMTX: ${fallback.pathName}`);
+        const fallbackRtspUrlSanitized = sanitizeRtspUrl(fallbackRtspUrl);
+        this.logger.warn(`IA analytics de ${cam.name} esta em HEVC (${analyticsCodec}); usando path H.264 reduzido do MediaMTX: ${fallback.pathName}`);
         return {
           rtspUrl: fallbackRtspUrl,
           info: {
@@ -723,7 +741,8 @@ export class AiManagerService implements OnModuleInit {
             sourceKind: 'mediamtx_delivery_h264_fallback',
             usesMediaMtx: true,
             audioRequested: false,
-            analyticsRtspUrl: fallbackRtspUrl,
+            // Nunca expõe a credencial administrativa no health/overview da IA.
+            analyticsRtspUrl: fallbackRtspUrlSanitized,
             analyticsSourceUrlSanitized: sourceUrlSanitized,
             analyticsOriginalRtspUrl: sourceUrlSanitized,
             analyticsSourceCodec: analyticsCodec,

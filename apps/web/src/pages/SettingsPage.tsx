@@ -26,6 +26,8 @@ import { useAuthStore } from '../store/authStore';
 import { getApiBaseUrl } from '../lib/api-base';
 import { toast } from '../hooks/use-toast';
 import { GpuAccelerationPanel } from '../components/GpuAccelerationPanel';
+import { useBrandingStore } from '../store/brandingStore';
+import { contrastRatio } from '../lib/web-operational';
 
 const API_URL = getApiBaseUrl();
 
@@ -63,7 +65,63 @@ type SystemSettings = {
   brandSuccessColor: string;
   brandWarningColor: string;
   brandDangerColor: string;
+  brandLightPrimaryColor: string;
+  brandLightBackgroundColor: string;
+  brandLightBackgroundColor2: string;
+  brandLightSecondaryColor: string;
+  brandLightPrimaryTextColor: string;
+  brandLightSecondaryTextColor: string;
+  brandLightBackgroundTextColor: string;
+  brandLightMenuColor: string;
+  brandLightMenuTextColor: string;
+  brandLightButtonTextColor: string;
+  brandLightBorderColor: string;
+  brandLightSuccessColor: string;
+  brandLightWarningColor: string;
+  brandLightDangerColor: string;
 };
+
+type BrandingEditorTheme = 'dark' | 'light';
+type BrandingColorKey = Exclude<keyof SystemSettings,
+  | 'facilityName'
+  | 'defaultRetentionDays'
+  | 'autoCleanupEnabled'
+  | 'sessionTimeoutMinutes'
+  | 'maxLoginAttempts'
+  | 'requireStrongPassword'
+  | 'alarmAudioEnabled'
+  | 'brandLogoDataUrl'
+>;
+
+const BRANDING_KEYS = {
+  dark: {
+    primary: 'brandPrimaryColor', buttonText: 'brandButtonTextColor',
+    background: 'brandBackgroundColor', background2: 'brandBackgroundColor2', backgroundText: 'brandBackgroundTextColor',
+    surface: 'brandSecondaryColor', text: 'brandPrimaryTextColor', textSub: 'brandSecondaryTextColor',
+    menu: 'brandMenuColor', menuText: 'brandMenuTextColor', border: 'brandBorderColor',
+    success: 'brandSuccessColor', warning: 'brandWarningColor', danger: 'brandDangerColor',
+  },
+  light: {
+    primary: 'brandLightPrimaryColor', buttonText: 'brandLightButtonTextColor',
+    background: 'brandLightBackgroundColor', background2: 'brandLightBackgroundColor2', backgroundText: 'brandLightBackgroundTextColor',
+    surface: 'brandLightSecondaryColor', text: 'brandLightPrimaryTextColor', textSub: 'brandLightSecondaryTextColor',
+    menu: 'brandLightMenuColor', menuText: 'brandLightMenuTextColor', border: 'brandLightBorderColor',
+    success: 'brandLightSuccessColor', warning: 'brandLightWarningColor', danger: 'brandLightDangerColor',
+  },
+} as const satisfies Record<BrandingEditorTheme, Record<string, BrandingColorKey>>;
+
+const BRANDING_FALLBACKS = {
+  dark: {
+    primary: '#3b82f6', buttonText: '#ffffff', background: '#0b0d12', background2: '#0b0d12', backgroundText: '#f4f6fa',
+    surface: '#15181f', text: '#f4f6fa', textSub: '#9aa3af', menu: '#15181f', menuText: '#6b7484', border: '#2a2f3a',
+    success: '#22c55e', warning: '#f59e0b', danger: '#ef4444',
+  },
+  light: {
+    primary: '#2563eb', buttonText: '#ffffff', background: '#f5f7fb', background2: '#ffffff', backgroundText: '#111827',
+    surface: '#ffffff', text: '#111827', textSub: '#4b5563', menu: '#ffffff', menuText: '#64748b', border: '#94a3b8',
+    success: '#15803d', warning: '#b45309', danger: '#dc2626',
+  },
+} as const;
 
 // ~400 KB de imagem (base64 fica ~33% maior). Acima disso o upload é recusado.
 const MAX_LOGO_BYTES = 400 * 1024;
@@ -185,6 +243,106 @@ function ColorGroup({ title, hint, children }: { title: string; hint?: string; c
   );
 }
 
+function BrandingPaletteEditor({
+  mode, settings, onChange,
+}: {
+  mode: BrandingEditorTheme;
+  settings: SystemSettings;
+  onChange: (key: BrandingColorKey, value: string) => void;
+}) {
+  const keys = BRANDING_KEYS[mode];
+  const fallback = BRANDING_FALLBACKS[mode];
+  const color = (key: keyof typeof keys) => settings[keys[key]] || fallback[key];
+  const contrastChecks = [
+    { label: 'Botão', ratio: contrastRatio(color('buttonText'), color('primary')) },
+    { label: 'Fundo', ratio: contrastRatio(color('backgroundText'), color('background')) },
+    { label: 'Card', ratio: contrastRatio(color('text'), color('surface')) },
+    { label: 'Subtexto', ratio: contrastRatio(color('textSub'), color('surface')) },
+    { label: 'Menu', ratio: contrastRatio(color('menuText'), color('menu')) },
+  ];
+  const hasContrastWarning = contrastChecks.some((check) => check.ratio < 4.5);
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+      <div className="space-y-3">
+        <ColorGroup title="Destaque" hint="Botões, links e ícones ativos.">
+          <CompactColor label="Cor principal" value={settings[keys.primary]} onChange={(v) => onChange(keys.primary, v)} fallback={fallback.primary} />
+          <CompactColor label="Texto do botão" value={settings[keys.buttonText]} onChange={(v) => onChange(keys.buttonText, v)} fallback={fallback.buttonText} />
+        </ColorGroup>
+        <ColorGroup title="Fundo da tela" hint="Fundo e textos fora de cards. A segunda cor cria o gradiente.">
+          <CompactColor label="Cor de fundo" value={settings[keys.background]} onChange={(v) => onChange(keys.background, v)} fallback={fallback.background} />
+          <CompactColor label="Fundo 2 (gradiente)" value={settings[keys.background2]} onChange={(v) => onChange(keys.background2, v)} fallback={fallback.background2} />
+          <CompactColor label="Texto do fundo" value={settings[keys.backgroundText]} onChange={(v) => onChange(keys.backgroundText, v)} fallback={fallback.backgroundText} />
+        </ColorGroup>
+        <ColorGroup title="Card / bloco" hint="Cards, painéis, campos e os textos sobre eles.">
+          <CompactColor label="Cor do card" value={settings[keys.surface]} onChange={(v) => onChange(keys.surface, v)} fallback={fallback.surface} />
+          <CompactColor label="Texto do card" value={settings[keys.text]} onChange={(v) => onChange(keys.text, v)} fallback={fallback.text} />
+          <CompactColor label="Subtexto do card" value={settings[keys.textSub]} onChange={(v) => onChange(keys.textSub, v)} fallback={fallback.textSub} />
+        </ColorGroup>
+        <ColorGroup title="Menu inferior" hint="Barra de navegação e itens inativos.">
+          <CompactColor label="Cor do menu" value={settings[keys.menu]} onChange={(v) => onChange(keys.menu, v)} fallback={fallback.menu} />
+          <CompactColor label="Texto do menu" value={settings[keys.menuText]} onChange={(v) => onChange(keys.menuText, v)} fallback={fallback.menuText} />
+        </ColorGroup>
+        <ColorGroup title="Bordas e status" hint="Linhas, sucesso, alerta e erro.">
+          <CompactColor label="Borda" value={settings[keys.border]} onChange={(v) => onChange(keys.border, v)} fallback={fallback.border} />
+          <CompactColor label="Sucesso" value={settings[keys.success]} onChange={(v) => onChange(keys.success, v)} fallback={fallback.success} />
+          <CompactColor label="Alerta" value={settings[keys.warning]} onChange={(v) => onChange(keys.warning, v)} fallback={fallback.warning} />
+          <CompactColor label="Erro" value={settings[keys.danger]} onChange={(v) => onChange(keys.danger, v)} fallback={fallback.danger} />
+        </ColorGroup>
+      </div>
+
+      <div>
+        <p className="mb-2 text-[11px] font-semibold text-muted-foreground">PRÉVIA DO APP</p>
+        <div
+          className="overflow-hidden rounded-[26px] border p-3 shadow-lg"
+          style={{
+            borderColor: color('border'),
+            background: `linear-gradient(145deg, ${color('background')}, ${color('background2')})`,
+          }}
+        >
+          <p className="text-base font-extrabold" style={{ color: color('backgroundText') }}>Minhas câmeras</p>
+          <p className="mb-3 text-[10px]" style={{ color: color('backgroundText'), opacity: 0.72 }}>2 câmeras online</p>
+          <div className="rounded-2xl border p-3" style={{ backgroundColor: color('surface'), borderColor: color('border') }}>
+            <div className="mb-8 flex items-center justify-between gap-2">
+              <span className="text-xs font-bold" style={{ color: color('text') }}>Entrada principal</span>
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color('success') }} />
+            </div>
+            <p className="text-[10px]" style={{ color: color('textSub') }}>Ao vivo · 1080p</p>
+          </div>
+          <button
+            type="button"
+            className="mt-3 h-9 w-full rounded-xl text-xs font-bold"
+            style={{ backgroundColor: color('primary'), color: color('buttonText') }}
+          >
+            Abrir câmera
+          </button>
+          <div className="mt-3 flex items-center justify-around rounded-2xl border px-2 py-3" style={{ backgroundColor: color('menu'), borderColor: color('border') }}>
+            {['Central', 'Mosaico', 'Ajustes'].map((label, index) => (
+              <span key={label} className="text-[8px] font-bold" style={{ color: index === 0 ? color('primary') : color('menuText') }}>{label}</span>
+            ))}
+          </div>
+        </div>
+        <div className={`mt-3 rounded-lg border p-2.5 ${hasContrastWarning ? 'border-[hsl(var(--status-warning)_/_0.4)] bg-[hsl(var(--status-warning)_/_0.08)]' : 'border-[hsl(var(--status-online)_/_0.35)] bg-[hsl(var(--status-online)_/_0.08)]'}`}>
+          <div className="mb-1.5 text-[10px] font-semibold text-foreground">
+            {hasContrastWarning ? 'Contraste a revisar' : 'Contraste aprovado'}
+          </div>
+          <div className="grid grid-cols-2 gap-1">
+            {contrastChecks.map((check) => (
+              <div key={check.label} className="flex items-center justify-between gap-2 text-[9px] text-muted-foreground">
+                <span>{check.label}</span>
+                <span className={`font-mono font-semibold ${check.ratio >= 4.5 ? 'text-[hsl(var(--status-online))]' : 'text-[hsl(var(--status-warning))]'}`}>
+                  {check.ratio ? `${check.ratio.toFixed(1)}:1` : 'inválido'}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[9px] leading-snug text-muted-foreground">Meta mínima: 4,5:1 para textos pequenos.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'danger' | 'success' | 'warning' }) {
   const toneClass = {
     neutral: 'border-border bg-background text-muted-foreground',
@@ -201,12 +359,14 @@ export default function ConfiguracoesPage() {
   const system = useVmsDataStore((state) => state.system);
   const cameras = useVmsDataStore((state) => state.cameras);
   const accessToken = useAuthStore((state) => state.accessToken);
+  const reloadBranding = useBrandingStore((state) => state.load);
 
   const [activeSection, setActiveSection] = useState<SectionId>('general');
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [brandingEditorTheme, setBrandingEditorTheme] = useState<BrandingEditorTheme>('dark');
 
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${accessToken}` }), [accessToken]);
 
@@ -216,6 +376,7 @@ export default function ConfiguracoesPage() {
     try {
       const { data } = await axios.get<SystemSettings>(`${API_URL}/settings`, { headers: authHeaders });
       setSettings(data);
+      await reloadBranding();
     } catch (error) {
       toast({
         title: 'Falha ao carregar configurações',
@@ -225,7 +386,7 @@ export default function ConfiguracoesPage() {
     } finally {
       setLoading(false);
     }
-  }, [accessToken, authHeaders]);
+  }, [accessToken, authHeaders, reloadBranding]);
 
   useEffect(() => {
     void loadSettings();
@@ -289,6 +450,7 @@ export default function ConfiguracoesPage() {
     try {
       const { data } = await axios.patch<SystemSettings>(`${API_URL}/settings`, settings, { headers: authHeaders });
       setSettings(data);
+      await reloadBranding();
       setSaved(true);
       setTimeout(() => setSaved(false), 1800);
       toast({ title: 'Configurações salvas', description: 'As alterações foram aplicadas no servidor.' });
@@ -394,7 +556,7 @@ export default function ConfiguracoesPage() {
 
                 {activeSection === 'branding' && (
                   <>
-                    <SectionTitle eyebrow="Aparência" title="Aparência do aplicativo móvel" description="Logo e cores aplicados NO APP MÓVEL dos clientes (puxados em tempo real pelo aplicativo). NÃO altera a aparência deste sistema web." />
+                    <SectionTitle eyebrow="Aparência" title="Identidade visual da instalação" description="O logo identifica o app e este painel web. As paletas clara e escura abaixo são aplicadas em tempo real no aplicativo móvel." />
                     <Card className="overflow-hidden">
                       <SettingRow label="Logo" description="PNG, JPG ou SVG até 400 KB. Aparece na tela de login e no topo do menu. Vazio = logo padrão DRAC.">
                         <div className="flex items-center gap-3 md:justify-end">
@@ -428,37 +590,39 @@ export default function ConfiguracoesPage() {
                         </div>
                       </SettingRow>
                     </Card>
-                    <Card className="space-y-3 p-3">
-                      <p className="text-xs text-muted-foreground">
-                        Cada <strong>superfície</strong> tem fundo e texto próprios — assim um texto escuro não fica ilegível sobre um card escuro. Deixe em <em>auto</em> (✕) para usar o padrão do tema.
-                      </p>
-                      <ColorGroup title="Destaque" hint="Botões, links e ícones ativos.">
-                        <CompactColor label="Cor principal" value={settings.brandPrimaryColor} onChange={(v) => update('brandPrimaryColor', v)} fallback="#0b6bd6" />
-                        <CompactColor label="Texto do botão" value={settings.brandButtonTextColor} onChange={(v) => update('brandButtonTextColor', v)} fallback="#ffffff" />
-                      </ColorGroup>
-                      <ColorGroup title="Fundo da tela" hint="Fundo e textos fora de cards. Defina a 2ª cor para o fundo virar gradiente; deixe em auto para fundo sólido.">
-                        <CompactColor label="Cor de fundo" value={settings.brandBackgroundColor} onChange={(v) => update('brandBackgroundColor', v)} fallback="#14161b" />
-                        <CompactColor label="Fundo 2 (gradiente)" value={settings.brandBackgroundColor2} onChange={(v) => update('brandBackgroundColor2', v)} fallback="#0b0d12" />
-                        <CompactColor label="Texto do fundo" value={settings.brandBackgroundTextColor} onChange={(v) => update('brandBackgroundTextColor', v)} fallback="#f4f6fa" />
-                      </ColorGroup>
-                      <ColorGroup title="Card / bloco" hint="Cards, painéis e campos, e o texto SOBRE eles.">
-                        <CompactColor label="Cor do card" value={settings.brandSecondaryColor} onChange={(v) => update('brandSecondaryColor', v)} fallback="#15181f" />
-                        <CompactColor label="Texto do card" value={settings.brandPrimaryTextColor} onChange={(v) => update('brandPrimaryTextColor', v)} fallback="#f4f6fa" />
-                        <CompactColor label="Subtexto do card" value={settings.brandSecondaryTextColor} onChange={(v) => update('brandSecondaryTextColor', v)} fallback="#9aa3af" />
-                      </ColorGroup>
-                      <ColorGroup title="Menu inferior" hint="Barra de navegação de baixo (separável do card).">
-                        <CompactColor label="Cor do menu" value={settings.brandMenuColor} onChange={(v) => update('brandMenuColor', v)} fallback="#15181f" />
-                        <CompactColor label="Texto do menu" value={settings.brandMenuTextColor} onChange={(v) => update('brandMenuTextColor', v)} fallback="#6b7484" />
-                      </ColorGroup>
-                      <ColorGroup title="Bordas e status" hint="Linhas divisórias e cores de sucesso/alerta/erro.">
-                        <CompactColor label="Borda" value={settings.brandBorderColor} onChange={(v) => update('brandBorderColor', v)} fallback="#2a2f3a" />
-                        <CompactColor label="Sucesso" value={settings.brandSuccessColor} onChange={(v) => update('brandSuccessColor', v)} fallback="#22c55e" />
-                        <CompactColor label="Alerta" value={settings.brandWarningColor} onChange={(v) => update('brandWarningColor', v)} fallback="#f59e0b" />
-                        <CompactColor label="Erro" value={settings.brandDangerColor} onChange={(v) => update('brandDangerColor', v)} fallback="#ef4444" />
-                      </ColorGroup>
+                    <Card className="space-y-4 p-3">
+                      <div>
+                        <p className="text-xs text-muted-foreground">
+                          Configure as duas aparências separadamente. Cada pessoa escolhe no aplicativo qual deseja usar.
+                        </p>
+                        <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl border border-border bg-background/60 p-1">
+                          {[
+                            { id: 'dark' as const, label: 'Tema escuro', icon: Moon },
+                            { id: 'light' as const, label: 'Tema claro', icon: Sun },
+                          ].map((item) => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => setBrandingEditorTheme(item.id)}
+                              aria-pressed={brandingEditorTheme === item.id}
+                              className={`flex h-10 items-center justify-center gap-2 rounded-lg text-xs font-semibold transition ${
+                                brandingEditorTheme === item.id ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                              }`}
+                            >
+                              <item.icon className="h-3.5 w-3.5" />
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <BrandingPaletteEditor
+                        mode={brandingEditorTheme}
+                        settings={settings}
+                        onChange={(key, value) => update(key, value)}
+                      />
                     </Card>
                     <p className="px-1 text-xs text-muted-foreground">
-                      Estas configurações valem só para o <strong>aplicativo móvel</strong> dos clientes — o app lê o logo e as cores em tempo real ao abrir. A aparência deste sistema web não muda.
+                      Estas configurações valem para o <strong>aplicativo móvel</strong>. A escolha Claro/Escuro é pessoal e fica salva no aparelho de cada usuário.
                     </p>
                   </>
                 )}

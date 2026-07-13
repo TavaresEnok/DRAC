@@ -16,10 +16,23 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { CameraGroup } from '../types';
 
-const FAV_KEY = '@drac:favorites:v1';
-const GROUP_KEY = '@drac:groups:v1';
+const LEGACY_FAV_KEY = '@drac:favorites:v1';
+const LEGACY_GROUP_KEY = '@drac:groups:v1';
+const writeQueues = new Map<string, Promise<void>>();
+
+function enqueueWrite(key: string, value: unknown) {
+  const previous = writeQueues.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => AsyncStorage.setItem(key, JSON.stringify(value)));
+  writeQueues.set(key, next);
+  void next.finally(() => { if (writeQueues.get(key) === next) writeQueues.delete(key); });
+}
+
+function scopedKey(base: string, scope: string): string {
+  return `${base}:${encodeURIComponent(scope)}`;
+}
 
 interface LibraryContextValue {
+  setScope: (scope: string) => void;
   favorites: string[];
   isFavorite: (cameraId: string) => boolean;
   toggleFavorite: (cameraId: string) => void;
@@ -33,13 +46,25 @@ interface LibraryContextValue {
 const LibraryContext = createContext<LibraryContextValue | null>(null);
 
 export function LibraryProvider({ children }: { children: React.ReactNode }) {
+  const [scope, setScopeState] = useState('anonymous');
   const [favorites, setFavorites] = useState<string[]>([]);
   const [groups, setGroups] = useState<CameraGroup[]>([]);
 
+  const favKey = scopedKey(LEGACY_FAV_KEY, scope);
+  const groupKey = scopedKey(LEGACY_GROUP_KEY, scope);
+  const setScope = useCallback((next: string) => setScopeState(next.trim() || 'anonymous'), []);
+
   // hidratar do storage
   useEffect(() => {
-    AsyncStorage.multiGet([FAV_KEY, GROUP_KEY])
-      .then(([[, favRaw], [, grpRaw]]) => {
+    let cancelled = false;
+    setFavorites([]);
+    setGroups([]);
+    AsyncStorage.multiGet([favKey, groupKey, LEGACY_FAV_KEY, LEGACY_GROUP_KEY])
+      .then(async ([[, scopedFav], [, scopedGroup], [, legacyFav], [, legacyGroup]]) => {
+        const canMigrateLegacy = scope !== 'anonymous';
+        const favRaw = scopedFav ?? (canMigrateLegacy ? legacyFav : null);
+        const grpRaw = scopedGroup ?? (canMigrateLegacy ? legacyGroup : null);
+        if (cancelled) return;
         if (favRaw) {
           const parsed = JSON.parse(favRaw);
           if (Array.isArray(parsed)) setFavorites(parsed);
@@ -48,42 +73,52 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
           const parsed = JSON.parse(grpRaw);
           if (Array.isArray(parsed)) setGroups(parsed);
         }
+        if (canMigrateLegacy && !scopedFav && legacyFav) await AsyncStorage.setItem(favKey, legacyFav);
+        if (canMigrateLegacy && !scopedGroup && legacyGroup) await AsyncStorage.setItem(groupKey, legacyGroup);
+        if (canMigrateLegacy && (legacyFav || legacyGroup)) await AsyncStorage.multiRemove([LEGACY_FAV_KEY, LEGACY_GROUP_KEY]);
       })
       .catch(() => undefined);
-  }, []);
+    return () => { cancelled = true; };
+  }, [favKey, groupKey, scope]);
 
-  const persistFav = useCallback((next: string[]) => {
-    setFavorites(next);
-    void AsyncStorage.setItem(FAV_KEY, JSON.stringify(next));
-  }, []);
-  const persistGroups = useCallback((next: CameraGroup[]) => {
-    setGroups(next);
-    void AsyncStorage.setItem(GROUP_KEY, JSON.stringify(next));
-  }, []);
+  const persistFav = useCallback((update: (current: string[]) => string[]) => {
+    setFavorites((current) => {
+      const next = update(current);
+      enqueueWrite(favKey, next);
+      return next;
+    });
+  }, [favKey]);
+  const persistGroups = useCallback((update: (current: CameraGroup[]) => CameraGroup[]) => {
+    setGroups((current) => {
+      const next = update(current);
+      enqueueWrite(groupKey, next);
+      return next;
+    });
+  }, [groupKey]);
 
   const isFavorite = useCallback((id: string) => favorites.includes(id), [favorites]);
 
   const toggleFavorite = useCallback((id: string) => {
-    persistFav(favorites.includes(id) ? favorites.filter((x) => x !== id) : [...favorites, id]);
-  }, [favorites, persistFav]);
+    persistFav((current) => current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
+  }, [persistFav]);
 
   const createGroup = useCallback((name: string, cameraIds: string[]): CameraGroup => {
     const group: CameraGroup = { id: 'g' + Date.now(), name: name.trim() || 'Novo grupo', cameraIds };
-    persistGroups([...groups, group]);
+    persistGroups((current) => [...current, group]);
     return group;
-  }, [groups, persistGroups]);
+  }, [persistGroups]);
 
   const updateGroup = useCallback((id: string, patch: Partial<Omit<CameraGroup, 'id'>>) => {
-    persistGroups(groups.map((g) => (g.id === id ? { ...g, ...patch } : g)));
-  }, [groups, persistGroups]);
+    persistGroups((current) => current.map((g) => (g.id === id ? { ...g, ...patch } : g)));
+  }, [persistGroups]);
 
   const deleteGroup = useCallback((id: string) => {
-    persistGroups(groups.filter((g) => g.id !== id));
-  }, [groups, persistGroups]);
+    persistGroups((current) => current.filter((g) => g.id !== id));
+  }, [persistGroups]);
 
   const value = useMemo<LibraryContextValue>(
-    () => ({ favorites, isFavorite, toggleFavorite, groups, createGroup, updateGroup, deleteGroup }),
-    [favorites, isFavorite, toggleFavorite, groups, createGroup, updateGroup, deleteGroup],
+    () => ({ setScope, favorites, isFavorite, toggleFavorite, groups, createGroup, updateGroup, deleteGroup }),
+    [setScope, favorites, isFavorite, toggleFavorite, groups, createGroup, updateGroup, deleteGroup],
   );
 
   return <LibraryContext.Provider value={value}>{children}</LibraryContext.Provider>;

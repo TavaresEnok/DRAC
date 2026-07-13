@@ -1,5 +1,21 @@
 import type { Camera } from '../types';
 
+/** Chave YYYY-MM-DD no fuso local do aparelho (não em UTC). */
+export function localDateKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/** Intervalo ISO que representa um dia civil no fuso local do aparelho. */
+export function localDayIsoRange(value: string): { from: string; to: string } {
+  const [year, month, day] = value.split('-').map(Number);
+  const from = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const to = new Date(year, month - 1, day, 23, 59, 59, 999);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
+
 export function formatTime(value?: string | null) {
   if (!value) return '--:--';
   return new Date(value).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -7,8 +23,7 @@ export function formatTime(value?: string | null) {
 
 export function formatDateLabel(value: string) {
   const date = new Date(`${value}T12:00:00`);
-  const today = new Date();
-  const todayKey = today.toISOString().slice(0, 10);
+  const todayKey = localDateKey();
   if (value === todayKey) return 'Hoje';
   return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' });
 }

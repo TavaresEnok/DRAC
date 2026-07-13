@@ -12,6 +12,7 @@ type Segment = (typeof SEGMENTS)[number];
 
 interface AlarmsScreenProps {
   alarms: Alarm[];
+  highlightedAlarmId?: string | null;
   canManage: boolean;
   refreshing: boolean;
   onRefresh: () => void;
@@ -33,16 +34,20 @@ function timeAgo(iso: string): string {
 }
 
 
-export function AlarmsScreen({ alarms, canManage, refreshing, onRefresh, onAck, onResolve, onOpenCamera }: AlarmsScreenProps) {
+export function AlarmsScreen({ alarms, highlightedAlarmId, canManage, refreshing, onRefresh, onAck, onResolve, onOpenCamera }: AlarmsScreenProps) {
   const { theme } = useTheme();
   const [segment, setSegment] = useState<Segment>('Abertos');
 
   const openCount = useMemo(() => alarms.filter((a) => a.status === 'OPEN').length, [alarms]);
   const filtered = useMemo(() => {
-    if (segment === 'Abertos') return alarms.filter((a) => a.status === 'OPEN');
-    if (segment === 'Reconhecidos') return alarms.filter((a) => a.status === 'ACKED');
-    return alarms;
-  }, [alarms, segment]);
+    const items = segment === 'Abertos'
+      ? alarms.filter((a) => a.status === 'OPEN')
+      : segment === 'Reconhecidos'
+        ? alarms.filter((a) => a.status === 'ACKED')
+        : alarms;
+    if (!highlightedAlarmId) return items;
+    return [...items].sort((a, b) => Number(b.id === highlightedAlarmId) - Number(a.id === highlightedAlarmId));
+  }, [alarms, segment, highlightedAlarmId]);
 
   return (
     <ScrollView
@@ -57,9 +62,9 @@ export function AlarmsScreen({ alarms, canManage, refreshing, onRefresh, onAck, 
             <Icon name="eye" size={22} color="#ef4444" strokeWidth={2} />
           </View>
           <View>
-            <Text style={[styles.title, { color: theme.text }]}>Alarmes</Text>
-            <Text style={[styles.subtitle, { color: theme.textSub }]}>
-              Detecção de movimento · {openCount} em aberto
+            <Text style={[styles.title, { color: theme.bgText }]}>Alarmes</Text>
+            <Text style={[styles.subtitle, { color: withAlpha(theme.bgText, 0.72) ?? theme.bgText }]}>
+              Eventos de segurança · {openCount} em aberto
             </Text>
           </View>
         </View>
@@ -69,13 +74,15 @@ export function AlarmsScreen({ alarms, canManage, refreshing, onRefresh, onAck, 
         {SEGMENTS.map((s) => {
           const on = s === segment;
           return (
-            <Text
+            <Pressable
               key={s}
               onPress={() => setSegment(s)}
-              style={[styles.segment, on && { backgroundColor: theme.surface }, { color: on ? theme.text : theme.textSub }]}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: on }}
+              style={[styles.segment, on && { backgroundColor: theme.surface }]}
             >
-              {s}
-            </Text>
+              <Text style={[styles.segmentText, { color: on ? theme.text : theme.textSub }]}>{s}</Text>
+            </Pressable>
           );
         })}
       </View>
@@ -94,6 +101,7 @@ export function AlarmsScreen({ alarms, canManage, refreshing, onRefresh, onAck, 
             <AlarmCard
               key={alarm.id}
               alarm={alarm}
+              highlighted={alarm.id === highlightedAlarmId}
               canManage={canManage}
               onAck={() => onAck(alarm)}
               onResolve={() => onResolve(alarm)}
@@ -107,8 +115,8 @@ export function AlarmsScreen({ alarms, canManage, refreshing, onRefresh, onAck, 
 }
 
 function AlarmCard({
-  alarm, canManage, onAck, onResolve, onOpen,
-}: { alarm: Alarm; canManage: boolean; onAck: () => void; onResolve: () => void; onOpen: () => void }) {
+  alarm, highlighted, canManage, onAck, onResolve, onOpen,
+}: { alarm: Alarm; highlighted?: boolean; canManage: boolean; onAck: () => void; onResolve: () => void; onOpen: () => void }) {
   const { theme } = useTheme();
   const ago = timeAgo(alarm.occurredAt);
   const label = alarm.title || alarm.type;
@@ -145,7 +153,7 @@ function AlarmCard({
   const iconBg = acked ? (withAlpha(theme.accent, 0.14) ?? theme.accentBg) : 'rgba(239,68,68,0.12)';
 
   return (
-    <View style={[styles.card, { backgroundColor: theme.surface, borderColor }]}>
+    <View style={[styles.card, { backgroundColor: theme.surface, borderColor: highlighted ? theme.accent : borderColor }]}>
       <View style={[styles.stripe, { backgroundColor: accentColor }]} />
       <View style={styles.cardInner}>
         <Pressable style={styles.cardBody} onPress={onOpen}>
@@ -172,7 +180,13 @@ function AlarmCard({
         {canManage ? (
           <View style={styles.actions}>
             {!acked ? (
-              <Text onPress={onAck} style={[styles.actionGhost, { backgroundColor: theme.surfaceAlt, borderColor: theme.border, color: theme.text }]}>Reconhecer</Text>
+              <Pressable
+                onPress={onAck}
+                accessibilityRole="button"
+                style={[styles.actionGhost, { backgroundColor: theme.surfaceAlt, borderColor: theme.border }]}
+              >
+                <Text style={[styles.actionGhostText, { color: theme.text }]}>Reconhecer</Text>
+              </Pressable>
             ) : null}
             <Pressable style={styles.actionPrimaryWrap} onPress={onResolve}>
               <LinearGradient colors={[theme.accent, theme.accentDark]} style={styles.actionPrimary}>
@@ -194,7 +208,8 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5 },
   subtitle: { fontSize: 12.5, fontWeight: '600', marginTop: 2 },
   segments: { flexDirection: 'row', borderRadius: 13, padding: 4, gap: 7 },
-  segment: { flex: 1, textAlign: 'center', paddingVertical: 9, borderRadius: 10, fontSize: 12.5, fontWeight: '700', overflow: 'hidden' },
+  segment: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 10, overflow: 'hidden' },
+  segmentText: { fontSize: 12.5, fontWeight: '700' },
   card: { borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   stripe: { height: 3 },
   cardInner: { padding: 14 },
@@ -206,7 +221,8 @@ const styles = StyleSheet.create({
   cardAgo: { fontSize: 11, fontWeight: '600' },
   cardLoc: { fontSize: 12.5, fontWeight: '600', marginTop: 2 },
   actions: { flexDirection: 'row', gap: 8, marginTop: 12 },
-  actionGhost: { flex: 1, textAlign: 'center', paddingVertical: 9, borderRadius: 11, borderWidth: StyleSheet.hairlineWidth, fontSize: 12, fontWeight: '700', overflow: 'hidden' },
+  actionGhost: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 11, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  actionGhostText: { fontSize: 12, fontWeight: '700' },
   actionPrimaryWrap: { flex: 1, borderRadius: 11, overflow: 'hidden' },
   actionPrimary: { paddingVertical: 9, alignItems: 'center' },
   actionPrimaryText: { color: '#fff', fontSize: 12, fontWeight: '800' },
