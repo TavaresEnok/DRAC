@@ -81,6 +81,14 @@ echo ">> prebuild (--clean: regenera android/ do zero p/ o pacote deste cliente)
 npx expo prebuild --platform android --no-install --clean >/dev/null
 echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
+# Edge-to-edge (Android 15): remove os atributos DEPRECADOS de cor de barra que
+# o prebuild gera nos styles (android:statusBarColor / navigationBarColor). Com
+# edge-to-edge ligado eles são ignorados e a Play emite aviso de "APIs
+# descontinuadas para exibição de ponta a ponta". Removê-los silencia o aviso
+# sem mudar o visual (a barra fica transparente, controlada pelo edge-to-edge).
+find android/app/src/main/res -name styles.xml -exec \
+  sed -i -E '/name="android:(statusBarColor|navigationBarColor)"/d' {} + 2>/dev/null || true
+
 # Gera APK só p/ celulares modernos (arm64-v8a). O prebuild traz 4 ABIs
 # (armeabi-v7a 32-bit + x86/x86_64 de EMULADOR) que inflavam o APK ~3x (~97MB).
 # Forçamos de 2 formas (à prova de falha): a property do plugin RN E o

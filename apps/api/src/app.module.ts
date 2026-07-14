@@ -21,6 +21,7 @@ import { SiteMapLayoutsModule } from './site-map-layouts/site-map-layouts.module
 import { EvidenceModule } from './evidence/evidence.module';
 import { AlarmsModule } from './alarms/alarms.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { IntegrityModule } from './integrity/integrity.module';
 import { InvestigationsModule } from './investigations/investigations.module';
 import { SettingsModule } from './settings/settings.module';
 import { GpuModule } from './gpu/gpu.module';
@@ -64,6 +65,7 @@ import { ThrottlerGuard } from '@nestjs/throttler';
     EvidenceModule,
     AlarmsModule,
     NotificationsModule,
+    IntegrityModule,
     InvestigationsModule,
     CameraGroupsModule,
     CameraPermissionsModule,
