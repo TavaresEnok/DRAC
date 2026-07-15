@@ -714,7 +714,8 @@ class StreamProcessor:
         print(f"[{self.camera_id}] Iniciando captura: {self._sanitize_url(self.rtsp_url)}")
         cap = None
         last_yield_time = 0
-        
+        grab_failures = 0
+
         while self.running:
             self.capture_loop_iterations += 1
             self._refresh_qos_mode()
@@ -733,7 +734,27 @@ class StreamProcessor:
             now = time.time()
             capture_interval = 1.0 / max(0.5, float(self.process_fps))
             if now - last_yield_time < capture_interval:
-                time.sleep(min(0.05, capture_interval - (now - last_yield_time)))
+                # DRENA o stream entre análises: grab() consome o pacote do socket sem
+                # o custo de converter/copiar a imagem. Sem isto, analisar a ~2fps um
+                # stream de ~20fps acumula backpressure TCP e o MediaMTX derruba o
+                # leitor lento ("write i/o timeout") a cada poucos minutos — churn de
+                # sessão infinita + ~5s de detecção cega a cada reconexão (observado:
+                # 71 kills/hora com 4 câmeras). grab() bloqueia até o próximo frame,
+                # então o loop se auto-cadencia no FPS do stream.
+                if cap.grab():
+                    grab_failures = 0
+                else:
+                    grab_failures += 1
+                    time.sleep(0.05)
+                    if grab_failures >= 40:  # ~2s+ sem frames = stream caiu de verdade
+                        self.consecutive_capture_failures += 1
+                        self.last_capture_failure_at = time.time()
+                        self.last_error = f"capture_failed (grab x{grab_failures})"
+                        print(f"[{self.camera_id}] Falha na captura (grab), reconectando em 5s...")
+                        cap.release()
+                        time.sleep(5)
+                        cap = self._open_capture()
+                        grab_failures = 0
                 continue
 
             # A IA não precisa decodificar o FPS inteiro da câmera.
