@@ -1074,6 +1074,21 @@
         fleet.textContent = attention || streamRisk || recordingAttention ? `${attention + (streamRisk ? 1 : 0) + (recordingAttention ? 1 : 0)} em atenção` : 'Frota estável';
         fleet.className = `badge ${attention ? 'warn' : 'ok'}`;
       }
+      // Chip de saúde de INFRA (do watchdog da instalação, via heartbeat). Diferente da
+      // comunicação (online/offline): mostra 502 no /live, container morto, e auto-cura.
+      function infraChip(item) {
+        const h = item.metrics && item.metrics.infraHealth;
+        if (!h) return '';                      // watchdog não instalado nessa instalação
+        if (h.stale) return '<span class="badge warn" title="watchdog sem atualizar há >15min">infra: ?</span>';
+        const issues = Array.isArray(h.issues) ? h.issues : [];
+        if (issues.length) {
+          const crit = issues.some((i) => /^(live:|container:)/.test(i));
+          return `<span class="badge ${crit ? 'bad' : 'warn'}" title="${escapeHtml(issues.join(', '))}">infra: ${crit ? 'crítico' : 'atenção'}</span>`;
+        }
+        const healed = Array.isArray(h.selfHealed) ? h.selfHealed : [];
+        if (healed.length) return `<span class="badge ok" title="auto-curou: ${escapeHtml(healed.join(', '))}">infra: auto-curou</span>`;
+        return '<span class="badge ok">infra: ok</span>';
+      }
       function renderRows(items) {
         if (!items.length) {
           els.rows.innerHTML = '<tr><td colspan="8">Nenhum cliente encontrado.</td></tr>';
@@ -1087,7 +1102,7 @@
           return `
             <tr data-id="${escapeHtml(item.id)}" class="${item.id === state.selectedId ? 'selected' : ''}">
               <td><div class="client-name">${escapeHtml(displayName(item))}</div><div class="subtext">${escapeHtml(item.id)}</div></td>
-              <td><span class="badge ${item.status === 'ONLINE' ? 'ok' : item.status === 'PENDING_INSTALL' ? 'neutral' : 'bad'}">${communicationLabel(item)}</span><div class="subtext">${item.status === 'PENDING_INSTALL' ? 'sem heartbeat ainda' : timeAgo(item.ageSeconds)}</div></td>
+              <td><span class="badge ${item.status === 'ONLINE' ? 'ok' : item.status === 'PENDING_INSTALL' ? 'neutral' : 'bad'}">${communicationLabel(item)}</span> ${infraChip(item)}<div class="subtext">${item.status === 'PENDING_INSTALL' ? 'sem heartbeat ainda' : timeAgo(item.ageSeconds)}</div></td>
               <td><span class="badge ${contractClasses[item.licenseStatus] || 'ok'}">${contractLabels[item.licenseStatus] || 'Regular'}</span></td>
               <td><span class="mono">${camOnline}/${camTotal}</span><div class="subtext">${camIssue ? `${camIssue} em atenção` : 'sem falhas'}</div></td>
               <td>${disk == null ? '-' : progress(disk)}</td>

@@ -3,7 +3,8 @@ import { ModuleRef } from '@nestjs/core';
 import { AlarmStatus, CameraStatus } from '@prisma/client';
 import axios from 'axios';
 import * as os from 'node:os';
-import { statfs } from 'node:fs/promises';
+import { statfs, readFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { AiService } from '../ai/ai.service';
 import { RecordingProcessManagerService } from '../recordings/recording-process-manager.service';
@@ -148,6 +149,43 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
     return Math.max(this.getPositiveInt(process.env.CLOUD_HEARTBEAT_INTERVAL_SECONDS, 60), 15) * 1000;
   }
 
+  /**
+   * Lê o status do watchdog de infra (scripts/runtime-watchdog.sh grava em
+   * <storage>/.monitor/runtime-status.json). Traz p/ o heartbeat os problemas de
+   * INFRA (portas do MediaMTX/502 no /live, container morto, auto-cura) que a API,
+   * sozinha, não enxerga — assim a Central mostra verde/vermelho por instalação.
+   * Se o arquivo não existe (watchdog não instalado) ou está velho (>15min = watchdog
+   * parado), devolve null / marca stale sem derrubar o heartbeat.
+   */
+  private async getInfraWatchdogHealth(recordingsRoot: string): Promise<{
+    status: string;
+    issues: string[];
+    selfHealed: string[];
+    checkedAt: string | null;
+    stale: boolean;
+  } | null> {
+    const file = join(recordingsRoot, '.monitor', 'runtime-status.json');
+    try {
+      const [raw, st] = await Promise.all([readFile(file, 'utf8'), stat(file)]);
+      const data = JSON.parse(raw) as {
+        status?: string;
+        issues?: unknown;
+        selfHealed?: unknown;
+        checkedAt?: string;
+      };
+      const ageMs = Date.now() - st.mtimeMs;
+      return {
+        status: String(data.status ?? 'unknown'),
+        issues: Array.isArray(data.issues) ? data.issues.map(String) : [],
+        selfHealed: Array.isArray(data.selfHealed) ? data.selfHealed.map(String) : [],
+        checkedAt: data.checkedAt ?? null,
+        stale: ageMs > 15 * 60 * 1000,
+      };
+    } catch {
+      return null; // watchdog não instalado / arquivo ausente — silencioso
+    }
+  }
+
   private async collectPayload() {
     const recordingsRoot = process.env.RECORDINGS_ROOT ?? '/storage';
     const now = new Date();
@@ -235,6 +273,27 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         message: `Storage apertado para ${recordingCapacity.retentionDays}d de retencao: estimado ${recordingCapacity.estimatedRequiredGb}GB, capacidade segura ${recordingCapacity.safeCapacityGb}GB.`,
       });
     }
+    // Saúde de INFRA do watchdog → vira alerts (a Central já os exibe/historia).
+    const infraHealth = await this.getInfraWatchdogHealth(recordingsRoot);
+    if (infraHealth) {
+      for (const issue of infraHealth.issues) {
+        if (issue.startsWith('disk:')) continue; // disco já coberto pelos alerts acima
+        const critical = /^(live:|container:|api:|web:|build-agent:)/.test(issue);
+        alerts.push({
+          level: critical ? 'critical' : 'warning',
+          code: `infra_${issue.split(':')[0]}`,
+          message: `Infra: ${issue}`,
+        });
+      }
+      if (infraHealth.stale) {
+        alerts.push({
+          level: 'warning',
+          code: 'infra_watchdog_stale',
+          message: 'Watchdog de infra sem atualizar há >15min (pode estar parado).',
+        });
+      }
+    }
+
     const appReadinessStatus = alerts.some((alert) => alert.level === 'critical')
       ? 'blocked'
       : alerts.length > 0 || !mediamtxOriginsRestricted
@@ -273,6 +332,15 @@ export class CloudConnectorService implements OnModuleInit, OnModuleDestroy {
         recordingAttentionCameras: streamPerformance?.summary?.camerasWithRecordingAttention ?? 0,
         activeUsers,
         diskUsagePercent: disk?.usagePercent ?? null,
+        infraHealth: infraHealth
+          ? {
+              status: infraHealth.status,
+              issues: infraHealth.issues,
+              selfHealed: infraHealth.selfHealed,
+              checkedAt: infraHealth.checkedAt,
+              stale: infraHealth.stale,
+            }
+          : null,
         alerts,
       },
       server: {

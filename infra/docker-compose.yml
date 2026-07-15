@@ -147,6 +147,11 @@ services:
     container_name: vms-api
     restart: unless-stopped
     logging: *default-logging
+    # Porta em LOOPBACK: o nginx (host) faz proxy de /api/ p/ 127.0.0.1:3000. Fica no
+    # compose BASE (não só no dev override) — recriar sem o override dropava a porta e
+    # derrubava /api inteiro (502). Só o nginx alcança; o público não bate direto.
+    ports:
+      - "127.0.0.1:3000:3000"
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://${POSTGRES_USER:-vms}:${POSTGRES_PASSWORD:-change_me_postgres_password}@postgres:5432/${POSTGRES_DB:-vms_db}
@@ -256,6 +261,11 @@ services:
     container_name: vms-web
     restart: unless-stopped
     logging: *default-logging
+    # Porta em LOOPBACK: o nginx (host) faz proxy de / p/ 127.0.0.1:5173 (o web serve
+    # na 80 interna). No compose BASE pelo mesmo motivo da api/mediamtx (não depender do
+    # override — recriar sem ele derrubava o site).
+    ports:
+      - "127.0.0.1:5173:80"
     # APKs white-label publicados pelo build-agent ficam num diretório do HOST
     # montado aqui (somente leitura). Sobrevive a rebuilds do container — antes os
     # APKs eram copiados pra dentro do container e sumiam a cada recriação.

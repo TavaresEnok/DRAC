@@ -1,3 +1,13 @@
+# Override OPCIONAL de desenvolvimento.
+#
+# IMPORTANTE (2026-07-15): as portas de que o SISTEMA depende — api (3000), web (5173)
+# e mediamtx (HLS 8888 / WebRTC 8889 / UDP 8189) — foram movidas para o
+# docker-compose.yml BASE. Recriar um serviço com só o base NÃO derruba mais o /live nem
+# o /api (era a causa de dois incidentes de "502"/"conectando..."). Portanto NÃO é mais
+# obrigatório passar `-f docker-compose.dev.yml`; o base já sobe o sistema completo.
+#
+# Este override agora só adiciona conveniências de DEV: acesso DIRETO (loopback) ao banco,
+# ao redis e ao adminer para depurar da máquina host. Em produção pode ser omitido.
 services:
   postgres:
     ports:
@@ -10,21 +20,3 @@ services:
   adminer:
     ports:
       - "127.0.0.1:8090:8080"
-
-  api:
-    ports:
-      - "3000:3000"
-
-  web:
-    ports:
-      - "5173:80"
-      - "3002:80"
-
-  mediamtx:
-    ports:
-      - "127.0.0.1:8554:8554"
-      - "8888:8888"
-      - "8889:8889"
-      - "8189:8189/udp"
-      - "127.0.0.1:9997:9997"
-      - "127.0.0.1:9998:9998"
