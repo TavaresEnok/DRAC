@@ -59,6 +59,13 @@ mediamtx_ports_ok() {
     && docker port vms-mediamtx 2>/dev/null | grep -q '8888/tcp'
 }
 if docker inspect vms-mediamtx >/dev/null 2>&1; then
+  # DEBOUNCE: um recreate do mediamtx + restart da api PISCA todos os viewers. Então só
+  # age se as portas estiverem REALMENTE ausentes — reconfirma após 5s p/ descartar um
+  # soluço transiente do `docker port`. Sem isto, o próprio watchdog poderia virar fonte
+  # de piscar ao reiniciar a api por um falso-positivo momentâneo.
+  if ! mediamtx_ports_ok; then
+    sleep 5
+  fi
   if ! mediamtx_ports_ok; then
     # AUTO-CURA: recria o mediamtx pelo compose base (que agora carrega as portas).
     (cd "$INFRA_DIR" && docker compose -f docker-compose.yml up -d mediamtx >/dev/null 2>&1) && sleep 3
