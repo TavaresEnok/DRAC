@@ -3,7 +3,7 @@ import * as ScreenOrientation from 'expo-screen-orientation';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, AppState, BackHandler, Image, SafeAreaView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, BackHandler, Image, SafeAreaView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { DEFAULT_API_URL, TOP_SAFE } from './src/config';
 import { BottomTabs } from './src/components/BottomTabs';
@@ -14,7 +14,7 @@ import { LoginScreen } from './src/screens/LoginScreen';
 import { MosaicScreen } from './src/screens/MosaicScreen';
 import { PlaybackScreen } from './src/screens/PlaybackScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
-import { request, normalizeServerUrl, setUnauthorizedHandler } from './src/services/api';
+import { request, normalizeServerUrl, setTokenRefreshHandler, setUnauthorizedHandler } from './src/services/api';
 import { authenticatedMediaUrl, isSecureMediaUrl } from './src/services/media-urls';
 import { fetchBranding, isLightColor } from './src/services/branding';
 import { clearStreamUrlsCache, requestCachedStreamUrls } from './src/services/stream-urls-cache';
@@ -23,7 +23,11 @@ import {
   listPendingClips, savePendingClip, removePendingClip,
   type PendingClip, type SavedClip,
 } from './src/services/clips';
-import { cleanApiUrl, clearStoredSession, loadStoredSession, saveStoredSession } from './src/services/sessionStore';
+import {
+  cleanApiUrl, clearStoredSession, isBiometricLoginEnabled, loadStoredSession,
+  saveStoredSession, setBiometricLoginEnabled,
+} from './src/services/sessionStore';
+import { authenticateWithBiometrics, getBiometricSupport } from './src/services/biometrics';
 import { registerForPush, subscribeToNotificationTaps, unregisterFromPush } from './src/services/push';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { useAlarms } from './src/hooks/useAlarms';
@@ -58,6 +62,11 @@ function AppInner() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [restoringSession, setRestoringSession] = useState(true);
+  const [pendingBiometricSession, setPendingBiometricSession] = useState<Session | null>(null);
+  const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [biometricLabel, setBiometricLabel] = useState('Biometria');
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<Tab>('central');
   const [cameras, setCameras] = useState<Camera[]>([]);
@@ -150,24 +159,95 @@ function AppInner() {
       .catch(() => undefined);
   };
 
+  const activateSession = (next: Session) => {
+    sessionTokenRef.current = next.token;
+    setSession(next);
+    setApiUrl(next.apiUrl);
+    setEmail(next.user.email);
+    setPendingBiometricSession(null);
+    loadBranding(next.apiUrl);
+  };
+
+  const renewStoredSession = async (stored: Session): Promise<Session | null> => {
+    if (!stored.refreshToken) return stored;
+    try {
+      const data = await request<{
+        accessToken: string;
+        refreshToken: string;
+        refreshExpiresAt: string;
+        user: User;
+      }>(stored.apiUrl, '/auth/refresh', undefined, {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken: stored.refreshToken }),
+      });
+      const renewed: Session = {
+        apiUrl: stored.apiUrl,
+        token: data.accessToken,
+        refreshToken: data.refreshToken,
+        refreshExpiresAt: data.refreshExpiresAt,
+        user: data.user,
+      };
+      await saveStoredSession(renewed);
+      return renewed;
+    } catch (error) {
+      // Falha de rede não elimina uma sessão ainda utilizável. Apenas uma recusa
+      // explícita da API significa sete dias de inatividade/revogação.
+      if ((error as { status?: number })?.status === 401) {
+        await clearStoredSession();
+        return null;
+      }
+      return stored;
+    }
+  };
+
+  const unlockPendingSession = async () => {
+    const stored = pendingBiometricSession;
+    if (!stored) return;
+    setLoading(true);
+    try {
+      if (!(await authenticateWithBiometrics('Confirme sua identidade para entrar'))) return;
+      const renewed = await renewStoredSession(stored);
+      if (renewed) activateSession(renewed);
+      else Alert.alert('Sessão expirada', 'Sua conta ficou mais de sete dias sem acesso. Entre novamente com sua senha.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     // Em builds white-label o servidor já vem embutido: aplica a marca já no login.
     if (DEFAULT_API_URL) loadBranding(DEFAULT_API_URL);
 
-    loadStoredSession()
-      .then((raw) => {
+    void (async () => {
+      try {
+        const [raw, enabled, support] = await Promise.all([
+          loadStoredSession(),
+          isBiometricLoginEnabled(),
+          getBiometricSupport().catch(() => ({ available: false, label: 'Biometria' })),
+        ]);
+        setBiometricAvailable(support.available);
+        setBiometricLabel(support.label);
+        setBiometricEnabled(enabled);
         if (!raw) return;
         const stored = JSON.parse(raw) as Session;
         const normalized = { ...stored, apiUrl: cleanApiUrl(stored.apiUrl) };
-        if (normalized.apiUrl !== stored.apiUrl) {
-          void saveStoredSession(normalized);
-        }
-        sessionTokenRef.current = normalized.token;
-        setSession(normalized);
         setApiUrl(normalized.apiUrl);
-        loadBranding(normalized.apiUrl);
-      })
-      .catch(() => undefined);
+        setEmail(normalized.user.email);
+        if (normalized.apiUrl !== stored.apiUrl) await saveStoredSession(normalized);
+
+        if (enabled) {
+          setPendingBiometricSession(normalized);
+          if (!support.available) return;
+          if (!(await authenticateWithBiometrics('Confirme sua identidade para entrar'))) return;
+        }
+        const renewed = await renewStoredSession(normalized);
+        if (renewed) activateSession(renewed);
+      } catch {
+        // Mantém a tela de login utilizável mesmo se o armazenamento local falhar.
+      } finally {
+        setRestoringSession(false);
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -188,6 +268,42 @@ function AppInner() {
   useEffect(() => {
     if (session) void loadAll();
   }, [session?.token]);
+
+  useEffect(() => {
+    if (!session?.refreshToken) {
+      setTokenRefreshHandler(null);
+      return;
+    }
+    setTokenRefreshHandler(async (expiredToken) => {
+      // Outra requisição pode já ter renovado a sessão enquanto esta aguardava.
+      if (expiredToken !== sessionTokenRef.current) return sessionTokenRef.current;
+      try {
+        const data = await request<{
+          accessToken: string;
+          refreshToken: string;
+          refreshExpiresAt: string;
+          user: User;
+        }>(session.apiUrl, '/auth/refresh', undefined, {
+          method: 'POST',
+          body: JSON.stringify({ refreshToken: session.refreshToken }),
+        });
+        const renewed: Session = {
+          ...session,
+          token: data.accessToken,
+          refreshToken: data.refreshToken,
+          refreshExpiresAt: data.refreshExpiresAt,
+          user: data.user,
+        };
+        await saveStoredSession(renewed);
+        sessionTokenRef.current = renewed.token;
+        setSession(renewed);
+        return renewed.token;
+      } catch {
+        return null;
+      }
+    });
+    return () => setTokenRefreshHandler(null);
+  }, [session?.token, session?.refreshToken, session?.apiUrl]);
 
   useEffect(() => {
     if (!session) { setCanManageAlarms(false); return; }
@@ -221,7 +337,7 @@ function AppInner() {
     const controller = new AbortController();
     let disposed = false;
     setUnauthorizedHandler((requestToken) => {
-      if (requestToken === sessionTokenRef.current) void logout();
+      if (requestToken === sessionTokenRef.current) void logout(false);
     });
     void registerForPush(session.apiUrl, session.token, controller.signal).then((expoToken) => {
       if (disposed && expoToken) void unregisterFromPush(session.apiUrl, session.token, expoToken);
@@ -299,19 +415,48 @@ function AppInner() {
     try {
       const nextApiUrl = cleanApiUrl(apiUrl);
       if (!nextApiUrl) throw new Error('Informe a URL da API no campo "Servidor".');
-      const data = await request<{ accessToken: string; user: User }>(nextApiUrl, '/auth/login', undefined, {
+      const data = await request<{
+        accessToken: string;
+        refreshToken: string;
+        refreshExpiresAt: string;
+        user: User;
+      }>(nextApiUrl, '/auth/login', undefined, {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       });
-      const nextSession = { apiUrl: nextApiUrl, token: data.accessToken, user: data.user };
+      const nextSession: Session = {
+        apiUrl: nextApiUrl,
+        token: data.accessToken,
+        refreshToken: data.refreshToken,
+        refreshExpiresAt: data.refreshExpiresAt,
+        user: data.user,
+      };
       await saveStoredSession(nextSession);
       clearStreamUrlsCache();
-      sessionTokenRef.current = nextSession.token;
-      setSession(nextSession);
+      activateSession(nextSession);
       setPassword('');
       // Aplica a marca da instalação que acabou de logar (caso o servidor não
       // estivesse embutido no APK, ex.: app DRAC padrão apontando p/ um cliente).
       loadBranding(nextApiUrl);
+      if (biometricAvailable && !biometricEnabled) {
+        Alert.alert(
+          'Ativar acesso por biometria?',
+          `Nos próximos acessos, use ${biometricLabel.toLowerCase()} sem digitar a senha.`,
+          [
+            { text: 'Agora não', style: 'cancel' },
+            {
+              text: 'Ativar',
+              onPress: () => {
+                void (async () => {
+                  if (!(await authenticateWithBiometrics('Confirme a biometria para ativar'))) return;
+                  await setBiometricLoginEnabled(true);
+                  setBiometricEnabled(true);
+                })();
+              },
+            },
+          ],
+        );
+      }
     } catch (error) {
       Alert.alert('Falha no login', error instanceof Error ? error.message : 'Não foi possível entrar.');
     } finally {
@@ -344,11 +489,12 @@ function AppInner() {
     );
   };
 
-  const logout = async () => {
+  const logout = async (revokeServer = true) => {
     const previous = session;
     void stopActiveClip(true);
     sessionTokenRef.current = null;
     setUnauthorizedHandler(null);
+    setTokenRefreshHandler(null);
     clearStreamUrlsCache();
     setSession(null);
     setCameras([]);
@@ -382,7 +528,30 @@ function AppInner() {
     setRefreshing(false);
     setLastSyncError(null);
     await clearStoredSession();
-    if (previous) void unregisterFromPush(previous.apiUrl, previous.token);
+    if (previous) {
+      void unregisterFromPush(previous.apiUrl, previous.token);
+      if (revokeServer) {
+        void request(previous.apiUrl, '/auth/logout', previous.token, { method: 'POST' }).catch(() => undefined);
+      }
+    }
+  };
+
+  const changeBiometricPreference = async (enabled: boolean) => {
+    if (!enabled) {
+      await setBiometricLoginEnabled(false);
+      setBiometricEnabled(false);
+      return;
+    }
+    const support = await getBiometricSupport().catch(() => ({ available: false, label: 'Biometria' }));
+    setBiometricAvailable(support.available);
+    setBiometricLabel(support.label);
+    if (!support.available) {
+      Alert.alert('Biometria indisponível', 'Cadastre uma impressão digital ou reconhecimento facial nos ajustes do aparelho.');
+      return;
+    }
+    if (!(await authenticateWithBiometrics('Confirme a biometria para ativar'))) return;
+    await setBiometricLoginEnabled(true);
+    setBiometricEnabled(true);
   };
 
   const loadAll = async (quiet = false) => {
@@ -407,7 +576,7 @@ function AppInner() {
       const isAuthError = status === 401 || /\b401\b|unauthorized|não autorizado/i.test(message);
       setLastSyncError(isAuthError ? 'Sessão expirada. Entre novamente.' : `Servidor indisponível: ${message}`);
       if (isAuthError) {
-        await logout();
+        await logout(false);
         Alert.alert('Sessão expirada', 'Sua sessão expirou. Entre novamente para continuar.');
       } else if (!quiet) {
         Alert.alert('Falha ao carregar', message);
@@ -1114,6 +1283,15 @@ function AppInner() {
     return () => clearInterval(timer);
   }, [session?.token, capabilities.playback, liveCamera?.id, tab]);
 
+  if (restoringSession) {
+    return (
+      <SafeAreaView style={[styles.screen, styles.restoring, { backgroundColor: theme.bg }]}>
+        <StatusBar style={statusBarStyle} />
+        <ActivityIndicator size="large" color={theme.accent} />
+      </SafeAreaView>
+    );
+  }
+
   if (!session) {
     return (
       <SafeAreaView style={[styles.screen, { backgroundColor: theme.bg }]}>
@@ -1128,6 +1306,9 @@ function AppInner() {
           onPasswordChange={setPassword}
           onSubmit={login}
           onForgotPassword={forgotPassword}
+          biometricLabel={biometricLabel}
+          biometricAvailable={Boolean(pendingBiometricSession && biometricEnabled && biometricAvailable)}
+          onBiometric={() => { void unlockPendingSession(); }}
         />
       </SafeAreaView>
     );
@@ -1212,11 +1393,14 @@ function AppInner() {
             user={session.user}
             streamPosters={streamPosters}
             operationalMessages={operationalMessages}
+            alarms={alarms}
             alarmCount={openAlarmCount}
             refreshing={refreshing}
             onRefresh={loadAll}
             onOpenCamera={openLive}
             onOpenAlarms={() => setTab('alarmes')}
+            onOpenMosaic={() => setTab('mosaico')}
+            onOpenPlayback={() => setTab('reproducao')}
             onPosterError={(cameraId) => { void refreshPoster(cameraId); }}
           />
         )}
@@ -1281,7 +1465,16 @@ function AppInner() {
         )}
 
         {tab === 'ajustes' && (
-          <SettingsScreen user={session.user} apiUrl={session.apiUrl} connected={!lastSyncError} onLogout={logout} />
+          <SettingsScreen
+            user={session.user}
+            apiUrl={session.apiUrl}
+            connected={!lastSyncError}
+            biometricAvailable={biometricAvailable}
+            biometricEnabled={biometricEnabled}
+            biometricLabel={biometricLabel}
+            onBiometricChange={(enabled) => { void changeBiometricPreference(enabled); }}
+            onLogout={() => { void logout(); }}
+          />
         )}
       </View>
 
@@ -1299,5 +1492,6 @@ function AppInner() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
+  restoring: { alignItems: 'center', justifyContent: 'center' },
   body: { flex: 1 },
 });

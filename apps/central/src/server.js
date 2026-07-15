@@ -44,6 +44,7 @@ const ALLOWED_ORIGINS = String(process.env.DRAC_CENTRAL_ALLOWED_ORIGINS || '*')
   .map((origin) => origin.trim())
   .filter(Boolean);
 const loginAttempts = new Map();
+const MAX_REQUEST_BODY_BYTES = Math.max(16 * 1024, Number(process.env.DRAC_CENTRAL_MAX_BODY_BYTES || 1024 * 1024));
 
 // Build-agent (gera os APKs white-label). Roda no HOST; a Central fala com ele
 // pela gateway da bridge Docker. Token compartilhado (nunca exposto ao browser).
@@ -102,7 +103,16 @@ function empty(req, res, statusCode, extraHeaders = {}) {
 
 async function readBody(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > MAX_REQUEST_BODY_BYTES) {
+      const error = new Error('Corpo da requisição excede o limite permitido.');
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   const raw = Buffer.concat(chunks).toString('utf8');
   if (!raw.trim()) return {};
   return JSON.parse(raw);
@@ -192,10 +202,18 @@ function verifyPassword(password, encodedHash) {
 }
 
 function hashPassword(password) {
-  const iterations = 210000;
+  const iterations = 600000;
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.pbkdf2Sync(String(password || ''), salt, iterations, 32, 'sha256').toString('hex');
   return `pbkdf2_sha256$${iterations}$${salt}$${hash}`;
+}
+
+function isStrongPassword(password) {
+  const value = String(password || '');
+  return value.length >= 12
+    && /[a-z]/.test(value)
+    && /[A-Z]/.test(value)
+    && /\d/.test(value);
 }
 
 // Autentica contra o admin do .env OU um usuário cadastrado (db.users).
@@ -968,6 +986,17 @@ async function agentFetch(pathname, init = {}) {
   return { status: res.status, data };
 }
 
+async function artifactFetch(pathname) {
+  try {
+    return await fetch(`${APK_SOURCE_BASE}${pathname}`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (error) {
+    console.error(`[central] fonte de artefatos indisponível para ${pathname}:`, error?.cause?.code || error?.name || 'fetch_failed');
+    return null;
+  }
+}
+
 // ── Geração automática de app por cliente ────────────────────────────────────
 function clientIp(req) {
   const xff = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
@@ -1311,7 +1340,7 @@ async function handleUpsertUser(req, res, db, actor) {
   const password = String(body.password || '');
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json(req, res, 400, { error: 'invalid_email', message: 'E-mail inválido.' });
   if (email === ADMIN_EMAIL) return json(req, res, 400, { error: 'reserved_email', message: 'Este e-mail é o administrador do sistema (definido no servidor) e não é editável aqui.' });
-  if (password && password.length < 8) return json(req, res, 400, { error: 'weak_password', message: 'A senha precisa ter ao menos 8 caracteres.' });
+  if (password && !isStrongPassword(password)) return json(req, res, 400, { error: 'weak_password', message: 'Use ao menos 12 caracteres, com maiúscula, minúscula e número.' });
   db.users = db.users || {};
   const existing = db.users[email];
   if (!existing && !password) return json(req, res, 400, { error: 'password_required', message: 'Defina uma senha para o novo usuário.' });
@@ -1454,7 +1483,10 @@ async function route(req, res) {
         const inst = db.installations[slug];
         const filename = safeApkFilename(inst ? effectiveAppName(inst) : slug);
         await saveDb(db);
-        const upstream = await fetch(`${APK_SOURCE_BASE}/apk/drac-${encodeURIComponent(slug)}.apk`);
+        const upstream = await artifactFetch(`/apk/drac-${encodeURIComponent(slug)}.apk`);
+        if (!upstream) {
+          return json(req, res, 502, { error: 'artifact_source_unavailable', message: 'Servidor de arquivos temporariamente indisponível. Tente novamente em instantes.' });
+        }
         if (!upstream.ok || !upstream.body) {
           return json(req, res, 404, { error: 'apk_not_found', message: 'APK ainda não gerado para este cliente.' });
         }
@@ -1476,7 +1508,10 @@ async function route(req, res) {
         const inst = db.installations[slug];
         const base = safeApkFilename(inst ? effectiveAppName(inst) : slug).replace(/\.apk$/i, '');
         await saveDb(db);
-        const upstream = await fetch(`${APK_SOURCE_BASE}/apk/drac-${encodeURIComponent(slug)}.aab`);
+        const upstream = await artifactFetch(`/apk/drac-${encodeURIComponent(slug)}.aab`);
+        if (!upstream) {
+          return json(req, res, 502, { error: 'artifact_source_unavailable', message: 'Servidor de arquivos temporariamente indisponível. Tente novamente em instantes.' });
+        }
         if (!upstream.ok || !upstream.body) {
           return json(req, res, 404, { error: 'aab_not_found', message: 'AAB (Play Store) ainda não gerado. Gere/atualize o app.' });
         }
@@ -1497,7 +1532,10 @@ async function route(req, res) {
         const inst = db.installations[slug];
         const base = safeApkFilename(inst ? effectiveAppName(inst) : slug).replace(/\.apk$/i, '');
         await saveDb(db);
-        const upstream = await fetch(`${APK_SOURCE_BASE}/apk/drac-${encodeURIComponent(slug)}-playstore-kit.zip`);
+        const upstream = await artifactFetch(`/apk/drac-${encodeURIComponent(slug)}-playstore-kit.zip`);
+        if (!upstream) {
+          return json(req, res, 502, { error: 'artifact_source_unavailable', message: 'Servidor de arquivos temporariamente indisponível. Tente novamente em instantes.' });
+        }
         if (!upstream.ok || !upstream.body) {
           return json(req, res, 404, { error: 'kit_not_found', message: 'Kit Play Store ainda não gerado. Gere/atualize o app.' });
         }
@@ -1637,7 +1675,11 @@ async function route(req, res) {
     return serveStatic(req, res);
   } catch (error) {
     console.error(error);
-    return json(req, res, 500, { error: 'internal_error', message: error.message });
+    const statusCode = Number(error?.statusCode) || 500;
+    return json(req, res, statusCode, {
+      error: statusCode === 413 ? 'payload_too_large' : 'internal_error',
+      message: statusCode === 413 ? error.message : 'Falha interna no servidor.',
+    });
   }
 }
 
@@ -1664,7 +1706,8 @@ function runSerialized(task) {
   return p;
 }
 
-http.createServer((req, res) => {
+function startServer() {
+  return http.createServer((req, res) => {
   // route() é async; sem este .catch, uma rejeição (ex.: loadDb) escapava como
   // unhandledRejection. Aqui garantimos uma resposta 500 e seguimos vivos.
   const url = req.url || '';
@@ -1678,6 +1721,19 @@ http.createServer((req, res) => {
       else res.end();
     } catch { /* resposta já encerrada */ }
   });
-}).listen(PORT, HOST, () => {
-  console.log(`DRAC Central ouvindo em http://${HOST}:${PORT}`);
-});
+  }).listen(PORT, HOST, () => {
+    console.log(`DRAC Central ouvindo em http://${HOST}:${PORT}`);
+  });
+}
+
+if (require.main === module) startServer();
+
+module.exports = {
+  hashPassword,
+  isStrongPassword,
+  normalizeDb,
+  parseDbText,
+  runSerialized,
+  startServer,
+  verifyPassword,
+};

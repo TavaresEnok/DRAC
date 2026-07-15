@@ -4,6 +4,7 @@ import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'r
 import { CameraTile } from '../components/CameraTile';
 import { GroupEditorSheet } from '../components/GroupEditorSheet';
 import { Icon } from '../components/Icon';
+import { CameraGridSkeleton } from '../components/Skeleton';
 import { LiveVideo } from '../components/VideoPlayers';
 import { useLibrary } from '../state/LibraryProvider';
 import { useTheme } from '../theme/ThemeProvider';
@@ -117,7 +118,9 @@ export function MosaicScreen({
         </View>
       ) : null}
 
-      {list.length === 0 ? (
+      {refreshing && cameras.length === 0 ? (
+        <CameraGridSkeleton />
+      ) : list.length === 0 ? (
         <Text style={[styles.emptyHint, { color: theme.textMuted }]}>
           {selected === 'all' ? 'Nenhuma câmera disponível.' : 'Este grupo está vazio. Toque em "Editar grupo" para adicionar câmeras.'}
         </Text>

@@ -1,10 +1,13 @@
+/// <reference types="node" />
 import { formatBytes, formatDateLabel, formatDuration, formatResolution, formatTime, isOnline, localDateKey, localDayIsoRange } from '../src/utils/format';
-import { normalizeServerUrl, request, setUnauthorizedHandler } from '../src/services/api';
+import { normalizeServerUrl, request, setTokenRefreshHandler, setUnauthorizedHandler } from '../src/services/api';
 import { authenticatedMediaUrl, isSecureMediaUrl } from '../src/services/media-urls';
 import { computeDetectionRect } from '../src/utils/detection-geometry';
+import { matchesPlaybackFilter, recordingKind, timelineRange } from '../src/utils/playback';
 import { contrastRatio, ensureReadableText, fetchBranding } from '../src/services/branding';
 import { clearStreamUrlsCache, requestCachedStreamUrls } from '../src/services/stream-urls-cache';
-import type { Camera } from '../src/types';
+import type { Camera, Recording } from '../src/types';
+import { readFileSync } from 'node:fs';
 
 type TestCase = { name: string; fn: () => void | Promise<void> };
 const tests: TestCase[] = [];
@@ -26,10 +29,33 @@ test('formatters: tempo, duração, bytes e resolução', () => {
   assert(formatResolution({ detectedWidth: 1920, detectedHeight: 1080, detectedFps: 30 } as Camera) === '1920x1080 @ 30 FPS', 'formatResolution deve incluir FPS');
 });
 
+test('android security: build bloqueia permissões e backup inseguros', () => {
+  const base = JSON.parse(readFileSync('app.base.json', 'utf8')).expo;
+  const blocked = new Set<string>(base.android?.blockedPermissions ?? []);
+  assert(blocked.has('android.permission.SYSTEM_ALERT_WINDOW'), 'overlay deve estar bloqueado');
+  assert(blocked.has('android.permission.WRITE_EXTERNAL_STORAGE'), 'storage legado deve estar bloqueado');
+  assert((base.plugins ?? []).includes('./plugins/withAndroidSecurity'), 'plugin de hardening deve executar em todo prebuild');
+  const plugin = readFileSync('plugins/withAndroidSecurity.js', 'utf8');
+  assert(plugin.includes("android:allowBackup'] = 'false'"), 'backup Android deve ser desativado');
+  assert(plugin.includes("android:requestLegacyExternalStorage'] = 'false'"), 'storage legado deve ser desativado');
+});
+
 test('formatDateLabel: hoje e data histórica', () => {
   const today = localDateKey();
   assert(formatDateLabel(today) === 'Hoje', 'data atual deve ser Hoje');
   assert(formatDateLabel('2026-05-20').includes('20'), 'data histórica deve conter dia');
+});
+
+test('playback: filtra origem da gravação e calcula posição na linha do tempo', () => {
+  const motion = { id: '1', cameraId: 'c1', startedAt: '2026-07-14T06:00:00', durationSeconds: 60, triggerMode: 'motion', fileUsable: true } as Recording;
+  const unavailable = { ...motion, id: '2', triggerMode: 'continuous', fileUsable: false } as Recording;
+  assert(recordingKind(motion) === 'motion', 'modo motion deve ser reconhecido');
+  assert(matchesPlaybackFilter(motion, 'motion'), 'gravação de movimento deve passar no filtro');
+  assert(!matchesPlaybackFilter(unavailable, 'continuous'), 'arquivo indisponível não deve aparecer como contínuo disponível');
+  assert(matchesPlaybackFilter(unavailable, 'unavailable'), 'arquivo ausente deve aparecer em indisponíveis');
+  const range = timelineRange(motion);
+  assert(Math.abs(range.left - 25) < 0.01, `06:00 deve ficar em 25% do dia (got ${range.left})`);
+  assert(range.width >= 0.45, 'trechos curtos devem continuar tocáveis e visíveis');
 });
 
 test('localDateKey: usa componentes locais sem converter para UTC', () => {
@@ -216,6 +242,32 @@ test('api 401: SEM token (login) NÃO dispara o handler', async () => {
     assert(fired === 0, `handler NÃO deve disparar em 401 sem token (got ${fired})`);
   } finally {
     globalThis.fetch = originalFetch;
+    setUnauthorizedHandler(null);
+  }
+});
+
+test('api 401: renova o token e repete a requisição sem desconectar', async () => {
+  const originalFetch = globalThis.fetch;
+  const authorizations: string[] = [];
+  let unauthorized = 0;
+  setUnauthorizedHandler(() => { unauthorized += 1; });
+  setTokenRefreshHandler(async (expired) => expired === 'token-antigo' ? 'token-novo' : null);
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const authorization = (init?.headers as Record<string, string> | undefined)?.Authorization ?? '';
+    authorizations.push(authorization);
+    if (authorization === 'Bearer token-antigo') {
+      return new Response(JSON.stringify({ message: 'expired' }), { status: 401 });
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    const result = await request<{ ok: boolean }>('http://x', '/cameras', 'token-antigo');
+    assert(result.ok === true, 'requisição repetida deve ter sucesso');
+    assert(authorizations.join(',') === 'Bearer token-antigo,Bearer token-novo', 'deve repetir com o token renovado');
+    assert(unauthorized === 0, 'renovação bem-sucedida não deve desconectar');
+  } finally {
+    globalThis.fetch = originalFetch;
+    setTokenRefreshHandler(null);
     setUnauthorizedHandler(null);
   }
 });

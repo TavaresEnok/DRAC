@@ -4,11 +4,22 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 // qualquer requisição AUTENTICADA que receba 401 dispara o logout gracioso, em
 // vez de deixar o app preso mostrando telas vazias com um token morto.
 let unauthorizedHandler: ((requestToken?: string) => void) | null = null;
+let tokenRefreshHandler: ((expiredToken: string) => Promise<string | null>) | null = null;
+let tokenRefreshInFlight: Promise<string | null> | null = null;
 export function setUnauthorizedHandler(handler: ((requestToken?: string) => void) | null) {
   unauthorizedHandler = handler;
 }
 
+export function setTokenRefreshHandler(handler: ((expiredToken: string) => Promise<string | null>) | null) {
+  tokenRefreshHandler = handler;
+  if (!handler) tokenRefreshInFlight = null;
+}
+
 export async function request<T>(apiUrl: string, path: string, token?: string, init?: RequestInit): Promise<T> {
+  return requestInternal<T>(apiUrl, path, token, init, true);
+}
+
+async function requestInternal<T>(apiUrl: string, path: string, token: string | undefined, init: RequestInit | undefined, allowRefresh: boolean): Promise<T> {
   const controller = new AbortController();
   const externalSignal = init?.signal;
   const abortFromExternal = () => controller.abort();
@@ -33,8 +44,17 @@ export async function request<T>(apiUrl: string, path: string, token?: string, i
       catch { data = { message: text.slice(0, 300) }; }
     }
     if (!response.ok) {
-      // 401 numa requisição AUTENTICADA = token expirado/revogado → logout gracioso.
-      // (No login não há token, então senha errada não dispara isto.)
+      if (response.status === 401 && token && allowRefresh && tokenRefreshHandler) {
+        tokenRefreshInFlight ??= tokenRefreshHandler(token).finally(() => {
+          tokenRefreshInFlight = null;
+        });
+        const refreshedToken = await tokenRefreshInFlight;
+        if (refreshedToken) {
+          return requestInternal<T>(apiUrl, path, refreshedToken, init, false);
+        }
+      }
+      // Só desconecta depois que a renovação automática falhou. Login sem token
+      // continua sem disparar o handler.
       if (response.status === 401 && token) {
         unauthorizedHandler?.(token);
       }

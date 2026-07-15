@@ -148,6 +148,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     environment:
+      - NODE_ENV=production
       - DATABASE_URL=postgresql://${POSTGRES_USER:-vms}:${POSTGRES_PASSWORD:-change_me_postgres_password}@postgres:5432/${POSTGRES_DB:-vms_db}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -158,6 +159,7 @@ services:
       - COOKIE_SECURE=${COOKIE_SECURE:-}
       - TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS:-0}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - AUTH_REFRESH_INACTIVITY_DAYS=${AUTH_REFRESH_INACTIVITY_DAYS:-7}
       - CAMERA_SECRET_KEY=${CAMERA_SECRET_KEY:?CAMERA_SECRET_KEY is required}
       - CAMERA_SECRET_KEY_LEGACY=${CAMERA_SECRET_KEY_LEGACY:-}
       - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is required}
@@ -179,6 +181,9 @@ services:
       - RECORDING_DISK_GUARD_ENABLED=${RECORDING_DISK_GUARD_ENABLED:-true}
       - RECORDING_DISK_GUARD_INTERVAL_MS=${RECORDING_DISK_GUARD_INTERVAL_MS:-30000}
       - RECORDING_DISK_GUARD_MAX_USED_PERCENT=${RECORDING_DISK_GUARD_MAX_USED_PERCENT:-92}
+      - MOTION_RECORDING_POST_ROLL_SECONDS=${MOTION_RECORDING_POST_ROLL_SECONDS:-90}
+      - MOTION_RECORDING_SEGMENT_SECONDS=${MOTION_RECORDING_SEGMENT_SECONDS:-120}
+      - MOTION_ALARM_QUIET_SECONDS=${MOTION_ALARM_QUIET_SECONDS:-300}
       - FFMPEG_RECORDING_CODEC_MODE=${FFMPEG_RECORDING_CODEC_MODE:-copy}
       - RETENTION_DAYS=${RETENTION_DAYS:-7}
       - RECORDING_RETENTION_DAYS=${RECORDING_RETENTION_DAYS:-7}
@@ -323,6 +328,7 @@ services:
       - GENERAL_DETECTION_FPS=${GENERAL_DETECTION_FPS:-4.0}
       - GENERAL_MOTION_TRIGGER=${GENERAL_MOTION_TRIGGER:-SYSTEM}
       - GENERAL_EVENT_DEBOUNCE_SECONDS=${GENERAL_EVENT_DEBOUNCE_SECONDS:-10}
+      - MOTION_EVENT_DEBOUNCE_SECONDS=${MOTION_EVENT_DEBOUNCE_SECONDS:-45}
       - GENERAL_CLASSES=${GENERAL_CLASSES:-person,bicycle,car,motorcycle,bus}
       - GENERAL_CLASS_IDS=${GENERAL_CLASS_IDS:-0,1,2,3,5}
       - GENERAL_CONFIDENCE_PERSON=${GENERAL_CONFIDENCE_PERSON:-0.30}
@@ -412,6 +418,17 @@ services:
     image: bluenviron/mediamtx:1-ffmpeg
     container_name: vms-mediamtx
     restart: unless-stopped
+    # PORTAS (não deixar só no docker-compose.dev.yml — recriar o container sem o override
+    # dropava estas portas e derrubava o /live inteiro: nginx batia em porta morta → 502 →
+    # câmeras eternas em "conectando..."). HLS e WebRTC-signaling ficam só em loopback; quem
+    # expõe ao mundo é o nginx (HTTPS) via /hls/ e /webrtc/. RTSP (8554) e API (9997) seguem
+    # internos à rede docker (api/ai-service/gravação alcançam por rtsp://mediamtx / :9997).
+    ports:
+      - "127.0.0.1:8888:8888"   # HLS  → nginx /hls/
+      - "127.0.0.1:8889:8889"   # WebRTC WHEP (signaling) → nginx /webrtc/
+      # Mídia WebRTC (ICE/UDP): PRECISA ser pública — o browser conecta direto no IP anunciado
+      # (mediamtx.yml webrtcAdditionalHosts) nesta porta. Sem ela o vídeo WebRTC não flui.
+      - "8189:8189/udp"
     # init: roda o tini como PID 1, que COLHE processos zumbis. Sem isto o MediaMTX
     # (PID 1) não faz reaping e cada ffmpeg de restream órfão vira zumbi que acumula
     # para sempre (já observado: centenas). Em escala isso esgota a tabela de PIDs.

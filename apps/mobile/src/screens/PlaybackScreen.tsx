@@ -1,13 +1,22 @@
 /** Reprodução paginada: player, filtros e lista virtualizada de gravações. */
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Icon } from '../components/Icon';
+import { SkeletonBlock } from '../components/Skeleton';
 import { PlaybackVideo } from '../components/VideoPlayers';
 import { useTheme } from '../theme/ThemeProvider';
 import type { ActivePlayback, Camera, Recording } from '../types';
 import { areaLabel, isOnlineStatus, tintFor } from '../utils/camera-view';
 import { formatBytes, formatDateLabel, formatDuration, formatTime, localDateKey } from '../utils/format';
+import { matchesPlaybackFilter, recordingKind, timelineRange, type PlaybackFilter } from '../utils/playback';
+
+const FILTERS: Array<{ key: PlaybackFilter; label: string }> = [
+  { key: 'all', label: 'Todas' },
+  { key: 'motion', label: 'Movimento' },
+  { key: 'continuous', label: 'Contínuas' },
+  { key: 'unavailable', label: 'Indisponíveis' },
+];
 
 interface PlaybackScreenProps {
   cameras: Camera[];
@@ -42,8 +51,11 @@ export function PlaybackScreen({
 }: PlaybackScreenProps) {
   const { theme } = useTheme();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [filter, setFilter] = useState<PlaybackFilter>('all');
   const isToday = recordingDate >= localDateKey();
   const playerPoster = activePlayback?.recording.thumbnailUrl ?? recordings[0]?.thumbnailUrl ?? null;
+  const filteredRecordings = useMemo(() => recordings.filter((recording) => matchesPlaybackFilter(recording, filter)), [recordings, filter]);
+  const filterCounts = useMemo(() => Object.fromEntries(FILTERS.map(({ key }) => [key, recordings.filter((recording) => matchesPlaybackFilter(recording, key)).length])), [recordings]);
 
   const header = (
     <View style={styles.headerContent}>
@@ -119,15 +131,66 @@ export function PlaybackScreen({
         </Pressable>
       </View>
 
+      <View style={[styles.timelineCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+        <View style={styles.timelineHeader}>
+          <Text style={[styles.timelineTitle, { color: theme.text }]}>Linha do tempo · 24 horas</Text>
+          <Text style={[styles.timelineHint, { color: theme.textSub }]}>toque no trecho para abrir</Text>
+        </View>
+        <View style={[styles.timelineTrack, { backgroundColor: theme.surfaceAlt }]}>
+          {[25, 50, 75].map((left) => <View key={left} style={[styles.timelineGridLine, { left: `${left}%`, backgroundColor: theme.border }]} />)}
+          {recordings.map((recording) => {
+            const range = timelineRange(recording);
+            const kind = recordingKind(recording);
+            const usable = recording.fileUsable !== false && recording.fileExists !== false;
+            const color = !usable ? theme.textMuted : kind === 'motion' ? theme.danger : kind === 'continuous' ? theme.accent : theme.warning;
+            return (
+              <Pressable
+                key={recording.id}
+                onPress={() => usable && onOpenPlayback(recording)}
+                disabled={!usable}
+                accessibilityRole="button"
+                accessibilityLabel={`Gravação às ${formatTime(recording.startedAt)}`}
+                style={[styles.timelineSegment, { left: `${range.left}%`, width: `${range.width}%`, backgroundColor: color }]}
+              />
+            );
+          })}
+        </View>
+        <View style={styles.timelineLabels}>
+          {['00h', '06h', '12h', '18h', '24h'].map((label) => <Text key={label} style={[styles.timelineLabel, { color: theme.textMuted }]}>{label}</Text>)}
+        </View>
+      </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
+        {FILTERS.map(({ key, label }) => {
+          const selected = filter === key;
+          return (
+            <Pressable
+              key={key}
+              onPress={() => setFilter(key)}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              style={[styles.filterChip, { backgroundColor: selected ? theme.accent : theme.surface, borderColor: selected ? theme.accent : theme.border }]}
+            >
+              <Text style={[styles.filterText, { color: selected ? theme.textOnAccent : theme.textSub }]}>{label}</Text>
+              <Text style={[styles.filterCount, { color: selected ? theme.textOnAccent : theme.textMuted }]}>{filterCounts[key] ?? 0}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
       <View style={styles.listHeading}>
         <Text style={[styles.listTitle, { color: theme.bgText }]}>Gravações</Text>
         <Text style={[styles.listCount, { color: theme.textSub }]}>
-          {recordingsTotal > recordings.length ? `${recordings.length} de ${recordingsTotal}` : recordings.length}
+          {filter === 'all' && recordingsTotal > recordings.length ? `${recordings.length} de ${recordingsTotal}` : filteredRecordings.length}
         </Text>
       </View>
 
-      {loading ? (
-        <View style={styles.stateRow}><ActivityIndicator color={theme.accent} /><Text style={[styles.stateText, { color: theme.textSub }]}>Carregando gravações…</Text></View>
+      {loading && recordings.length === 0 ? (
+        <View style={styles.loadingSkeleton}>
+          <SkeletonBlock style={{ height: 68 }} />
+          <SkeletonBlock style={{ height: 68 }} />
+          <SkeletonBlock style={{ height: 68 }} />
+        </View>
       ) : null}
       {error && !loading ? (
         <View style={[styles.errorBox, { backgroundColor: theme.surface, borderColor: theme.border }]}>
@@ -145,7 +208,7 @@ export function PlaybackScreen({
   return (
     <View style={{ flex: 1 }}>
       <FlatList
-        data={recordings}
+        data={filteredRecordings}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
@@ -205,7 +268,7 @@ export function PlaybackScreen({
         ListEmptyComponent={!loading && !error ? (
           <View style={[styles.empty, { borderColor: theme.border }]}>
             <Text style={[styles.emptyText, { color: theme.textSub }]}>
-              {selectedCamera ? 'Nenhuma gravação neste dia.' : 'Selecione uma câmera para ver as gravações.'}
+              {selectedCamera ? (filter === 'all' ? 'Nenhuma gravação neste dia.' : 'Nenhuma gravação corresponde a este filtro.') : 'Selecione uma câmera para ver as gravações.'}
             </Text>
           </View>
         ) : null}
@@ -263,11 +326,25 @@ const styles = StyleSheet.create({
   dayNav: { width: 46, height: 44, borderRadius: 13, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
   dayPill: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 13, borderWidth: StyleSheet.hairlineWidth },
   dayPillText: { fontSize: 14, fontWeight: '800' },
+  timelineCard: { borderRadius: 15, borderWidth: StyleSheet.hairlineWidth, padding: 13 },
+  timelineHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 },
+  timelineTitle: { fontSize: 11.5, fontWeight: '800' },
+  timelineHint: { fontSize: 9.5, fontWeight: '600' },
+  timelineTrack: { height: 22, borderRadius: 7, overflow: 'hidden', position: 'relative' },
+  timelineGridLine: { position: 'absolute', top: 0, bottom: 0, width: StyleSheet.hairlineWidth },
+  timelineSegment: { position: 'absolute', top: 3, bottom: 3, borderRadius: 4, minWidth: 2 },
+  timelineLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 5 },
+  timelineLabel: { fontSize: 8.5, fontWeight: '700' },
+  filters: { gap: 7, paddingRight: 4 },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 7, paddingHorizontal: 11 },
+  filterText: { fontSize: 11, fontWeight: '800' },
+  filterCount: { fontSize: 9.5, fontWeight: '900' },
   listHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   listTitle: { fontSize: 14, fontWeight: '800' },
   listCount: { fontSize: 11.5, fontWeight: '700' },
   stateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 16 },
   stateText: { fontSize: 12.5, fontWeight: '600' },
+  loadingSkeleton: { gap: 9 },
   errorBox: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, padding: 14, gap: 12, alignItems: 'flex-start' },
   errorText: { fontSize: 12.5, fontWeight: '600', lineHeight: 18 },
   retryButton: { borderRadius: 10, paddingHorizontal: 13, paddingVertical: 8 },

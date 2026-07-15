@@ -98,7 +98,6 @@ export default function LoginPage() {
   const [, setLocation] = useLocation();
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const facilityName = useBrandingStore((state) => state.facilityName);
-  const logoDataUrl = useBrandingStore((state) => state.logoDataUrl);
 
   const getLoginErrorMessage = (err: unknown) => {
     if (!axios.isAxiosError(err)) return 'Não foi possível autenticar agora. Tente novamente.';
@@ -177,7 +176,7 @@ export default function LoginPage() {
               className="relative flex h-full w-full items-center justify-center overflow-hidden"
               style={{ borderRadius: 17, background: 'linear-gradient(150deg, var(--acc-dim), transparent)', border: '1px solid var(--acc-bdr)' }}
             >
-              {logoDataUrl ? <img src={logoDataUrl} alt="" className="h-12 w-12 object-contain" /> : <LogoDrac size={30} />}
+              <LogoDrac size={30} />
             </div>
           </div>
           <h1 className="text-[23px] font-bold" style={{ color: 'var(--tx)', letterSpacing: '-0.01em' }}>{facilityName}</h1>

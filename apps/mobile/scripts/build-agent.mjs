@@ -124,8 +124,8 @@ function ffmpegConvert(args) {
   return { ok: r.status === 0, stderr: r.stderr ? r.stderr.toString() : '' };
 }
 
-// Converte o logo do cliente em logo.png (tela de login) +
-// icon.png/adaptive-icon.png (ícone do launcher Android — app.config.js já
+// Converte o logo do cliente em logo.png (tela de login) + splash.png (abertura
+// limpa, sem cards) + icon.png/adaptive-icon.png (ícone do launcher Android — app.config.js já
 // sabe usar esses arquivos se existirem, mas antes disso nada os gerava, então
 // o app instalado ficava com o ícone genérico mesmo com o logo aplicado na
 // tela de login).
@@ -156,6 +156,10 @@ function stageClientBranding(logoBase64) {
       '-vf', 'scale=620:620:force_original_aspect_ratio=decrease,pad=1024:1024:(ow-iw)/2:(oh-ih)/2:color=0x00000000',
       '-pix_fmt', 'rgba', path.join(stage, 'adaptive-icon.png')]);
     if (!adaptive.ok) throw new Error(`falha ao gerar ícone adaptativo do app: ${adaptive.stderr.trim().slice(0, 300)}`);
+    const splash = ffmpegConvert(['-y', '-loglevel', 'error', '-i', srcPath,
+      '-vf', 'scale=560:560:force_original_aspect_ratio=decrease,pad=1024:1024:(ow-iw)/2:(oh-ih)/2:color=white',
+      '-pix_fmt', 'rgba', path.join(stage, 'splash.png')]);
+    if (!splash.ok) throw new Error(`falha ao gerar tela de abertura do app: ${splash.stderr.trim().slice(0, 300)}`);
   } catch (e) {
     fs.rmSync(stage, { recursive: true, force: true });
     throw e;
@@ -176,10 +180,14 @@ function writeClient(body) {
   try {
     const dir = path.join(CLIENTS_DIR, slug);
     fs.mkdirSync(dir, { recursive: true });
-    const cfg = { appName, slug: `drac-${slug}`, packageId, apiUrl, primaryColor: body.primaryColor || '#3b82f6' };
+    const cfg = {
+      appName, slug: `drac-${slug}`, packageId, apiUrl,
+      primaryColor: body.primaryColor || '#3b82f6',
+      splashBackgroundColor: '#ffffff',
+    };
     fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2) + '\n');
     if (stage) {
-      for (const name of ['logo.png', 'icon.png', 'adaptive-icon.png']) {
+      for (const name of ['logo.png', 'splash.png', 'icon.png', 'adaptive-icon.png']) {
         fs.copyFileSync(path.join(stage, name), path.join(dir, name));
       }
     }

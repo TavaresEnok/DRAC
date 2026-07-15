@@ -11,6 +11,9 @@
 [Unit]
 Description=DRAC white-label build agent
 After=network.target docker.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -23,8 +26,15 @@ Environment=PUBLIC_APK_BASE=https://ajustcam.ajustconsulting.com.br
 Environment=MIN_FREE_GB=6
 Environment=PATH=/home/flashnet/toolchain/jdk-17.0.19+10/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/local/bin/node /home/flashnet/Drac/apps/mobile/scripts/build-agent.mjs
-Restart=on-failure
 RestartSec=5
+Restart=always
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
 
 [Install]
 WantedBy=multi-user.target

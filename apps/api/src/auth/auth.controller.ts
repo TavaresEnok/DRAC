@@ -7,6 +7,7 @@ import { Public } from './decorators/public.decorator';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { RefreshSessionDto } from './dto/refresh-session.dto';
 import { AuthService } from './auth.service';
 import { type AuthUser } from '../common/types/auth-user.type';
 
@@ -36,6 +37,13 @@ export class AuthController {
       );
       throw error;
     }
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
+  @Post('refresh')
+  refresh(@Body() dto: RefreshSessionDto) {
+    return this.authService.refreshSession(dto.refreshToken);
   }
 
   @Public()

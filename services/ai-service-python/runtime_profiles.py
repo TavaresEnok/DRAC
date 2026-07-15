@@ -70,7 +70,9 @@ MOTION_PROFILE = {
     "motion_pixels_threshold": 1800,
     "motion_min_consecutive_hits": 3,
     "motion_warmup_frames": 60,
-    "event_debounce_seconds": 30,
+    # O primeiro movimento continua imediato; apenas eventos repetidos da mesma
+    # cena são consolidados. Mantém o post-roll da gravação acima deste valor.
+    "event_debounce_seconds": _env_int("MOTION_EVENT_DEBOUNCE_SECONDS", 45),
     "show_after_hits": 1,
     "hide_after_misses": 2,
     "lost_ttl_ms": 600,

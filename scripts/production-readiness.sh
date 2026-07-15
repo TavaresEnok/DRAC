@@ -224,15 +224,12 @@ check_endpoints() {
   check_http "Web local" "http://127.0.0.1:5173/"
 
   if [ "${CLOUD_CONNECTOR_ENABLED:-false}" = "true" ] && [ -n "${CLOUD_API_URL:-}" ]; then
-    if curl_ok "${CLOUD_API_URL%/}/api/health" 8; then
+    if docker exec vms-api node -e 'fetch(process.env.CLOUD_API_URL.replace(/\/$/,"")+"/api/health",{signal:AbortSignal.timeout(8000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(2))' >/dev/null 2>&1; then
       ok "DRAC Central respondeu: ${CLOUD_API_URL%/}/api/health"
     else
       warn "DRAC Central nao respondeu agora: ${CLOUD_API_URL%/}/api/health"
     fi
-    if curl -fsS --max-time 8 \
-      -H "X-DRAC-Installation-Id: ${CLOUD_INSTALLATION_ID:-}" \
-      -H "X-DRAC-License-Key: ${CLOUD_LICENSE_KEY:-}" \
-      "${CLOUD_API_URL%/}/api/agent/status" >/dev/null 2>&1; then
+    if docker exec vms-api node -e 'const base=process.env.CLOUD_API_URL.replace(/\/$/,""); fetch(base+"/api/agent/status",{headers:{"X-DRAC-Installation-Id":process.env.CLOUD_INSTALLATION_ID,"X-DRAC-License-Key":process.env.CLOUD_LICENSE_KEY},signal:AbortSignal.timeout(8000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(2))' >/dev/null 2>&1; then
       ok "Instalacao reconhecida e autenticada pela DRAC Central"
     else
       warn "Central respondeu, mas nao confirmou esta instalacao/licenca em /api/agent/status"
@@ -447,15 +444,10 @@ PY" >/dev/null 2>&1; then
 }
 
 check_mediamtx() {
-  local auth=()
-  if [ -n "${MEDIAMTX_API_USER:-}" ] && [ -n "${MEDIAMTX_API_PASS:-}" ]; then
-    auth=(-u "${MEDIAMTX_API_USER}:${MEDIAMTX_API_PASS}")
-  fi
-
-  if curl -fsS --max-time 8 "${auth[@]}" "http://127.0.0.1:9997/v3/config/global/get" >/dev/null 2>&1; then
-    ok "MediaMTX API respondeu em localhost"
+  if docker exec vms-api node -e 'const u=process.env.MEDIAMTX_API_USER,p=process.env.MEDIAMTX_API_PASS; fetch("http://mediamtx:9997/v3/config/global/get",{headers:{authorization:"Basic "+Buffer.from(u+":"+p).toString("base64")},signal:AbortSignal.timeout(8000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(2))' >/dev/null 2>&1; then
+    ok "MediaMTX API respondeu pela rede interna"
   else
-    warn "MediaMTX API nao respondeu em localhost; validar credenciais/health"
+    warn "MediaMTX API nao respondeu pela rede interna; validar credenciais/health"
   fi
 }
 
@@ -557,6 +549,29 @@ check_exposure() {
   fi
 }
 
+check_runtime_security() {
+  local strong_password raw_credentials
+  strong_password="$(psql_value 'select coalesce((select value from "SystemSetting" where key = '\''requireStrongPassword'\''), '\''true'\'');')"
+  if [ "$strong_password" = "true" ]; then
+    ok "Politica de senha forte habilitada"
+  else
+    fail "Politica de senha forte desabilitada"
+  fi
+
+  raw_credentials="$(for name in vms-api vms-ai-service; do docker logs --since 1h "$name" 2>&1 || true; done | grep -Eic 'rtsp(s)?://[^/@[:space:]:]+:[^/@[:space:]]+@' || true)"
+  if [ "${raw_credentials:-0}" -eq 0 ]; then
+    ok "Logs recentes sem URLs RTSP contendo credenciais"
+  else
+    fail "Logs recentes contem ${raw_credentials} URL(s) RTSP com credenciais"
+  fi
+
+  if curl -fsS --max-time 5 http://172.17.0.1:8780/health >/dev/null 2>&1; then
+    ok "Agente de build white-label respondeu no endpoint interno"
+  else
+    warn "Agente de build white-label nao respondeu no endpoint interno"
+  fi
+}
+
 check_cloud_settings() {
   [ "${CLOUD_CONNECTOR_ENABLED:-false}" = "true" ] || return
 
@@ -631,6 +646,7 @@ main() {
   check_mediamtx
   check_storage_and_backups
   check_exposure
+  check_runtime_security
   check_cloud_settings
   print_summary
 }

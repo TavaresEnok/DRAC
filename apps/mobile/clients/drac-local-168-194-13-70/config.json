@@ -3,5 +3,6 @@
   "slug": "drac-drac-local-168-194-13-70",
   "packageId": "com.ajustconsulting.grupoflash",
   "apiUrl": "https://ajustcam.ajustconsulting.com.br/api",
-  "primaryColor": "#0077a8"
+  "primaryColor": "#0077a8",
+  "splashBackgroundColor": "#ffffff"
 }

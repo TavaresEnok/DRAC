@@ -86,7 +86,7 @@ export function resolveGridRtspProfile(camera: CameraRtspProfileInput) {
 }
 
 export function sanitizeRtspUrl(url: string) {
-  return url.replace(/(rtsp:\/\/)([^:@/]+):([^@/]+)@/i, '$1$2:<redacted>@');
+  return url.replace(/(rtsp:\/\/)([^\s/@:]+):([^\s/@]+)@/gi, '$1<redacted>@');
 }
 
 export function isHevcCodec(codec?: string | null) {

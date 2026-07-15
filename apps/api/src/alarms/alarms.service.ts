@@ -28,7 +28,9 @@ function defaultPriorityFor(type: string, severity: string): AlarmPriority {
 }
 
 function defaultDedupWindow(source: AlarmSource): number {
-  if (source === AlarmSource.MOTION) return 30;
+  // Movimento é naturalmente ruidoso. Um único episódio deve aparecer como um
+  // alarme com várias ocorrências, em vez de dezenas de cartões independentes.
+  if (source === AlarmSource.MOTION) return 300;
   if (source === AlarmSource.STREAM || source === AlarmSource.HEALTH) return 120;
   return 60;
 }
@@ -53,7 +55,7 @@ export class AlarmsService {
 
   async resolveStaleMotionAlarms(now = new Date()) {
     const rule = await this.getRule(AlarmSource.MOTION, 'MOTION_DETECTED');
-    const configuredQuietSeconds = Number(process.env.MOTION_ALARM_QUIET_SECONDS ?? 90);
+    const configuredQuietSeconds = Number(process.env.MOTION_ALARM_QUIET_SECONDS ?? 300);
     const quietSeconds = Math.max(30, configuredQuietSeconds, rule?.dedupWindowSeconds ?? 0);
     const quietBefore = new Date(now.getTime() - quietSeconds * 1000);
 
@@ -574,7 +576,7 @@ export class AlarmsService {
         eventType: dto.eventType.trim(),
         priority: dto.priority ?? AlarmPriority.P3,
         isEnabled: dto.isEnabled ?? true,
-        dedupWindowSeconds: dto.dedupWindowSeconds ?? 60,
+        dedupWindowSeconds: dto.dedupWindowSeconds ?? defaultDedupWindow(dto.source),
         autoResolveOnRecovery: dto.autoResolveOnRecovery ?? false,
         notifyOnOpen: dto.notifyOnOpen ?? true,
         webhookUrl: safeWebhookUrl,
@@ -584,7 +586,7 @@ export class AlarmsService {
         name: dto.name.trim(),
         priority: dto.priority ?? AlarmPriority.P3,
         isEnabled: dto.isEnabled ?? true,
-        dedupWindowSeconds: dto.dedupWindowSeconds ?? 60,
+        dedupWindowSeconds: dto.dedupWindowSeconds ?? defaultDedupWindow(dto.source),
         autoResolveOnRecovery: dto.autoResolveOnRecovery ?? false,
         notifyOnOpen: dto.notifyOnOpen ?? true,
         webhookUrl: safeWebhookUrl,

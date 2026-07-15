@@ -62,6 +62,8 @@ export type Camera = {
 export type Recording = {
   id: string;
   cameraId: string;
+  source?: string;
+  triggerMode?: string;
   startedAt: string;
   endedAt?: string | null;
   durationSeconds?: number | null;
@@ -69,6 +71,7 @@ export type Recording = {
   actualSizeBytes?: string | number | null;
   fileUsable?: boolean;
   fileExists?: boolean;
+  thumbnailExists?: boolean;
   thumbnailUrl?: string | null;
 };
 
@@ -117,5 +120,7 @@ export type RelayDiscovery = {
 export type Session = {
   apiUrl: string;
   token: string;
+  refreshToken?: string;
+  refreshExpiresAt?: string;
   user: User;
 };

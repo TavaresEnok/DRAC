@@ -73,6 +73,7 @@ fi
 
 cd "$MOBILE_DIR"
 export CLIENT="$SLUG"
+export NODE_ENV="${NODE_ENV:-production}"
 
 echo ">> prebuild (--clean: regenera android/ do zero p/ o pacote deste cliente)…"
 # --clean é essencial num builder multi-cliente: sem ele, restos do build do
@@ -156,6 +157,21 @@ echo ">> assinando com a keystore do cliente…"
   --out "$OUT" "$UNSIGNED"
 "$BUILD_TOOLS/apksigner" verify "$OUT" >/dev/null && echo ">> assinatura OK"
 
+# Gate de segurança do artefato FINAL. Validar somente app.json não basta:
+# plugins Android podem reinserir permissões durante o merge do manifest.
+APK_PERMISSIONS="$("$BUILD_TOOLS/aapt" dump permissions "$OUT")"
+for forbidden in android.permission.SYSTEM_ALERT_WINDOW android.permission.WRITE_EXTERNAL_STORAGE; do
+  if grep -Fq "name='$forbidden'" <<<"$APK_PERMISSIONS"; then
+    echo "permissão proibida no APK final: $forbidden" >&2
+    exit 4
+  fi
+done
+APK_MANIFEST="$("$BUILD_TOOLS/aapt" dump xmltree "$OUT" AndroidManifest.xml)"
+grep -Eq 'android:allowBackup.*0x0$' <<<"$APK_MANIFEST" || { echo "APK final permite backup de dados internos" >&2; exit 4; }
+grep -Eq 'android:usesCleartextTraffic.*0x0$' <<<"$APK_MANIFEST" || { echo "APK final permite tráfego sem TLS" >&2; exit 4; }
+grep -Eq 'android:requestLegacyExternalStorage.*0x0$' <<<"$APK_MANIFEST" || { echo "APK final usa armazenamento legado" >&2; exit 4; }
+echo ">> manifest final validado (sem overlay/storage legado, backup e cleartext bloqueados)"
+
 # Publica no diretório do host servido pelo nginx (sobrevive a rebuilds) +
 # mantém a cópia em builds/.
 cp -f "$OUT" "$APK_PUBLISH_DIR/drac-$SLUG.apk"
@@ -215,7 +231,36 @@ if len(blocks) != 1:
     raise SystemExit(f'AAB deve conter uma única assinatura; encontradas {len(blocks)}: {blocks}')
 PY
   echo ">> assinatura única do AAB validada"
+  APK_SHA256="$(sha256sum "$OUT" | awk '{print $1}')"
+  AAB_SHA256="$(sha256sum "$AAB_OUT" | awk '{print $1}')"
+  SOURCE_COMMIT="$(git -C "$MOBILE_DIR" rev-parse HEAD 2>/dev/null || printf unknown)"
+  SOURCE_DIRTY=false
+  [[ -n "$(git -C "$MOBILE_DIR" status --porcelain 2>/dev/null)" ]] && SOURCE_DIRTY=true
+  BUILD_INFO="$BUILDS_DIR/drac-$SLUG-build-info.json"
+  export SLUG APP_NAME PACKAGE_ID VERSION NEW_VC SOURCE_COMMIT SOURCE_DIRTY APK_SHA256 AAB_SHA256
+  node - "$BUILD_INFO" <<'NODE'
+const fs = require('node:fs');
+const out = process.argv[2];
+fs.writeFileSync(out, JSON.stringify({
+  schemaVersion: 1,
+  generatedAt: new Date().toISOString(),
+  client: process.env.SLUG,
+  appName: process.env.APP_NAME,
+  packageId: process.env.PACKAGE_ID,
+  versionName: process.env.VERSION,
+  versionCode: Number(process.env.NEW_VC),
+  sourceCommit: process.env.SOURCE_COMMIT,
+  sourceDirty: process.env.SOURCE_DIRTY === 'true',
+  artifacts: {
+    apk: { file: `drac-${process.env.SLUG}.apk`, sha256: process.env.APK_SHA256 },
+    aab: { file: `drac-${process.env.SLUG}.aab`, sha256: process.env.AAB_SHA256 },
+  },
+}, null, 2) + '\n');
+NODE
   cp -f "$AAB_OUT" "$APK_PUBLISH_DIR/drac-$SLUG.aab"
+  cp -f "$BUILD_INFO" "$APK_PUBLISH_DIR/drac-$SLUG-build-info.json"
+  printf '%s  %s\n' "$APK_SHA256" "drac-$SLUG.apk" > "$APK_PUBLISH_DIR/drac-$SLUG.sha256"
+  printf '%s  %s\n' "$AAB_SHA256" "drac-$SLUG.aab" >> "$APK_PUBLISH_DIR/drac-$SLUG.sha256"
   echo "OK_AAB=$AAB_OUT"
   echo "OK_AAB_URL=/apk/drac-$SLUG.aab"
 else
@@ -237,6 +282,8 @@ if [[ -f "$APK_PUBLISH_DIR/drac-$SLUG.aab" ]] && KIT_STAGE="$(mktemp -d)"; then
       ffmpeg -y -loglevel error -i "$ICON_SRC" -vf "scale=512:512:flags=lanczos" "$KIT_STAGE/icone-512.png" 2>/dev/null
     CHECKLIST="$MOBILE_DIR/../../docs/play-store-checklist.md"
     [[ -f "$CHECKLIST" ]] && cp "$CHECKLIST" "$KIT_STAGE/checklist-play-store.md"
+    [[ -f "$BUILDS_DIR/drac-$SLUG-build-info.json" ]] && cp "$BUILDS_DIR/drac-$SLUG-build-info.json" "$KIT_STAGE/build-info.json"
+    [[ -f "$APK_PUBLISH_DIR/drac-$SLUG.sha256" ]] && cp "$APK_PUBLISH_DIR/drac-$SLUG.sha256" "$KIT_STAGE/SHA256SUMS.txt"
     API_URL="$(node -e "process.stdout.write((require('$CONFIG').apiUrl||''))" 2>/dev/null)"
     PRIV_URL="$(node -e "const a='$API_URL'.replace(/\/api\/*\$/,'').replace(/\/+\$/,''); process.stdout.write(a?a+'/privacidade.html':'(defina o dominio HTTPS do servidor)')" 2>/dev/null)"
     cat > "$KIT_STAGE/LEIA-ME.txt" <<EOF

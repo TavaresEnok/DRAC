@@ -2,7 +2,7 @@
   "expo": {
     "name": "DRAC Mobile",
     "slug": "drac-mobile",
-    "version": "1.0.0",
+    "version": "1.0.5",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -19,6 +19,8 @@
       "package": "com.ajustconsulting.dracmobile",
       "versionCode": 6,
       "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.READ_MEDIA_AUDIO",
         "android.permission.READ_MEDIA_IMAGES",
@@ -37,6 +39,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/withAndroidSecurity",
       "expo-video",
       [
         "expo-notifications",
@@ -51,6 +54,12 @@
           "savePhotosPermission": "Permite salvar fotos e clipes das câmeras na galeria.",
           "isAccessMediaLocationEnabled": false,
           "granularPermissions": []
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Permita que o app use a biometria para proteger o acesso às câmeras."
         }
       ],
       [

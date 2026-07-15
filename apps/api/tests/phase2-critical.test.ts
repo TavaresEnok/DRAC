@@ -24,6 +24,7 @@ import type { AuthUser } from '../src/common/types/auth-user.type';
 import { AlarmsService } from '../src/alarms/alarms.service';
 import { ensureFileUnderRoot } from '../src/recordings/helpers/safe-file.helper';
 import { CameraHealthCheckProcessor } from '../src/jobs/processors/camera-health-check.processor';
+import { containsCredentialBearingUrl, sanitizeSensitiveText } from '../src/common/security/sensitive-text.helper';
 
 type TestCase = { name: string; run: () => Promise<void> | void };
 const tests: TestCase[] = [];
@@ -75,6 +76,29 @@ test('settings branding: expõe paletas clara e escura com compatibilidade', asy
   assert.equal(branding.brandPrimaryColor, '', 'chaves históricas devem continuar disponíveis para tema escuro');
   assert.equal(branding.brandLightBackgroundColor, '#f5f7fb', 'tema claro deve possuir fallback próprio');
   assert.equal(branding.brandLightPrimaryTextColor, '#111827', 'texto do tema claro deve ser exposto publicamente');
+  assert.equal(await service.isStrongPasswordRequired(), true, 'instalações novas devem exigir senha forte');
+});
+
+test('security logs: remove todas as credenciais embutidas em URLs', () => {
+  const unsafe = [
+    'ffmpeg input rtsp://admin:senha-secreta@10.0.0.20:554/live',
+    'retry rtsps://usuario:p%40ss@camera.local/stream and http://api:token@internal/path',
+  ].join('\n');
+  const sanitized = sanitizeSensitiveText(unsafe);
+  assert.equal(containsCredentialBearingUrl(sanitized), false);
+  assert.equal(sanitized.includes('senha-secreta'), false);
+  assert.equal(sanitized.includes('p%40ss'), false);
+  assert.equal(sanitized.includes('token@'), false);
+  assert.match(sanitized, /rtsp:\/\/<redacted>@10\.0\.0\.20/);
+});
+
+test('recordings maintenance: arquivos inválidos não entram em backfill infinito', () => {
+  const source = readFileSync('src/recordings/recordings.service.ts', 'utf8');
+  const worker = readFileSync('src/jobs/processors/thumbnail-generation.processor.ts', 'utf8');
+  const retention = readFileSync('src/recordings/retention.service.ts', 'utf8');
+  assert.match(source, /invalid\.json/);
+  assert.match(worker, /gravação marcada como indisponível/);
+  assert.match(retention, /invalid\.json/);
 });
 
 function makeAccessControlService() {
@@ -292,6 +316,10 @@ test('auth: login normaliza email, retorna usuario sanitizado e token assinado',
         };
       },
     },
+    authSession: {
+      create: async () => ({}),
+      deleteMany: async () => ({ count: 0 }),
+    },
   };
   const jwt = {
     signAsync: async (payload: any, options: any) => {
@@ -304,6 +332,8 @@ test('auth: login normaliza email, retorna usuario sanitizado e token assinado',
   const result = await service.login(' ADMIN@Test.Local ', 'secret');
 
   assert.equal(result.accessToken, 'signed-token');
+  assert.equal(typeof result.refreshToken, 'string');
+  assert.equal(result.refreshToken.length >= 32, true);
   assert.equal(result.user.role, UserRole.ADMIN);
   assert.equal('passwordHash' in result.user, false);
   assert.equal(signCalls[0].payload.type, 'access');
@@ -331,6 +361,9 @@ test('auth: rejeita token revogado e logout incrementa versão da sessão', asyn
         return {};
       },
     },
+    authSession: {
+      updateMany: async () => ({ count: 1 }),
+    },
   };
   const service = new AuthService(prisma as any, {} as any, config({}) as any, settings() as any);
 
@@ -346,6 +379,36 @@ test('auth: rejeita token revogado e logout incrementa versão da sessão', asyn
   );
   await service.logout('user-1');
   assert.deepEqual(updateArgs.data.authVersion, { increment: 1 });
+});
+
+test('auth: refresh rotaciona token e renova sete dias de inatividade', async () => {
+  const now = new Date();
+  let updateArgs: any = null;
+  const user = {
+    id: 'user-1', email: 'admin@test.local', name: 'Admin', role: UserRole.ADMIN,
+    isActive: true, authVersion: 4, passwordHash: 'unused', createdAt: now, updatedAt: now,
+    resetTokenHash: null, resetTokenExpiresAt: null,
+  };
+  const prisma = {
+    authSession: {
+      findUnique: async () => ({
+        id: 'session-1', userId: user.id, tokenHash: 'hash', authVersion: 4,
+        expiresAt: new Date(now.getTime() + 60_000), lastUsedAt: now,
+        revokedAt: null, createdAt: now, user,
+      }),
+      updateMany: async (args: any) => { updateArgs = args; return { count: 1 }; },
+    },
+  };
+  const jwt = { signAsync: async () => 'novo-access-token' };
+  const service = new AuthService(prisma as any, jwt as any, config({ jwtExpiresIn: '8h' }) as any, settings() as any);
+
+  const result = await service.refreshSession('refresh-token-original-com-mais-de-32-caracteres');
+
+  assert.equal(result.accessToken, 'novo-access-token');
+  assert.notEqual(result.refreshToken, 'refresh-token-original-com-mais-de-32-caracteres');
+  assert.equal(updateArgs.where.id, 'session-1');
+  const remainingDays = (new Date(result.refreshExpiresAt).getTime() - Date.now()) / 86_400_000;
+  assert.equal(remainingDays > 6.9 && remainingDays <= 7.01, true);
 });
 
 test('auth: senha invalida rejeita com UnauthorizedException', async () => {
@@ -396,6 +459,7 @@ test('alarmes: movimento aberto é auto-resolvido após período sem ocorrência
   const result = await service.resolveStaleMotionAlarms(now);
 
   assert.equal(result.resolved, 2);
+  assert.equal(result.quietSeconds, 300, 'movimentos da mesma cena devem ser consolidados por cinco minutos');
   assert.equal(updateArgs.where.source, AlarmSource.MOTION);
   assert.equal(updateArgs.where.type, 'MOTION_DETECTED');
   assert.deepEqual(updateArgs.where.status.in, [AlarmStatus.OPEN, AlarmStatus.ACKED]);

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "DRAC_CENTRAL_PORT=9765 node src/server.js",
+    "test": "node --test tests/*.test.js",
     "hash-password": "node scripts/hash-password.js"
   },
   "engines": {

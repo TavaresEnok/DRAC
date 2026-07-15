@@ -56,7 +56,11 @@ module.exports = () => ({
     slug: base.slug,
     icon: asset('icon.png', base.icon),
     plugins,
-    splash: { ...base.splash, image: asset('splash.png', base.splash && base.splash.image) },
+    splash: {
+      ...base.splash,
+      image: asset('splash.png', base.splash && base.splash.image),
+      backgroundColor: c.splashBackgroundColor || (base.splash && base.splash.backgroundColor),
+    },
     android: {
       ...base.android,
       package: c.packageId || base.android.package,

@@ -60,3 +60,58 @@ jobs:
 
       - name: Build Web image
         run: docker build -f apps/web/Dockerfile --build-arg VITE_API_URL= .
+
+  android-build:
+    name: android release bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate native Android project
+        working-directory: apps/mobile
+        run: pnpm exec expo prebuild --platform android --no-install --clean
+
+      - name: Build release bundle
+        working-directory: apps/mobile/android
+        run: ./gradlew bundleRelease --no-daemon --console=plain
+
+      - name: Reject unsafe merged permissions
+        run: |
+          if grep -R -E 'SYSTEM_ALERT_WINDOW|WRITE_EXTERNAL_STORAGE' apps/mobile/android/app/build/intermediates/merged_manifests/release; then
+            echo 'Unsafe Android permission found in release manifest' >&2
+            exit 1
+          fi
+
+      - name: Preserve bundle for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-ci-not-for-distribution
+          path: apps/mobile/android/app/build/outputs/bundle/release/*.aab
+          retention-days: 7

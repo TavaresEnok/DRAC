@@ -149,7 +149,7 @@ check_auth_contract() {
 }
 
 check_mediamtx() {
-  if curl -fsS --max-time 10 -u "${MEDIAMTX_API_USER:-}:${MEDIAMTX_API_PASS:-}" http://127.0.0.1:9997/v3/config/global/get >/dev/null 2>&1; then
+  if docker exec vms-api node -e 'const u=process.env.MEDIAMTX_API_USER,p=process.env.MEDIAMTX_API_PASS; fetch("http://mediamtx:9997/v3/config/global/get",{headers:{authorization:"Basic "+Buffer.from(u+":"+p).toString("base64")},signal:AbortSignal.timeout(8000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(2))' >/dev/null 2>&1; then
     ok "MediaMTX API respondeu com credenciais internas"
   else
     fail "MediaMTX API nao respondeu com credenciais internas"
@@ -171,15 +171,12 @@ check_central() {
     warn "Conector central desativado"
     return
   fi
-  if curl -fsS --max-time 10 "${CLOUD_API_URL%/}/api/health" >/dev/null 2>&1; then
+  if docker exec vms-api node -e 'fetch(process.env.CLOUD_API_URL.replace(/\/$/,"")+"/api/health",{signal:AbortSignal.timeout(8000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(2))' >/dev/null 2>&1; then
     ok "Central respondeu /api/health"
   else
     warn "Central nao respondeu /api/health"
   fi
-  if curl -fsS --max-time 10 \
-    -H "X-DRAC-Installation-Id: ${CLOUD_INSTALLATION_ID:-}" \
-    -H "X-DRAC-License-Key: ${CLOUD_LICENSE_KEY:-}" \
-    "${CLOUD_API_URL%/}/api/agent/status" >/dev/null 2>&1; then
+  if docker exec vms-api node -e 'const base=process.env.CLOUD_API_URL.replace(/\/$/,""); fetch(base+"/api/agent/status",{headers:{"X-DRAC-Installation-Id":process.env.CLOUD_INSTALLATION_ID,"X-DRAC-License-Key":process.env.CLOUD_LICENSE_KEY},signal:AbortSignal.timeout(8000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(2))' >/dev/null 2>&1; then
     ok "Central confirmou identidade e licença da instalação"
   else
     fail "Central nao confirmou identidade/licenca em /api/agent/status"

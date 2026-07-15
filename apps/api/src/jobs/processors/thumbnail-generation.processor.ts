@@ -3,13 +3,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job } from 'bullmq';
 import { existsSync, mkdirSync } from 'node:fs';
-import { rename, rm, stat } from 'node:fs/promises';
+import { rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { THUMBNAIL_GENERATION_QUEUE } from '../queues/thumbnail-generation.queue';
 import { ensureFileUnderRoot } from '../../recordings/helpers/safe-file.helper';
+import { sanitizeSensitiveText } from '../../common/security/sensitive-text.helper';
 
 const execFileAsync = promisify(execFile);
 
@@ -48,10 +49,14 @@ export class ThumbnailGenerationProcessor extends WorkerHost {
 
     const extension = extname(inputPath);
     const outputPath = `${extension ? inputPath.slice(0, -extension.length) : inputPath}.thumb.jpg`;
+    const invalidMarkerPath = `${inputPath}.invalid.json`;
     mkdirSync(dirname(outputPath), { recursive: true });
 
     try {
-      if ((await stat(outputPath)).size > 0) return;
+      if ((await stat(outputPath)).size > 0) {
+        await rm(invalidMarkerPath, { force: true }).catch(() => undefined);
+        return;
+      }
     } catch {
       // Ainda não existe; gera abaixo.
     }
@@ -89,6 +94,7 @@ export class ThumbnailGenerationProcessor extends WorkerHost {
           const result = await stat(temporaryPath);
           if (result.size <= 0) throw new Error('FFmpeg produziu imagem vazia.');
           await rename(temporaryPath, outputPath);
+          await rm(invalidMarkerPath, { force: true }).catch(() => undefined);
           return;
         } catch (error) {
           lastError = error;
@@ -98,7 +104,19 @@ export class ThumbnailGenerationProcessor extends WorkerHost {
       await rm(temporaryPath, { force: true }).catch(() => undefined);
     }
 
-    this.logger.warn(`Falha ao gerar thumbnail recording=${recordingId}; o BullMQ fará nova tentativa.`);
-    throw new Error(lastError instanceof Error ? `thumbnail_ffmpeg_failed: ${lastError.message}` : 'thumbnail_ffmpeg_failed');
+    const safeReason = sanitizeSensitiveText(lastError instanceof Error ? lastError.message : 'thumbnail_ffmpeg_failed').slice(0, 2_000);
+    const maxAttempts = Math.max(1, Number(job.opts.attempts ?? 1));
+    const finalAttempt = job.attemptsMade + 1 >= maxAttempts;
+    if (finalAttempt) {
+      await writeFile(invalidMarkerPath, JSON.stringify({
+        recordingId,
+        markedAt: new Date().toISOString(),
+        reason: safeReason,
+      }, null, 2) + '\n', { mode: 0o600 }).catch(() => undefined);
+      this.logger.warn(`Thumbnail impossível recording=${recordingId}; gravação marcada como indisponível.`);
+    } else {
+      this.logger.warn(`Falha ao gerar thumbnail recording=${recordingId}; o BullMQ fará nova tentativa.`);
+    }
+    throw new Error(`thumbnail_ffmpeg_failed: ${safeReason}`);
   }
 }

@@ -10,6 +10,7 @@ import { SettingsService } from '../settings/settings.service';
 import { AuthUser, JwtAuthPayload, PlayTokenPayload, StreamTokenPayload } from '../common/types/auth-user.type';
 
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_REFRESH_INACTIVITY_DAYS = 7;
 
 type LoginAttempt = { count: number; lockedUntil: number };
 
@@ -45,6 +46,43 @@ export class AuthService {
     };
   }
 
+  private refreshInactivityMs() {
+    const configured = Number(process.env.AUTH_REFRESH_INACTIVITY_DAYS ?? DEFAULT_REFRESH_INACTIVITY_DAYS);
+    const days = Number.isFinite(configured) ? Math.max(1, Math.min(30, configured)) : DEFAULT_REFRESH_INACTIVITY_DAYS;
+    return days * 24 * 60 * 60 * 1000;
+  }
+
+  private refreshTokenHash(token: string) {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private async signAccessToken(user: User) {
+    const payload: JwtAuthPayload = {
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+      ver: user.authVersion,
+      type: 'access',
+    };
+    const sessionMinutes = await this.settingsService.getSessionTimeoutMinutes().catch(() => 0);
+    const expiresIn = sessionMinutes > 0 ? `${sessionMinutes}m` : (this.configService.get<string>('jwtExpiresIn') ?? '8h');
+    return this.jwtService.signAsync(payload, { expiresIn });
+  }
+
+  private async createRefreshSession(user: User) {
+    const refreshToken = randomBytes(48).toString('base64url');
+    const refreshExpiresAt = new Date(Date.now() + this.refreshInactivityMs());
+    await this.prisma.authSession.create({
+      data: {
+        userId: user.id,
+        tokenHash: this.refreshTokenHash(refreshToken),
+        authVersion: user.authVersion,
+        expiresAt: refreshExpiresAt,
+      },
+    });
+    return { refreshToken, refreshExpiresAt: refreshExpiresAt.toISOString() };
+  }
+
   private async assertPasswordStrength(password: string) {
     if (!(await this.settingsService.isStrongPasswordRequired().catch(() => false))) return;
     const strong = password.length >= 12 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password);
@@ -78,21 +116,64 @@ export class AuthService {
 
     this.loginAttempts.delete(normalizedEmail);
 
-    const payload: JwtAuthPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-      ver: user.authVersion,
-      type: 'access',
-    };
+    const accessToken = await this.signAccessToken(user);
+    const refresh = await this.createRefreshSession(user);
 
-    const sessionMinutes = await this.settingsService.getSessionTimeoutMinutes().catch(() => 0);
-    const expiresIn = sessionMinutes > 0 ? `${sessionMinutes}m` : (this.configService.get<string>('jwtExpiresIn') ?? '8h');
-    const accessToken = await this.jwtService.signAsync(payload, { expiresIn });
+    // Limpa apenas sessões antigas deste usuário; dispositivos válidos seguem conectados.
+    void this.prisma.authSession.deleteMany({
+      where: {
+        userId: user.id,
+        OR: [{ expiresAt: { lt: new Date() } }, { revokedAt: { not: null } }],
+      },
+    }).catch(() => undefined);
 
     return {
       accessToken,
+      ...refresh,
       user: this.sanitizeUser(user),
+    };
+  }
+
+  async refreshSession(refreshToken: string) {
+    const tokenHash = this.refreshTokenHash(refreshToken);
+    const now = new Date();
+    const session = await this.prisma.authSession.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+    if (
+      !session || session.revokedAt || session.expiresAt.getTime() <= now.getTime() ||
+      !session.user.isActive || session.authVersion !== session.user.authVersion
+    ) {
+      throw new UnauthorizedException('Sessão expirada. Entre novamente.');
+    }
+
+    // A rotação atômica impede reutilização do token anterior.
+    const nextRefreshToken = randomBytes(48).toString('base64url');
+    const nextRefreshExpiresAt = new Date(now.getTime() + this.refreshInactivityMs());
+    const rotated = await this.prisma.authSession.updateMany({
+      where: {
+        id: session.id,
+        tokenHash,
+        revokedAt: null,
+        expiresAt: { gt: now },
+        authVersion: session.user.authVersion,
+      },
+      data: {
+        tokenHash: this.refreshTokenHash(nextRefreshToken),
+        expiresAt: nextRefreshExpiresAt,
+        lastUsedAt: now,
+      },
+    });
+    if (rotated.count !== 1) {
+      throw new UnauthorizedException('Sessão já renovada ou expirada.');
+    }
+
+    return {
+      accessToken: await this.signAccessToken(session.user),
+      refreshToken: nextRefreshToken,
+      refreshExpiresAt: nextRefreshExpiresAt.toISOString(),
+      user: this.sanitizeUser(session.user),
     };
   }
 
@@ -203,9 +284,14 @@ export class AuthService {
   }
 
   async logout(userId: string): Promise<void> {
+    const now = new Date();
     await this.prisma.user.update({
       where: { id: userId },
       data: { authVersion: { increment: 1 } },
+    });
+    await this.prisma.authSession.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: now },
     });
   }
 

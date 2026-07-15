@@ -10,9 +10,10 @@ import { Image, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } 
 import { CameraTile } from '../components/CameraTile';
 import { FavoritesSheet } from '../components/FavoritesSheet';
 import { Icon, type IconName } from '../components/Icon';
+import { CameraGridSkeleton } from '../components/Skeleton';
 import { useLibrary } from '../state/LibraryProvider';
 import { useTheme } from '../theme/ThemeProvider';
-import type { Camera, User } from '../types';
+import type { Alarm, Camera, User } from '../types';
 import { isOnlineStatus } from '../utils/camera-view';
 
 const STAR_GOLD = '#fbbf24';
@@ -24,11 +25,14 @@ interface CentralScreenProps {
   user: User | null;
   streamPosters: Record<string, string | null>;
   operationalMessages: string[];
+  alarms: Alarm[];
   alarmCount: number;
   refreshing: boolean;
   onRefresh: () => void;
   onOpenCamera: (camera: Camera) => void;
   onOpenAlarms: () => void;
+  onOpenMosaic: () => void;
+  onOpenPlayback: () => void;
   onPosterError?: (cameraId: string) => void;
 }
 
@@ -44,7 +48,8 @@ function todayLabel(): string {
 }
 
 export function CentralScreen({
-  cameras, user, streamPosters, operationalMessages, alarmCount, refreshing, onRefresh, onOpenCamera, onOpenAlarms, onPosterError,
+  cameras, user, streamPosters, operationalMessages, alarms, alarmCount, refreshing, onRefresh,
+  onOpenCamera, onOpenAlarms, onOpenMosaic, onOpenPlayback, onPosterError,
 }: CentralScreenProps) {
   const { theme, branding } = useTheme();
   const { favorites, isFavorite, toggleFavorite } = useLibrary();
@@ -63,6 +68,7 @@ export function CentralScreen({
   const featured = favCameras[0] ?? null;
   const favGrid = favCameras.slice(1, 5);
   const alert = operationalMessages[0] ?? null;
+  const latestAlarm = alarms.find((alarm) => alarm.status === 'OPEN') ?? alarms[0] ?? null;
 
   // Stat com ícone dentro do hero card (texto branco sobre o gradiente da marca).
   const HeroStat = ({ icon, label, value }: { icon: IconName; label: string; value: number }) => (
@@ -143,6 +149,32 @@ export function CentralScreen({
         </View>
       </LinearGradient>
 
+      <View style={styles.quickActions}>
+        {[
+          { label: 'Mosaico', icon: 'grid' as const, onPress: onOpenMosaic },
+          { label: 'Gravações', icon: 'play' as const, onPress: onOpenPlayback },
+          { label: 'Alarmes', icon: 'bell' as const, onPress: onOpenAlarms, badge: alarmCount },
+        ].map((action) => (
+          <Pressable
+            key={action.label}
+            style={[styles.quickAction, { backgroundColor: theme.surface, borderColor: theme.border }]}
+            onPress={action.onPress}
+            accessibilityRole="button"
+            accessibilityLabel={`Abrir ${action.label}`}
+          >
+            <View style={[styles.quickIcon, { backgroundColor: theme.accentBg }]}>
+              <Icon name={action.icon} size={18} color={theme.accent} strokeWidth={2} />
+            </View>
+            <Text style={[styles.quickLabel, { color: theme.text }]}>{action.label}</Text>
+            {action.badge ? (
+              <View style={[styles.quickBadge, { backgroundColor: theme.danger }]}>
+                <Text style={styles.quickBadgeText}>{action.badge > 99 ? '99+' : action.badge}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+        ))}
+      </View>
+
       {/* ── Alerta operacional ── */}
       {alert ? (
         <View style={[styles.alert, { backgroundColor: 'rgba(245,158,11,0.1)', borderColor: 'rgba(245,158,11,0.28)' }]}>
@@ -168,7 +200,9 @@ export function CentralScreen({
         </Pressable>
       </View>
 
-      {featured ? (
+      {refreshing && cameras.length === 0 ? (
+        <CameraGridSkeleton />
+      ) : featured ? (
         <>
           <CameraTile
             camera={featured}
@@ -211,6 +245,29 @@ export function CentralScreen({
           </Pressable>
         </View>
       )}
+
+      {latestAlarm ? (
+        <Pressable
+          style={[styles.recentEvent, { backgroundColor: theme.surface, borderColor: theme.border }]}
+          onPress={onOpenAlarms}
+          accessibilityRole="button"
+          accessibilityLabel="Abrir evento mais recente"
+        >
+          <View style={[styles.recentEventIcon, { backgroundColor: latestAlarm.status === 'OPEN' ? theme.dangerBg : theme.accentBg }]}>
+            <Icon name={latestAlarm.type.includes('MOTION') ? 'eye' : 'alert'} size={18} color={latestAlarm.status === 'OPEN' ? theme.danger : theme.accent} strokeWidth={2} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.recentEventKicker, { color: theme.textSub }]}>EVENTO RECENTE</Text>
+            <Text style={[styles.recentEventTitle, { color: theme.text }]} numberOfLines={1}>
+              {latestAlarm.title || latestAlarm.cameraName || 'Alerta do sistema'}
+            </Text>
+            <Text style={[styles.recentEventMeta, { color: theme.textSub }]} numberOfLines={1}>
+              {latestAlarm.cameraName || 'Sistema'} · {new Date(latestAlarm.occurredAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+            </Text>
+          </View>
+          <Icon name="chevronRight" size={17} color={theme.textMuted} strokeWidth={2} />
+        </Pressable>
+      ) : null}
 
       {/* ── Todas as câmeras: trilho horizontal de acesso rápido ── */}
       {cameras.length > 0 ? (
@@ -281,6 +338,13 @@ const styles = StyleSheet.create({
   heroStatValue: { color: '#fff', fontSize: 21, fontWeight: '800', letterSpacing: -0.5 },
   heroStatLabel: { color: 'rgba(255,255,255,0.75)', fontSize: 10.5, fontWeight: '700' },
 
+  quickActions: { flexDirection: 'row', gap: 9 },
+  quickAction: { flex: 1, minHeight: 75, borderRadius: 17, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center', gap: 6, position: 'relative' },
+  quickIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  quickLabel: { fontSize: 10.5, fontWeight: '800' },
+  quickBadge: { position: 'absolute', top: 7, right: 7, minWidth: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  quickBadgeText: { color: '#fff', fontSize: 9, fontWeight: '900' },
+
   alert: { flexDirection: 'row', gap: 12, alignItems: 'flex-start', borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, padding: 14 },
   alertIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   alertTitle: { fontSize: 13.5, fontWeight: '700' },
@@ -296,6 +360,12 @@ const styles = StyleSheet.create({
 
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   gridItem: { width: '47%', flexGrow: 1 },
+
+  recentEvent: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 17, borderWidth: StyleSheet.hairlineWidth, padding: 13 },
+  recentEventIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  recentEventKicker: { fontSize: 8.5, fontWeight: '900', letterSpacing: 0.9 },
+  recentEventTitle: { fontSize: 13.5, fontWeight: '800', marginTop: 1 },
+  recentEventMeta: { fontSize: 11, fontWeight: '600', marginTop: 2 },
 
   // Trilho horizontal "todas as câmeras" — sangra até as bordas da tela.
   railWrap: { marginHorizontal: -20 },

@@ -11,7 +11,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { RecordingSource, type Camera } from '@prisma/client';
 import { type Queue } from 'bullmq';
 import { execFile, spawn, spawnSync, type ChildProcessByStdio } from 'child_process';
-import { mkdirSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { statfs, unlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { type Readable } from 'stream';
@@ -22,6 +22,7 @@ import { CommercialPolicyService } from '../commercial-policy/commercial-policy.
 import { buildRtspUrl, resolveRecordingRtspProfile } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { sanitizeSensitiveText } from '../common/security/sensitive-text.helper';
 import { buildRecordingOutputDir, buildRecordingOutputPattern } from './helpers/recording-path.helper';
 import { THUMBNAIL_GENERATION_QUEUE } from '../jobs/queues/thumbnail-generation.queue';
 
@@ -67,6 +68,8 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
   private redisPublisher: Redis | null = null;
   private readonly motionStopTimers = new Map<string, NodeJS.Timeout>();
   private diskGuardTimer: NodeJS.Timeout | null = null;
+  private orphanRecoveryTimer: NodeJS.Timeout | null = null;
+  private orphanRecoveryInterval: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly configService: ConfigService,
@@ -96,6 +99,18 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       const intervalMs = Math.max(10_000, Number(process.env.RECORDING_DISK_GUARD_INTERVAL_MS ?? 30000));
       this.diskGuardTimer = setInterval(() => void this.enforceDiskGuard(), intervalMs);
       if (typeof this.diskGuardTimer.unref === 'function') this.diskGuardTimer.unref();
+    }
+
+    if (this.controlMode === 'local' && String(process.env.RECORDING_ORPHAN_RECOVERY_ENABLED ?? 'true') !== 'false') {
+      const recoveryDelayMs = Math.max(5_000, Number(process.env.RECORDING_ORPHAN_RECOVERY_DELAY_MS ?? 30_000));
+      const recoveryIntervalMs = Math.max(60 * 60 * 1000, Number(process.env.RECORDING_ORPHAN_RECOVERY_INTERVAL_MS ?? 6 * 60 * 60 * 1000));
+      this.orphanRecoveryTimer = setTimeout(() => {
+        this.orphanRecoveryTimer = null;
+        void this.recoverOrphanedSegments();
+      }, recoveryDelayMs);
+      this.orphanRecoveryTimer.unref();
+      this.orphanRecoveryInterval = setInterval(() => void this.recoverOrphanedSegments(), recoveryIntervalMs);
+      this.orphanRecoveryInterval.unref();
     }
 
     const autoStart = String(process.env.RECORDING_AUTO_START_ENABLED ?? 'false') === 'true';
@@ -348,7 +363,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
   }
 
   sanitizeRtspUrl(url: string): string {
-    return url.replace(/(rtsp:\/\/[^:]+:)([^@]+)(@)/i, '$1***$3');
+    return sanitizeSensitiveText(url);
   }
 
   private buildRtsp(camera: Camera, password: string): string {
@@ -534,10 +549,15 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       ),
     );
     const metadata = await this.probeRecordedFileMetadata(filePath);
-    const durationSecondsExact = metadata.durationSecondsExact ?? segmentSeconds;
+    if (metadata.durationSecondsExact == null) {
+      throw new Error('segmento_mp4_invalido_ou_incompleto');
+    }
+    const durationSecondsExact = metadata.durationSecondsExact;
     const durationSeconds = Math.max(1, Math.round(durationSecondsExact));
     const endedAt = new Date(startedAt.getTime() + durationSecondsExact * 1000);
     const sizeBytes = BigInt(metadata.sizeBytes);
+    const camera = await this.prisma.camera.findUnique({ where: { id: cameraId }, select: { recordingMode: true } });
+    const triggerMode = camera?.recordingMode ?? 'unknown';
 
     let recording: { id: string };
     let created = false;
@@ -546,7 +566,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       if (existing) {
         recording = await this.prisma.recording.update({
           where: { id: existing.id },
-          data: { endedAt, durationSeconds, sizeBytes },
+          data: { endedAt, durationSeconds, sizeBytes, triggerMode },
           select: { id: true },
         });
       } else {
@@ -554,6 +574,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
           data: {
             cameraId,
             source: RecordingSource.LOCAL,
+            triggerMode,
             startedAt,
             endedAt,
             durationSeconds,
@@ -585,6 +606,65 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     } catch (error) {
       // A miniatura também será recuperada sob demanda quando a gravação for listada.
       this.logger.warn(`Falha ao enfileirar thumbnail recording=${recording.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async recoverOrphanedSegments() {
+    if (!this.checkFfmpegAvailable()) return;
+    const graceSeconds = Math.max(60, Number(process.env.RECORDING_ORPHAN_RECOVERY_GRACE_SECONDS ?? 300));
+    const invalidDeleteSeconds = Math.max(graceSeconds, Number(process.env.RECORDING_ORPHAN_INVALID_DELETE_SECONDS ?? 3600));
+    const limit = Math.max(1, Math.min(10_000, Number(process.env.RECORDING_ORPHAN_RECOVERY_LIMIT ?? 2_000)));
+    const cameras = await this.prisma.camera.findMany({ select: { id: true } });
+    const registeredPaths = new Set((await this.prisma.recording.findMany({ select: { filePath: true } })).map((row) => row.filePath));
+    const candidates: Array<{ cameraId: string; filePath: string; ageSeconds: number }> = [];
+    const now = Date.now();
+
+    for (const camera of cameras) {
+      if (this.active.has(camera.id)) continue;
+      const cameraRoot = join(this.recordingsRoot, `camera-${camera.id}`);
+      if (!existsSync(cameraRoot)) continue;
+      const walk = (dir: string) => {
+        if (candidates.length >= limit || this.active.has(camera.id)) return;
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const fullPath = join(dir, entry.name);
+          if (entry.isDirectory()) {
+            walk(fullPath);
+          } else if (entry.name.endsWith(`.${this.recordingFormat}`) && !registeredPaths.has(fullPath)) {
+            const ageSeconds = Math.max(0, (now - statSync(fullPath).mtimeMs) / 1000);
+            if (ageSeconds >= graceSeconds) candidates.push({ cameraId: camera.id, filePath: fullPath, ageSeconds });
+          }
+          if (candidates.length >= limit) return;
+        }
+      };
+      walk(cameraRoot);
+    }
+
+    let recovered = 0;
+    let invalidDeleted = 0;
+    for (const candidate of candidates) {
+      if (this.active.has(candidate.cameraId)) continue;
+      const metadata = await this.probeRecordedFileMetadata(candidate.filePath);
+      if (metadata.durationSecondsExact == null) {
+        if (candidate.ageSeconds >= invalidDeleteSeconds) {
+          await unlink(candidate.filePath).catch(() => undefined);
+          invalidDeleted += 1;
+        }
+        continue;
+      }
+      try {
+        await this.registerSegment(
+          candidate.cameraId,
+          candidate.filePath,
+          Math.max(1, Number(process.env.RECORDING_SEGMENT_SECONDS ?? 300)),
+        );
+        registeredPaths.add(candidate.filePath);
+        recovered += 1;
+      } catch (error) {
+        this.logger.warn(`Falha ao recuperar segmento órfão ${basename(candidate.filePath)}: ${sanitizeSensitiveText(error)}`);
+      }
+    }
+    if (candidates.length || recovered || invalidDeleted) {
+      this.logger.log(`Recuperação de segmentos órfãos: inspecionados=${candidates.length}, recuperados=${recovered}, inválidos removidos=${invalidDeleted}.`);
     }
   }
 
@@ -760,7 +840,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let state: RecordingProcessState | null = null;
     proc.stderr.on('data', (chunk) => {
-      const msg = chunk.toString().trim();
+      const msg = sanitizeSensitiveText(chunk.toString().trim());
       if (msg) this.logger.debug(`FFmpeg REC camera=${cameraId}: ${msg}`);
     });
 
@@ -769,7 +849,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       if (current) void this.finalizeRecordingState(cameraId, current, code);
     });
     proc.on('error', (error) => {
-      this.logger.error(`Falha no processo FFmpeg de gravação camera=${cameraId}: ${error.message}`);
+      this.logger.error(`Falha no processo FFmpeg de gravação camera=${cameraId}: ${sanitizeSensitiveText(error)}`);
       void this.prisma.camera.update({ where: { id: cameraId }, data: { recordingEnabled: false } }).catch(() => undefined);
       const current = state ?? this.active.get(cameraId);
       if (current) void this.finalizeRecordingState(cameraId, current, proc.exitCode);
@@ -1016,6 +1096,14 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     if (this.diskGuardTimer) {
       clearInterval(this.diskGuardTimer);
       this.diskGuardTimer = null;
+    }
+    if (this.orphanRecoveryTimer) {
+      clearTimeout(this.orphanRecoveryTimer);
+      this.orphanRecoveryTimer = null;
+    }
+    if (this.orphanRecoveryInterval) {
+      clearInterval(this.orphanRecoveryInterval);
+      this.orphanRecoveryInterval = null;
     }
     if (this.controlMode === 'local') {
       await this.stopAll();

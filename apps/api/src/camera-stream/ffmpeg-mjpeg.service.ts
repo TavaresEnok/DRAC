@@ -6,6 +6,7 @@ import { execFile, spawn, spawnSync, type ChildProcessByStdio } from 'child_proc
 import { type Readable } from 'stream';
 import { promisify } from 'util';
 import { CamerasService } from '../cameras/cameras.service';
+import { sanitizeSensitiveText } from '../common/security/sensitive-text.helper';
 import { buildRtspUrl, resolveDeliveryRtspProfile } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { MediamtxProxyService } from './mediamtx-proxy.service';
@@ -156,7 +157,7 @@ export class FfmpegMjpegService {
   }
 
   sanitizeRtspUrl(url: string): string {
-    return url.replace(/(rtsp:\/\/[^:]+:)([^@]+)(@)/i, '$1***$3');
+    return sanitizeSensitiveText(url);
   }
 
   private getTransportCandidates(camera?: Camera): RtspTransport[] {

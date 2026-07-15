@@ -61,7 +61,7 @@ const SETTING_SPECS: Record<string, SettingSpec> = {
   autoCleanupEnabled: { type: 'boolean', default: true },
   sessionTimeoutMinutes: { type: 'number', default: 480, min: 5, max: 1440 },
   maxLoginAttempts: { type: 'number', default: 5, min: 3, max: 20 },
-  requireStrongPassword: { type: 'boolean', default: false },
+  requireStrongPassword: { type: 'boolean', default: true },
   alarmAudioEnabled: { type: 'boolean', default: true },
   // Aceleração por GPU do transcode de vídeo (ffmpeg NVENC). Default OFF: só é
   // ligado pelo módulo de GPU em Configurações depois que o auto-teste passa.

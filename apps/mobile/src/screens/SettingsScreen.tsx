@@ -4,7 +4,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import Constants from 'expo-constants';
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { Icon, type IconName } from '../components/Icon';
 import { useTheme } from '../theme/ThemeProvider';
 import type { User } from '../types';
@@ -13,6 +13,10 @@ interface SettingsScreenProps {
   user: User | null;
   apiUrl: string;
   connected: boolean;
+  biometricAvailable: boolean;
+  biometricEnabled: boolean;
+  biometricLabel: string;
+  onBiometricChange: (enabled: boolean) => void;
   onLogout: () => void;
 }
 
@@ -29,7 +33,9 @@ function initialsOf(name?: string): string {
   return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || 'DR';
 }
 
-export function SettingsScreen({ user, connected, onLogout }: SettingsScreenProps) {
+export function SettingsScreen({
+  user, connected, biometricAvailable, biometricEnabled, biometricLabel, onBiometricChange, onLogout,
+}: SettingsScreenProps) {
   const { theme, themeMode, setThemeMode } = useTheme();
 
   return (
@@ -75,6 +81,27 @@ export function SettingsScreen({ user, connected, onLogout }: SettingsScreenProp
             );
           })}
         </View>
+      </View>
+
+      <Text style={[styles.groupLabel, { color: theme.textMuted }]}>SEGURANÇA</Text>
+      <View style={[styles.group, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+        <Row
+          icon="lock"
+          iconBg={theme.accentBg}
+          iconColor={theme.accent}
+          title="Acesso por biometria"
+          subtitle={biometricAvailable ? biometricLabel : 'Cadastre a biometria nos ajustes do aparelho'}
+          theme={theme}
+          right={(
+            <Switch
+              value={biometricEnabled}
+              onValueChange={onBiometricChange}
+              accessibilityLabel="Ativar acesso por biometria"
+              trackColor={{ false: theme.border, true: theme.accent }}
+              thumbColor={theme.surface}
+            />
+          )}
+        />
       </View>
 
       {/* Conexão */}

@@ -371,7 +371,7 @@ class StreamProcessor:
             parsed = urlsplit(url)
             if "@" not in parsed.netloc:
                 return url
-            safe_netloc = f"***:***@{parsed.netloc.rsplit('@', 1)[1]}"
+            safe_netloc = f"<redacted>@{parsed.netloc.rsplit('@', 1)[1]}"
             return urlunsplit((parsed.scheme, safe_netloc, parsed.path, parsed.query, parsed.fragment))
         except Exception:
             return "<rtsp-url-redacted>"

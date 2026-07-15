@@ -158,6 +158,7 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
     const fullPath = ensureFileUnderRoot(root, recording.filePath);
     this.removeFile(fullPath);
     this.removeFile(this.derivedThumbnailPath(fullPath));
+    this.removeFile(`${fullPath}.invalid.json`);
     this.removeFile(join(root, '.playback-compatible', recording.cameraId, `${recording.id}.mp4`));
     await this.prisma.recording.delete({ where: { id: recording.id } });
     return true;

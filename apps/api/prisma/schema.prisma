@@ -128,6 +128,7 @@ model Recording {
   cameraId        String
   camera          Camera          @relation(fields: [cameraId], references: [id], onDelete: Cascade)
   source          RecordingSource @default(UNKNOWN)
+  triggerMode     String          @default("unknown")
   exportedClips   ExportedClip[]
   startedAt       DateTime
   endedAt         DateTime?
@@ -138,6 +139,7 @@ model Recording {
 
   @@unique([filePath])
   @@index([cameraId, startedAt])
+  @@index([triggerMode, startedAt])
   @@index([startedAt])
 }
 
@@ -251,6 +253,22 @@ model User {
   investigations    Investigation[]
   pushDevices       PushDevice[]
   liveLayouts       LiveLayout[]
+  authSessions      AuthSession[]
+}
+
+model AuthSession {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique
+  authVersion Int
+  expiresAt   DateTime
+  lastUsedAt  DateTime  @default(now())
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
 }
 
 model LiveLayout {

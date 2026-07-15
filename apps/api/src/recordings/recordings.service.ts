@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { Queue } from 'bullmq';
 import { RecordingSource, UserRole } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { sanitizeSensitiveText } from '../common/security/sensitive-text.helper';
 import { AccessControlService } from '../access-control/access-control.service';
 import { AuthService } from '../auth/auth.service';
 import { type AuthUser } from '../common/types/auth-user.type';
@@ -140,30 +141,39 @@ export class RecordingsService implements OnModuleInit {
     ]);
 
     return {
-      items: items.map((item: any) => ({
-        ...(function () {
-          const absolutePath = ensureFileUnderRoot(recordingsRoot, item.filePath);
-          const fileExists = existsSync(absolutePath);
-          const actualSizeBytes = fileExists ? statSync(absolutePath).size : 0;
-          const fileUsable = fileExists && actualSizeBytes > 1024;
-          return {
-            fileExists,
-            fileUsable,
-            actualSizeBytes,
-            compatibleCached: existsSync(join(recordingsRoot, '.playback-compatible', item.cameraId, `${item.id}.mp4`)),
-          };
-        })(),
-        id: item.id,
-        cameraId: item.cameraId,
-        source: item.source ?? RecordingSource.UNKNOWN,
-        startedAt: item.startedAt,
-        endedAt: item.endedAt,
-        durationSeconds: item.durationSeconds,
-        sizeBytes: item.sizeBytes ? item.sizeBytes.toString() : null,
-        playUrl: `/recordings/${item.id}/play`,
-        compatiblePlayUrl: `/recordings/${item.id}/play?compatible=1`,
-        thumbnailUrl: `/recordings/${item.id}/thumbnail`,
-      })),
+      items: items.map((item: any) => {
+        const absolutePath = ensureFileUnderRoot(recordingsRoot, item.filePath);
+        const extension = extname(absolutePath);
+        const thumbnailBase = extension ? absolutePath.slice(0, -extension.length) : absolutePath;
+        const thumbnailPath = `${thumbnailBase}.thumb.jpg`;
+        const fileExists = existsSync(absolutePath);
+        const thumbnailExists = existsSync(thumbnailPath) && statSync(thumbnailPath).size > 0;
+        const actualSizeBytes = fileExists ? statSync(absolutePath).size : 0;
+        // Uma miniatura bem-sucedida também é uma prova barata de que o MP4 é
+        // decodificável. Segmentos interrompidos podem ter vários MB, mas não
+        // possuem o átomo `moov`; antes eram oferecidos como reproduzíveis e o
+        // app acabava numa tela cinza/erro. O backfill continua tentando gerar
+        // a miniatura; quando conseguir, o item passa a utilizável sozinho.
+        const fileUsable = fileExists && actualSizeBytes > 1024 && thumbnailExists;
+        return {
+          fileExists,
+          fileUsable,
+          thumbnailExists,
+          actualSizeBytes,
+          compatibleCached: existsSync(join(recordingsRoot, '.playback-compatible', item.cameraId, `${item.id}.mp4`)),
+          id: item.id,
+          cameraId: item.cameraId,
+          source: item.source ?? RecordingSource.UNKNOWN,
+          triggerMode: item.triggerMode ?? 'unknown',
+          startedAt: item.startedAt,
+          endedAt: item.endedAt,
+          durationSeconds: item.durationSeconds,
+          sizeBytes: item.sizeBytes ? item.sizeBytes.toString() : null,
+          playUrl: `/recordings/${item.id}/play`,
+          compatiblePlayUrl: `/recordings/${item.id}/play?compatible=1`,
+          thumbnailUrl: thumbnailExists ? `/recordings/${item.id}/thumbnail` : null,
+        };
+      }),
       total,
     };
   }
@@ -377,6 +387,7 @@ export class RecordingsService implements OnModuleInit {
       data: {
         cameraId: dto.cameraId,
         source: RecordingSource.WORKER,
+        triggerMode: 'unknown',
         filePath: dto.filePath,
         startedAt: new Date(dto.startedAt),
         endedAt: new Date(dto.endedAt),
@@ -428,6 +439,7 @@ export class RecordingsService implements OnModuleInit {
         const extension = extname(inputPath);
         const thumbnailBase = extension ? inputPath.slice(0, -extension.length) : inputPath;
         const thumbPath = `${thumbnailBase}.thumb.jpg`;
+        if (existsSync(`${inputPath}.invalid.json`)) continue;
         if (existsSync(thumbPath) && statSync(thumbPath).size > 0) continue;
         jobs.push({
           name: 'generate-thumbnail',
@@ -840,13 +852,13 @@ export class RecordingsService implements OnModuleInit {
       this.writeDiagnosticsCache(cache);
       return result;
     } catch (error: any) {
-      const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : '';
+      const stderr = typeof error?.stderr === 'string' ? sanitizeSensitiveText(error.stderr.trim()) : '';
       const result = {
         recordingId,
         fileExists: true,
         fileSizeBytes: fileSize,
         integrityOk: false,
-        reason: stderr || error?.message || 'ffmpeg_integrity_check_failed',
+        reason: stderr || sanitizeSensitiveText(error?.message) || 'ffmpeg_integrity_check_failed',
         checkedAt: new Date().toISOString(),
       };
       const cache = this.readDiagnosticsCache();

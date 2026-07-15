@@ -89,7 +89,6 @@ export function Sidebar({
   const isDark = theme === 'dark' || theme === 'dim';
   const role = user?.role ?? 'operator';
   const facilityName = useBrandingStore((state) => state.facilityName);
-  const logoDataUrl = useBrandingStore((state) => state.logoDataUrl);
 
   const roleColor = ROLE_COLOR[user?.role ?? 'operator'] ?? ROLE_COLOR.operator;
   const visibleSections = NAV_SECTIONS
@@ -110,11 +109,7 @@ export function Sidebar({
       <div className="sidebar-brand flex items-center h-14 px-3 shrink-0">
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
           <div className="sidebar-mark shrink-0 w-8 h-8 rounded-xl flex items-center justify-center">
-            {logoDataUrl ? (
-              <img src={logoDataUrl} alt="" className="h-7 w-7 object-contain" />
-            ) : (
-              <Shield className="w-3.5 h-3.5 text-[hsl(var(--primary))]" />
-            )}
+            <Shield className="w-3.5 h-3.5 text-[hsl(var(--primary))]" />
           </div>
           {isExpanded && (
             <motion.div

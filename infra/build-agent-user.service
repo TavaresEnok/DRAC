@@ -1,0 +1,17 @@
+[Unit]
+Description=DRAC white-label build agent (user)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/flashnet/Drac
+ExecStart=/home/flashnet/Drac/scripts/run-build-agent-supervised.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

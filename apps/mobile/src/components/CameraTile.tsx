@@ -84,8 +84,11 @@ export function CameraTile({
       <Pressable
         style={[styles.wrap, { height, backgroundColor: '#0d0f14', borderColor: theme.border }]}
         onPress={onPress}
+        onLongPress={onToggleFavorite}
+        delayLongPress={450}
         accessibilityRole="button"
         accessibilityLabel={`${camera.name}, ${nosignal ? 'sem sinal' : 'offline'}`}
+        accessibilityHint={onToggleFavorite ? 'Mantenha pressionado para alterar a favorita' : undefined}
       >
         <View style={styles.offline}>
           <Icon name="videoOff" size={22} color="#4b5563" strokeWidth={1.8} />
@@ -101,8 +104,11 @@ export function CameraTile({
     <Pressable
       style={[styles.wrap, { height, borderColor: theme.border }]}
       onPress={onPress}
+      onLongPress={onToggleFavorite}
+      delayLongPress={450}
       accessibilityRole="button"
       accessibilityLabel={`${camera.name}, ${online ? 'ao vivo' : 'offline'}`}
+      accessibilityHint={onToggleFavorite ? 'Mantenha pressionado para alterar a favorita' : undefined}
     >
       <LinearGradient colors={tint} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={StyleSheet.absoluteFill} />
       {/* Marca d'água de câmera SEMPRE atrás: se o snapshot ainda não chegou (ou

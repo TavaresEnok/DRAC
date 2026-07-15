@@ -17,11 +17,15 @@ interface LoginScreenProps {
   onPasswordChange: (value: string) => void;
   onSubmit: () => void;
   onForgotPassword: () => void;
+  biometricAvailable?: boolean;
+  biometricLabel?: string;
+  onBiometric?: () => void;
 }
 
 export function LoginScreen({
   apiUrl, email, password, loading,
   onApiUrlChange, onEmailChange, onPasswordChange, onSubmit, onForgotPassword,
+  biometricAvailable = false, biometricLabel = 'Biometria', onBiometric,
 }: LoginScreenProps) {
   const { theme, branding } = useTheme();
   const [show, setShow] = useState(false);
@@ -31,7 +35,7 @@ export function LoginScreen({
   const hasBakedServer = !!(BRANDING.apiUrl && BRANDING.apiUrl.trim());
   const [showServer, setShowServer] = useState(!apiUrl);
 
-  // Marca em runtime (do servidor) tem prioridade sobre a embutida no APK.
+  // A logo configurada em Aparência pertence exclusivamente ao aplicativo.
   const logoSource = branding.logoDataUrl ? { uri: branding.logoDataUrl } : BRAND_LOGO;
   const appName = branding.facilityName || BRANDING.appName;
 
@@ -146,6 +150,19 @@ export function LoginScreen({
           </LinearGradient>
         </Pressable>
 
+        {biometricAvailable && onBiometric ? (
+          <Pressable
+            onPress={onBiometric}
+            disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel={`Entrar com ${biometricLabel.toLowerCase()}`}
+            style={[styles.biometricCta, { backgroundColor: theme.surface, borderColor: theme.accent }]}
+          >
+            <Icon name="lock" size={19} color={theme.accent} />
+            <Text style={[styles.biometricText, { color: theme.accent }]}>Entrar com {biometricLabel.toLowerCase()}</Text>
+          </Pressable>
+        ) : null}
+
         {!hasBakedServer ? (
           <View style={styles.serverRow}>
             <View style={[styles.dot, { backgroundColor: apiUrl ? theme.success : theme.warning }]} />
@@ -175,6 +192,8 @@ const styles = StyleSheet.create({
   forgot: { textAlign: 'right', fontSize: 12.5, fontWeight: '700' },
   cta: { borderRadius: 15, paddingVertical: 16, alignItems: 'center', marginTop: 4 },
   ctaText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  biometricCta: { borderRadius: 15, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 14, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 9 },
+  biometricText: { fontSize: 14, fontWeight: '800' },
   serverRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 4 },
   dot: { width: 6, height: 6, borderRadius: 3 },
   serverText: { fontSize: 11.5, fontWeight: '600', maxWidth: '90%' },

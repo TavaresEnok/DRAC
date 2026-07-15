@@ -11,6 +11,7 @@ import {
 } from '../cameras/helpers/rtsp-url.helper';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { SettingsService } from '../settings/settings.service';
+import { sanitizeSensitiveText } from '../common/security/sensitive-text.helper';
 import {
   GRID_LIVE_MAX_HEIGHT,
   GRID_LIVE_MAX_WIDTH,
@@ -188,7 +189,7 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
   }
 
   private sanitizeRtspUrl(url: string) {
-    return url.replace(/(rtsp:\/\/[^:]+:)([^@]+)(@)/i, '$1***$3');
+    return sanitizeSensitiveText(url);
   }
 
   private buildInternalPublishRtspUrl(pathName = '$MTX_PATH') {
