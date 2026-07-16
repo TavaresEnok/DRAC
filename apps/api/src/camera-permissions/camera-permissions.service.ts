@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { AccessControlService } from '../access-control/access-control.service';
 import { AuthUser } from '../common/types/auth-user.type';
@@ -15,6 +15,21 @@ export class CameraPermissionsService {
 
   private isPrivileged(user: AuthUser) {
     return user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN;
+  }
+
+  /** O usuário-alvo já pertence a algum grupo que o ator administra? (espelha users.service.assertCanManageUser) */
+  private async assertTargetUserIsManaged(actor: AuthUser, targetUserId: string) {
+    const groupIds = await this.accessControlService.getAdminGroupIds(actor);
+    if (!groupIds.length) {
+      throw new ForbiddenException('Sem grupo administrável para conceder acesso.');
+    }
+    const managed = await this.prisma.cameraPermission.findFirst({
+      where: { userId: targetUserId, groupId: { in: groupIds } },
+      select: { id: true },
+    });
+    if (!managed) {
+      throw new ForbiddenException('Usuário fora dos grupos administráveis.');
+    }
   }
 
   private async assertCanManagePermission(actor: AuthUser, permissionId: string) {
@@ -74,6 +89,14 @@ export class CameraPermissionsService {
         throw new BadRequestException('Administrador de grupo só pode conceder acesso por grupo.');
       }
       await this.accessControlService.assertCanAdminGroup(actor, dto.groupId);
+      // ...e o ALVO também precisa ser gerenciável. Antes só o grupo era validado: um
+      // admin de grupo podia anexar QUALQUER usuário do sistema ao próprio grupo — e é
+      // exatamente essa linha de permissão que users.service.assertCanManageUser usa como
+      // prova de "é do meu grupo". Ou seja: anexava a vítima, depois trocava a senha dela
+      // (PATCH /users/:id) e assumia a conta de outro tenant.
+      // Não quebra o fluxo legítimo: users.service.create já vincula o usuário novo ao
+      // grupo do criador, e o /users list só devolve usuários dos grupos administrados.
+      await this.assertTargetUserIsManaged(actor, dto.userId);
     }
 
     const existing = await this.prisma.cameraPermission.findFirst({

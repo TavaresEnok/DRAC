@@ -16,6 +16,7 @@ import { EvidenceService } from '../src/evidence/evidence.service';
 import { RecordingsController } from '../src/recordings/recordings.controller';
 import { RecordingsService } from '../src/recordings/recordings.service';
 import { UsersService } from '../src/users/users.service';
+import { CameraPermissionsService } from '../src/camera-permissions/camera-permissions.service';
 import { SettingsService } from '../src/settings/settings.service';
 import { PermissionsGuard } from '../src/role-permissions/permissions.guard';
 import { DEFAULT_PERMISSIONS, normalizeMatrix } from '../src/role-permissions/role-permissions.constants';
@@ -1292,6 +1293,76 @@ test('ai intelligence: sinaliza camera habilitada sem processador', async () => 
   assert.equal(overview.summary.runningProcessors, 0);
   assert.equal(overview.cameras[0].health.state, 'stopped');
   assert.equal(overview.recommendations.some((item) => item.code === 'missing_processors'), true);
+});
+
+test('group tenancy: admin de grupo NAO anexa usuario de fora ao proprio grupo', async () => {
+  // A permissão criada aqui é a MESMA prova que users.service.assertCanManageUser usa
+  // para decidir quem o admin de grupo pode gerenciar. Sem validar o alvo, ele anexava a
+  // vítima e depois trocava a senha dela (takeover entre tenants).
+  const actor: AuthUser = { id: 'manager', email: 'm@t.local', name: 'M', role: UserRole.OPERATOR };
+  const prisma = {
+    user: { findUnique: async () => ({ id: 'vitima' }) },
+    cameraGroup: { findUnique: async () => ({ id: 'grupo-do-manager' }) },
+    cameraPermission: {
+      // a vítima NÃO tem permissão em nenhum grupo do ator
+      findFirst: async () => null,
+      create: async () => assert.fail('não deveria criar permissão para usuário de fora'),
+    },
+  } as any;
+  const accessControl = {
+    assertCanAdminGroup: async () => undefined,
+    getAdminGroupIds: async () => ['grupo-do-manager'],
+  } as any;
+  const service = new CameraPermissionsService(prisma, accessControl);
+  await assert.rejects(
+    () => service.grant(actor, { userId: 'vitima', groupId: 'grupo-do-manager', level: CameraPermissionLevel.VIEW } as any),
+    (error: unknown) => error instanceof ForbiddenException,
+  );
+});
+
+test('escalation: admin de grupo NAO altera o proprio perfil', async () => {
+  const actor: AuthUser = { id: 'self', email: 's@t.local', name: 'S', role: UserRole.VIEWER };
+  const prisma = {
+    user: {
+      findUnique: async () => ({ id: 'self', role: UserRole.VIEWER }),
+      update: async () => assert.fail('não deveria promover a si mesmo'),
+    },
+    // o ator administra o grupo em que ele próprio está → assertCanManageUser passaria
+    cameraPermission: { findFirst: async () => ({ id: 'perm-do-proprio-grupo' }) },
+  } as any;
+  const access = { getAdminGroupIds: async () => ['g1'] };
+  const service = new UsersService(prisma, { canAssignRole: () => true } as any, settings() as any, access as any);
+  await assert.rejects(
+    () => service.update(actor, 'self', { role: UserRole.OPERATOR } as any),
+    (error: unknown) => error instanceof ForbiddenException,
+  );
+});
+
+test('investigations: cadeia de custodia nao vaza auditoria global', () => {
+  const source = readFileSync('src/investigations/investigations.service.ts', 'utf8');
+  const custody = source.slice(source.indexOf('async getCustodyChain'), source.indexOf('async getCustodyChain') + 1600);
+  assert.match(
+    custody,
+    /entityType: 'InvestigationItem', entityId: \{ in: itemIds \}/,
+    'o ramo InvestigationItem precisa ser escopado aos itens desta investigação',
+  );
+  assert.doesNotMatch(
+    custody,
+    /\{ action: \{ contains: 'evidence' \} \},/,
+    "o ramo 'evidence' não pode ser global — escopar à investigação",
+  );
+});
+
+test('investigations: download de pacote valida a raiz do arquivo', () => {
+  const source = readFileSync('src/investigations/investigations.service.ts', 'utf8');
+  assert.match(
+    source,
+    /ensureFileUnderRoot\(\s*process\.env\.EVIDENCE_PACKAGES_ROOT/,
+    'o filePath vem do metadata (controlável pelo cliente) — validar a raiz antes de servir',
+  );
+  const dto = readFileSync('src/investigations/dto/create-investigation-item.dto.ts', 'utf8');
+  assert.match(dto, /IsNotIn\(SERVER_OWNED_INVESTIGATION_ITEM_TYPES/, 'tipos server-only não podem ser forjados');
+  assert.match(dto, /'export_package'/, 'export_package precisa estar entre os reservados');
 });
 
 test('permissions audit: rotas sensiveis mantem RequirePermission', () => {

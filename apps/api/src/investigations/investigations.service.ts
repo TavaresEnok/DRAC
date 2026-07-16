@@ -452,14 +452,22 @@ export class InvestigationsService {
       }
     }
 
+    // Escopo por ITEM desta investigação. Antes, `{ entityType: 'InvestigationItem' }` e
+    // `{ action: { contains: 'evidence' } }` vinham SEM entityId: a cadeia de custódia da
+    // própria investigação devolvia a trilha de auditoria de TODAS as investigações e
+    // todos os tenants (userId, ipAddress, userAgent, metadata) — contornando o gate
+    // @RequirePermission('auditLogs'), que é ADMIN-only. Qualquer OPERATOR criava uma
+    // investigação vazia e lia 1000 registros globais.
+    const itemIds = inv.items.map((item) => item.id);
     const logs = await this.prisma.auditLog.findMany({
       where: {
         OR: [
           { entityType: 'Investigation', entityId: investigationId },
-          { entityType: 'InvestigationItem' },
+          { entityType: 'InvestigationItem', entityId: { in: itemIds } },
           { entityType: 'Recording', entityId: { in: [...relatedRecordingIds] } },
           { entityType: 'ExportedClip', entityId: { in: [...relatedClipIds] } },
-          { action: { contains: 'evidence' } },
+          // 'evidence' desta investigação (assinatura/verificação dos itens dela).
+          { action: { contains: 'evidence' }, entityType: 'Investigation', entityId: investigationId },
         ],
       },
       orderBy: { createdAt: 'asc' },

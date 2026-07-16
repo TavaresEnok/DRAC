@@ -151,6 +151,13 @@ export class UsersService {
       if (dto.role && !this.isGroupAssignableRole(dto.role)) {
         throw new ForbiddenException('Administrador de grupo só pode atribuir VIEWER ou OPERATOR.');
       }
+      // Auto-promoção: assertCanManageUser encontra a PRÓPRIA linha de permissão do ator
+      // (ele administra o grupo em que está), e o canAssignRole abaixo só roda para
+      // isPrivileged — então um admin de grupo VIEWER se promovia a OPERATOR e ganhava
+      // ptzControl/exportEvidence/alarmAck + as rotas @Roles(OPERATOR).
+      if (dto.role && dto.role !== existing.role && id === actor.id) {
+        throw new ForbiddenException('Não é permitido alterar o próprio perfil.');
+      }
     }
 
     const nextRole = dto.role ?? existing.role;
