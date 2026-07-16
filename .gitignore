@@ -62,3 +62,6 @@ infra/apk/
 /drac-web.apk
 *.apk
 *.idsig
+
+# Workspace usa pnpm; package-lock.json órfão engana auditoria e fixa versões vulneráveis
+package-lock.json
