@@ -752,9 +752,20 @@ async function handleHeartbeat(req, res) {
 
   const body = await readBody(req);
   const db = await loadDb();
-  const existing = db.installations[installationId] || {};
+  const existing = db.installations[installationId];
+  // A instalação TEM de existir: handleProvision a cria (com licenseKey) antes de o
+  // cliente dar o primeiro heartbeat. Antes, um id desconhecido caía em `{}` e o check
+  // de licença era pulado (`existing.licenseKey` undefined) → QUALQUER UM na internet
+  // registrava instalações e injetava `metrics`/`server` arbitrários, que o painel do
+  // dono renderiza (era o vetor do XSS armazenado) — além de encher o installations.json.
+  if (!existing) {
+    addAuditEvent(db, req, { type: 'agent.heartbeat_denied', actor: installationId, result: 'denied' });
+    await saveDb(db);
+    return json(req, res, 403, { error: 'unknown_installation' });
+  }
   const expectedKey = existing.licenseKey || licenseKey;
-  if (existing.licenseKey && existing.licenseKey !== licenseKey) {
+  // timing-safe, como já era em handleAgentStatus/handleInstall.
+  if (existing.licenseKey && !timingSafeTextEquals(existing.licenseKey, licenseKey)) {
     addAuditEvent(db, req, { type: 'agent.heartbeat_denied', actor: installationId, result: 'denied' });
     await saveDb(db);
     return json(req, res, 403, { error: 'invalid_license_key' });

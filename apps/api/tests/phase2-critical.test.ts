@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import * as bcrypt from 'bcrypt';
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { AlarmSource, AlarmStatus, CameraPermissionLevel, UserRole } from '@prisma/client';
@@ -123,6 +124,52 @@ test('security logs: pontos que carregam stderr de FFmpeg/ffprobe sanitizam a me
     proxy,
     /MediaMTX API \$\{method\} \$\{path\} failed[^`]*sanitizeSensitiveText\(text\)/,
     'o corpo de erro do MediaMTX pode ecoar a config com a URL+credencial; sanitizar',
+  );
+
+  // clip-capture: o stderrTail volta ao cliente numa BadRequestException e a rota é
+  // @Roles(VIEWER) — era o gêmeo do 167fd52, achado porque esta trava não o cobria.
+  const clip = readFileSync('src/camera-stream/clip-capture.service.ts', 'utf8');
+  assert.match(
+    clip,
+    /state\.stderrTail = sanitizeSensitiveText\(/,
+    'o stderr do FFmpeg do clipe deve ser sanitizado ao ser acumulado',
+  );
+  assert.match(
+    clip,
+    /Não foi possível gravar o clipe[^`]*sanitizeSensitiveText\(st\.stderrTail\)/,
+    'a exceção do clipe vai no corpo da resposta; sanitizar o stderr antes',
+  );
+});
+
+// A trava acima é por arquivo/regex e só pega o que eu lembrei de listar — foi assim que
+// o clip-capture escapou por 2 rodadas. Esta varre o repo: se um serviço captura o STDERR
+// de um processo (é onde o FFmpeg imprime "Error opening input file rtsp://user:senha@..."
+// — o stdout carrega dado/JSON, não diagnóstico), o arquivo TEM de sanitizar em algum
+// ponto. Heurística por arquivo de propósito: sanitizar no acúmulo ou no uso são ambos
+// válidos, e rastrear isso por regex daria falso-positivo. O alvo é o arquivo NOVO que
+// esquece por completo.
+test('security logs: todo serviço que captura stderr de processo sanitiza em algum ponto', () => {
+  const roots = ['src/camera-stream', 'src/cameras', 'src/recordings', 'src/jobs', 'src/gpu'];
+  const offenders: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.ts')) {
+        const src = readFileSync(full, 'utf8');
+        const capturesStderr = /stderr\??\.on\(\s*['"]data['"]/.test(src) || /stderr:\s*['"]pipe/.test(src);
+        if (!capturesStderr) continue;
+        if (!/sanitizeSensitiveText|sanitizeRtspUrl/.test(src)) {
+          offenders.push(full);
+        }
+      }
+    }
+  };
+  for (const r of roots) walk(r);
+  assert.deepEqual(
+    offenders,
+    [],
+    `arquivo(s) capturam stderr de processo e nunca sanitizam — o FFmpeg imprime a URL RTSP com senha nele:\n${offenders.join('\n')}`,
   );
 });
 

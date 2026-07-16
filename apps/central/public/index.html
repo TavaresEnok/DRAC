@@ -821,15 +821,20 @@
         const parsed = Number(value);
         return Number.isFinite(parsed) ? parsed : fallback;
       }
+      // ATENÇÃO: o retorno vai para innerHTML em vários pontos e `metrics` é o objeto CRU
+      // do heartbeat do cliente — ou seja, atacante-controlável. Todo valor sai escapado;
+      // quem precisa do número (soma/gráfico) usa number(metric(...)), que ignora o texto.
       function metric(item, key, fallback = 0) {
         const m = item.metrics || {};
-        if (m[key] !== undefined && m[key] !== null) return m[key];
-        if (key === 'cameraTotal') return m.cameras?.total ?? fallback;
-        if (key === 'cameraOnline') return m.cameras?.online ?? fallback;
-        if (key === 'cameraOffline') return m.cameras?.offline ?? fallback;
-        if (key === 'cameraError') return m.cameras?.error ?? fallback;
-        if (key === 'diskUsagePercent') return m.disk?.usagePercent ?? fallback;
-        return fallback;
+        const pick =
+          m[key] !== undefined && m[key] !== null ? m[key]
+          : key === 'cameraTotal' ? m.cameras?.total ?? fallback
+          : key === 'cameraOnline' ? m.cameras?.online ?? fallback
+          : key === 'cameraOffline' ? m.cameras?.offline ?? fallback
+          : key === 'cameraError' ? m.cameras?.error ?? fallback
+          : key === 'diskUsagePercent' ? m.disk?.usagePercent ?? fallback
+          : fallback;
+        return escapeHtml(pick);
       }
       function bytes(value) {
         let size = number(value, 0);
@@ -1172,7 +1177,7 @@
               <div class="kv">
                 <div>Nome</div><div>${escapeHtml(item.server?.hostname || '-')}</div>
                 <div>Sistema</div><div>${escapeHtml(platformLabel(item.server?.platform))}</div>
-                <div>Processador</div><div>${item.server?.cpuCount ?? '-'} núcleos</div>
+                <div>Processador</div><div>${escapeHtml(item.server?.cpuCount ?? '-')} núcleos</div>
                 <div>Memória</div><div>${mem == null ? '-' : `${mem}% em uso`}</div>
                 <div>Armazenamento</div><div>${item.storage?.disk ? `${bytes(item.storage.disk.usedBytes)} / ${bytes(item.storage.disk.totalBytes)}` : '-'}</div>
               </div>
@@ -1230,7 +1235,7 @@
           return `<tr data-id="${escapeHtml(item.id)}">
             <td><div class="client-name">${escapeHtml(displayName(item))}</div><div class="subtext">${escapeHtml(item.id)}</div></td>
             <td>${escapeHtml(item.server?.hostname || '-')}<div class="subtext">${escapeHtml(platformLabel(item.server?.platform))}</div></td>
-            <td>${item.server?.cpuCount ?? '-'} núcleos</td>
+            <td>${escapeHtml(item.server?.cpuCount ?? '-')} núcleos</td>
             <td>${mem == null ? '-' : progress(mem)}</td>
             <td>${progress(metric(item, 'diskUsagePercent', 0))}</td>
             <td>${escapeHtml(item.version || '-')}</td>

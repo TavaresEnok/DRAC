@@ -3,6 +3,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Prisma, UserRole } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { existsSync } from 'node:fs';
+import { ensureFileUnderRoot } from '../recordings/helpers/safe-file.helper';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { AuthUser } from '../common/types/auth-user.type';
 import { CreateInvestigationDto } from './dto/create-investigation.dto';
@@ -653,8 +654,25 @@ export class InvestigationsService {
     if (!pkg) throw new NotFoundException('Pacote de exportação não encontrado.');
     const metadata = pkg.metadata && typeof pkg.metadata === 'object' ? (pkg.metadata as Record<string, unknown>) : {};
     const artifact = metadata.artifact && typeof metadata.artifact === 'object' ? (metadata.artifact as Record<string, unknown>) : null;
-    const filePath = artifact && typeof artifact.filePath === 'string' ? artifact.filePath : null;
-    if (!filePath || !existsSync(filePath)) {
+    const rawFilePath = artifact && typeof artifact.filePath === 'string' ? artifact.filePath : null;
+    if (!rawFilePath) {
+      throw new NotFoundException('Arquivo do pacote ainda não está disponível no storage.');
+    }
+    // O `metadata` é um JSON livre gravado por `addItem` — ou seja, controlável por quem
+    // cria o item (OPERATOR). Sem esta checagem, forjar um item type='export_package' com
+    // metadata.artifact.filePath='/proc/self/environ' fazia o download servir QUALQUER
+    // arquivo legível pela API (env → JWT_SECRET → token SUPER_ADMIN forjado).
+    // O caminho legítimo é sempre escrito por evidence-export.processor sob esta raiz.
+    let filePath: string;
+    try {
+      filePath = ensureFileUnderRoot(
+        process.env.EVIDENCE_PACKAGES_ROOT || './storage/evidence-packages',
+        rawFilePath,
+      );
+    } catch {
+      throw new NotFoundException('Pacote de exportação não encontrado.');
+    }
+    if (!existsSync(filePath)) {
       throw new NotFoundException('Arquivo do pacote ainda não está disponível no storage.');
     }
     return {

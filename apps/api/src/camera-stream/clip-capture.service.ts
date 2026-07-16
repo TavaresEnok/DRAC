@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CamerasService } from '../cameras/cameras.service';
 import { CryptoService } from '../common/crypto/crypto.service';
+import { sanitizeSensitiveText } from '../common/security/sensitive-text.helper';
 import { buildRtspUrl, resolveRecordingRtspProfile } from '../cameras/helpers/rtsp-url.helper';
 
 type ClipState = {
@@ -110,9 +111,15 @@ export class ClipCaptureService {
       startedAt: Date.now(), stderrTail: '', exited: false, exitCode: null,
       autoStop: setTimeout(() => { void this.stop(clipId, userId).catch(() => undefined); }, this.maxMs + 2000),
     };
-    proc.stderr?.on('data', (b: Buffer) => { state.stderrTail = (state.stderrTail + b.toString()).slice(-1000); });
+    // Sanitiza JÁ AQUI (como recording-process-manager:843): o stderr do FFmpeg imprime a
+    // URL de entrada inteira ("Error opening input file rtsp://user:senha@...") e este
+    // stderrTail é devolvido ao cliente numa BadRequestException lá no stop(). Sem isto,
+    // um VIEWER pedindo clipe de câmera offline recebia a SENHA da câmera na resposta.
+    proc.stderr?.on('data', (b: Buffer) => {
+      state.stderrTail = sanitizeSensitiveText(state.stderrTail + b.toString()).slice(-1000);
+    });
     proc.on('close', (code) => { state.exited = true; state.exitCode = code; });
-    proc.on('error', (e) => { state.exited = true; this.logger.error(`ffmpeg clip ${clipId}: ${e.message}`); });
+    proc.on('error', (e) => { state.exited = true; this.logger.error(`ffmpeg clip ${clipId}: ${sanitizeSensitiveText(e)}`); });
     this.clips.set(clipId, state);
     this.logger.log(`clip start ${clipId} camera=${cameraId} user=${userId}`);
     return { clipId };
@@ -140,7 +147,11 @@ export class ClipCaptureService {
     const durationMs = Date.now() - st.startedAt;
     if (sizeBytes <= 0) {
       this.cleanup(clipId);
-      throw new BadRequestException(`Não foi possível gravar o clipe (câmera indisponível?). ${st.stderrTail.trim().slice(0, 200)}`);
+      // Dupla camada: o stderrTail já entra sanitizado, mas esta message vai direto no
+      // corpo da resposta (http-exception.filter serializa o getResponse() verbatim).
+      throw new BadRequestException(
+        `Não foi possível gravar o clipe (câmera indisponível?). ${sanitizeSensitiveText(st.stderrTail).trim().slice(0, 200)}`,
+      );
     }
     return { ok: true, sizeBytes, durationMs };
   }
