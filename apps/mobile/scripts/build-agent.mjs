@@ -41,6 +41,14 @@ const MIN_FREE_GB = process.env.MIN_FREE_GB || '6';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}$/;
 const PKG_RE = /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/;
+// apiUrl e appName ficavam SEM validação enquanto slug/packageId eram estritos. Os dois
+// descem para o build-client.sh, que roda no HOST com as keystores — e o apiUrl chegava a
+// ser interpolado no fonte de um `node -e`. Validar aqui é a 2ª barreira (a 1ª é passar
+// tudo por env/argv em vez de costurar em código).
+const API_URL_RE = /^https?:\/\/[A-Za-z0-9._-]+(:\d{1,5})?(\/[A-Za-z0-9._~/-]*)?$/;
+// Nome de exibição: letras/números/espaço e pontuação simples. Sem aspas, sem barra
+// (vira nome de arquivo no kit: `${APP_NAME}.aab`), sem '..'.
+const APP_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} ._()-]{0,59}$/u;
 
 fs.mkdirSync(BUILDS_DIR, { recursive: true });
 
@@ -172,6 +180,8 @@ function writeClient(body) {
   const { slug, appName, apiUrl } = body;
   if (!SLUG_RE.test(slug || '')) throw new Error('slug inválido (a-z 0-9 -)');
   if (!appName || !apiUrl) throw new Error('appName e apiUrl são obrigatórios');
+  if (!APP_NAME_RE.test(String(appName))) throw new Error('appName inválido (letras, números, espaço e . _ - ( ), até 60)');
+  if (!API_URL_RE.test(String(apiUrl))) throw new Error('apiUrl inválida (use http(s)://host[:porta][/caminho])');
   const packageId = body.packageId || `com.ajustconsulting.drac${String(slug).replace(/-/g, '')}`;
   if (!PKG_RE.test(packageId)) throw new Error('packageId inválido');
   // Converte o branding ANTES de tocar no diretório do cliente: se o logo for

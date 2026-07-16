@@ -9,6 +9,7 @@ import { AuthService } from '../auth/auth.service';
 import { CommercialPolicyService } from '../commercial-policy/commercial-policy.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
+import { timingSafeTextEquals } from '../common/security/timing-safe.helper';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { type AuthUser } from '../common/types/auth-user.type';
 import { RequirePermission } from '../role-permissions/require-permission.decorator';
@@ -108,12 +109,14 @@ export class CameraStreamController {
 
     // Processos internos (API, métricas e publishers FFmpeg) continuam usando a
     // credencial administrativa já existente. O endpoint só é chamado pela rede
-    // interna do Compose, mas a credencial ainda é obrigatória.
+    // interna do Compose (o nginx o bloqueia com 404 na borda), mas a credencial
+    // ainda é obrigatória — e a comparação é em tempo constante: acertá-la libera
+    // read E publish em QUALQUER path, ignorando streamToken e ACL.
     if (
       expectedUser &&
       expectedPass &&
-      suppliedUser === expectedUser &&
-      suppliedPass === expectedPass
+      timingSafeTextEquals(suppliedUser, expectedUser) &&
+      timingSafeTextEquals(suppliedPass, expectedPass)
     ) {
       return res.status(200).json({ authorized: true });
     }

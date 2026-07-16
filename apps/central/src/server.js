@@ -391,7 +391,8 @@ function cleanExpiredSessions(db) {
 
 function getAuthenticatedUser(req, db) {
   const header = String(req.headers.authorization || '');
-  if (ADMIN_TOKEN && header === `Bearer ${ADMIN_TOKEN}`) {
+  // timing-safe: acertar este token é bypass TOTAL de autenticação da Central.
+  if (ADMIN_TOKEN && timingSafeTextEquals(header, `Bearer ${ADMIN_TOKEN}`)) {
     return { email: 'api-token', method: 'bearer' };
   }
   cleanExpiredSessions(db);
@@ -1010,8 +1011,13 @@ async function artifactFetch(pathname) {
 
 // ── Geração automática de app por cliente ────────────────────────────────────
 function clientIp(req) {
-  const xff = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
-  let ip = xff || req?.socket?.remoteAddress || '';
+  // X-Real-IP é setado pelo nginx com $remote_addr e SOBRESCRITO a cada request — o
+  // cliente não consegue forjá-lo. Já o X-Forwarded-For é `$proxy_add_x_forwarded_for`
+  // (o nginx ANEXA o IP real ao FINAL), então o primeiro elemento é o que o atacante
+  // mandou: usá-lo permitia zerar o bucket do rate limit de login a cada tentativa
+  // (a chave é `${clientIp}:${email}`) e envenenar o IP da trilha de auditoria.
+  const realIp = String(req?.headers?.['x-real-ip'] || '').trim();
+  const ip = realIp || req?.socket?.remoteAddress || '';
   return ip.replace(/^::ffff:/, '');
 }
 
@@ -1152,7 +1158,10 @@ async function handlePatchApp(req, res, db, actor, installationId) {
   if (packageId && !PKG_RE.test(packageId)) {
     return json(req, res, 400, { error: 'invalid_package', message: 'Pacote inválido. Use o formato com.empresa.app (letras, números, pontos).' });
   }
-  if (apiUrl && !/^https?:\/\/.+/i.test(apiUrl) && !/^[a-z0-9.-]+(:\d+)?$/i.test(apiUrl)) {
+  // O `.+` de antes aceitava aspas/espaço/qualquer coisa após o esquema. Este valor desce
+  // até o build-client.sh, que roda no HOST com as keystores — restringe o charset ao que
+  // é URL de verdade (mesmo formato validado pelo build-agent).
+  if (apiUrl && !/^https?:\/\/[A-Za-z0-9._-]+(:\d{1,5})?(\/[A-Za-z0-9._~/-]*)?$/.test(apiUrl) && !/^[a-z0-9.-]+(:\d+)?$/i.test(apiUrl)) {
     return json(req, res, 400, { error: 'invalid_apiurl', message: 'Servidor inválido. Use um domínio/IP (ex.: 168.194.13.70) ou URL completa.' });
   }
   item.app = item.app || { slug: deriveAppSlug(item), apiUrl: deriveClientApiUrl(item) };

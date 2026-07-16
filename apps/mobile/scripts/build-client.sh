@@ -276,7 +276,10 @@ if [[ -f "$APK_PUBLISH_DIR/drac-$SLUG.aab" ]] && KIT_STAGE="$(mktemp -d)"; then
   echo ">> montando kit Play Store…"
   (
     set +e
-    cp "$APK_PUBLISH_DIR/drac-$SLUG.aab" "$KIT_STAGE/${APP_NAME}.aab"
+    # APP_NAME vem do cadastro do cliente e vira NOME DE ARQUIVO — sanitiza para não
+    # escapar do staging via '../' (o build-agent também valida na entrada).
+    APP_NAME_FILE="${APP_NAME//[^A-Za-z0-9._-]/_}"
+    cp "$APK_PUBLISH_DIR/drac-$SLUG.aab" "$KIT_STAGE/${APP_NAME_FILE:-app}.aab"
     ICON_SRC="$CLIENT_DIR/icon.png"; [[ -f "$ICON_SRC" ]] || ICON_SRC="$MOBILE_DIR/assets/icon.png"
     [[ -f "$ICON_SRC" ]] && command -v ffmpeg >/dev/null 2>&1 && \
       ffmpeg -y -loglevel error -i "$ICON_SRC" -vf "scale=512:512:flags=lanczos" "$KIT_STAGE/icone-512.png" 2>/dev/null
@@ -284,8 +287,12 @@ if [[ -f "$APK_PUBLISH_DIR/drac-$SLUG.aab" ]] && KIT_STAGE="$(mktemp -d)"; then
     [[ -f "$CHECKLIST" ]] && cp "$CHECKLIST" "$KIT_STAGE/checklist-play-store.md"
     [[ -f "$BUILDS_DIR/drac-$SLUG-build-info.json" ]] && cp "$BUILDS_DIR/drac-$SLUG-build-info.json" "$KIT_STAGE/build-info.json"
     [[ -f "$APK_PUBLISH_DIR/drac-$SLUG.sha256" ]] && cp "$APK_PUBLISH_DIR/drac-$SLUG.sha256" "$KIT_STAGE/SHA256SUMS.txt"
-    API_URL="$(node -e "process.stdout.write((require('$CONFIG').apiUrl||''))" 2>/dev/null)"
-    PRIV_URL="$(node -e "const a='$API_URL'.replace(/\/api\/*\$/,'').replace(/\/+\$/,''); process.stdout.write(a?a+'/privacidade.html':'(defina o dominio HTTPS do servidor)')" 2>/dev/null)"
+    # Os valores vão por ENV, nunca costurados no FONTE do `node -e`. Antes, o apiUrl do
+    # cliente era interpolado dentro de um literal JS ('$API_URL'): uma aspa simples no
+    # valor fechava a string e o resto executava como JavaScript — e este script roda no
+    # HOST (build-agent fora do container), com acesso às keystores de assinatura.
+    API_URL="$(DRAC_CONFIG_PATH="$CONFIG" node -e 'process.stdout.write((require(process.env.DRAC_CONFIG_PATH).apiUrl||""))' 2>/dev/null)"
+    PRIV_URL="$(DRAC_API_URL="$API_URL" node -e 'const a=(process.env.DRAC_API_URL||"").replace(/\/api\/*$/,"").replace(/\/+$/,""); process.stdout.write(a?a+"/privacidade.html":"(defina o dominio HTTPS do servidor)")' 2>/dev/null)"
     cat > "$KIT_STAGE/LEIA-ME.txt" <<EOF
 Kit de publicação — $APP_NAME
 Gerado em: $(date '+%Y-%m-%d %H:%M')

@@ -77,6 +77,8 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
   onApplicationBootstrap() {
     if (!this.isEnabled()) return;
 
+    this.assertStrongApiCredentials();
+
     if (this.configService.get<boolean>('mediaMtxWarmPathsOnBoot') !== false) {
       void this.warmCameraPaths();
     }
@@ -182,6 +184,28 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
     const h = match[1];
     const cameraId = `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
     return { cameraId, deliveryMode: match[2] ? 'grid' : 'selected' };
+  }
+
+  /**
+   * MEDIAMTX_API_PASS era o ÚNICO segredo sem validação de força (JWT_SECRET,
+   * CAMERA_SECRET_KEY e INTERNAL_SERVICE_TOKEN já falham no boot com valor default/curto).
+   * Como o .env.example traz `change_me_mediamtx_pass` e o compose só exige que a var
+   * exista, uma instalação que copiasse o exemplo subia com credencial pública conhecida —
+   * e essa credencial libera read/publish em QUALQUER câmera no MediaMTX.
+   */
+  private assertStrongApiCredentials() {
+    const user = (this.configService.get<string>('mediaMtxApiUser') ?? '').trim();
+    const pass = (this.configService.get<string>('mediaMtxApiPass') ?? '').trim();
+    // O USUÁRIO não é segredo: basta existir e não ser o valor de exemplo (não exigir
+    // tamanho — nomes curtos como "nexusguard" são legítimos). A SENHA é o segredo.
+    if (!user || user.startsWith('change_me')) {
+      throw new Error('MEDIAMTX_API_USER inválido. Defina um usuário e não use o valor de exemplo (change_me_*).');
+    }
+    if (!pass || pass.startsWith('change_me') || pass.length < 24) {
+      throw new Error(
+        'MEDIAMTX_API_PASS inválida. Defina um segredo forte (>= 24 chars) e não use o valor de exemplo (change_me_*).',
+      );
+    }
   }
 
   isEnabled() {
