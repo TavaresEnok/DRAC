@@ -13,7 +13,7 @@ const PORT = Number(process.env.PORT || 3000);
 const CAMERA_IP = process.env.CAMERA_IP || '168.194.15.82';
 const ONVIF_IP = process.env.ONVIF_IP || CAMERA_IP;
 const CAMERA_USER = process.env.CAMERA_USER || 'admin';
-const CAMERA_PASSWORD = process.env.CAMERA_PASSWORD || '112233ajust';
+const CAMERA_PASSWORD = process.env.CAMERA_PASSWORD || ''  // credencial removida do repo: defina CAMERA_PASSWORD no ambiente;
 
 const RTSP_PORT = Number(process.env.RTSP_PORT || 51488);
 const RTSP_CHANNEL = process.env.RTSP_CHANNEL || '1';

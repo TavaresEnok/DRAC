@@ -2,7 +2,7 @@ const axios = require('axios');
 
 const CAMERA_IP = '172.20.0.219';
 const CAMERA_USER = 'admin';
-const CAMERA_PASSWORD = '112233ajust';
+const CAMERA_PASSWORD = process.env.CAMERA_PASSWORD || ''  // credencial removida do repo;
 
 // Lista expandida de possíveis URLs
 const URLS = [
