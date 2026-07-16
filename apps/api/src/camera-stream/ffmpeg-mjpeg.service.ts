@@ -417,8 +417,11 @@ export class FfmpegMjpegService {
           }
         } catch (error) {
           lastError = error;
+          // A message do erro do execFile carrega o stderr CRU do FFmpeg, que imprime a
+          // URL de entrada inteira ("Error opening input file rtsp://user:senha@..."):
+          // sanitizar só a `url` não basta — a credencial vaza pela message.
           this.logger.debug(
-            `Falha ao gerar poster live camera=${cameraId} transport=${transport} url=${this.sanitizeRtspUrl(url)}: ${(error as Error).message}`,
+            `Falha ao gerar poster live camera=${cameraId} transport=${transport} url=${this.sanitizeRtspUrl(url)}: ${sanitizeSensitiveText(error)}`,
           );
         }
       }
@@ -427,8 +430,12 @@ export class FfmpegMjpegService {
     const stale = this.posterCache.get(cameraId);
     if (stale) return stale;
 
+    // Idem, e aqui é PIOR: esta message vai na RESPOSTA HTTP. Sem sanitizar, a senha da
+    // câmera (embutida no stderr do FFmpeg) chegaria ao cliente que pediu o poster.
     throw new ServiceUnavailableException(
-      lastError instanceof Error ? `Falha ao gerar imagem inicial: ${lastError.message}` : 'Falha ao gerar imagem inicial.',
+      lastError instanceof Error
+        ? `Falha ao gerar imagem inicial: ${sanitizeSensitiveText(lastError)}`
+        : 'Falha ao gerar imagem inicial.',
     );
   }
 

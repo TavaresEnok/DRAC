@@ -631,7 +631,12 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`MediaMTX API ${method} ${path} failed (${response.status}): ${text.slice(0, 160)}`);
+        // A config que enviamos ao MediaMTX embute a URL RTSP da câmera COM credencial;
+        // um erro pode ecoá-la de volta no corpo. Sanitiza antes de virar Error.message
+        // (que sobe para logs e mensagens de diagnóstico).
+        throw new Error(
+          `MediaMTX API ${method} ${path} failed (${response.status}): ${sanitizeSensitiveText(text).slice(0, 160)}`,
+        );
       }
       return await response.text().catch(() => '');
     } finally {

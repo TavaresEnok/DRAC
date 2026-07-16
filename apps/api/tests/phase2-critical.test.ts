@@ -92,6 +92,40 @@ test('security logs: remove todas as credenciais embutidas em URLs', () => {
   assert.match(sanitized, /rtsp:\/\/<redacted>@10\.0\.0\.20/);
 });
 
+// O helper acima sempre funcionou — o vazamento real (2026-07-15: 10 linhas com senha de
+// câmera em claro no log da api) aconteceu porque os CALL SITES não o aplicavam. O stderr
+// do FFmpeg/ffprobe imprime a URL de entrada inteira, e ela chega via `error.message`,
+// não via a `url` que já era sanitizada. Esta trava vigia os pontos onde isso entra.
+test('security logs: pontos que carregam stderr de FFmpeg/ffprobe sanitizam a mensagem', () => {
+  const mjpeg = readFileSync('src/camera-stream/ffmpeg-mjpeg.service.ts', 'utf8');
+  // poster: a message do execFile traz o stderr do FFmpeg (com a URL+credencial)
+  assert.match(
+    mjpeg,
+    /Falha ao gerar poster live[^`]*sanitizeSensitiveText\(error\)/,
+    'log de falha do poster deve sanitizar o erro (stderr do FFmpeg), não só a url',
+  );
+  // pior caso: esta message vai na RESPOSTA HTTP
+  assert.match(
+    mjpeg,
+    /Falha ao gerar imagem inicial: \$\{sanitizeSensitiveText\(lastError\)\}/,
+    'a exceção HTTP do poster deve sanitizar o erro antes de responder ao cliente',
+  );
+
+  const cameras = readFileSync('src/cameras/cameras.service.ts', 'utf8');
+  assert.match(
+    cameras,
+    /const clean = sanitizeSensitiveText\(stderr\.trim\(\)\)/,
+    'o stderr do ffprobe deve ser sanitizado antes de virar resultado do probe',
+  );
+
+  const proxy = readFileSync('src/camera-stream/mediamtx-proxy.service.ts', 'utf8');
+  assert.match(
+    proxy,
+    /MediaMTX API \$\{method\} \$\{path\} failed[^`]*sanitizeSensitiveText\(text\)/,
+    'o corpo de erro do MediaMTX pode ecoar a config com a URL+credencial; sanitizar',
+  );
+});
+
 test('recordings maintenance: arquivos inválidos não entram em backfill infinito', () => {
   const source = readFileSync('src/recordings/recordings.service.ts', 'utf8');
   const worker = readFileSync('src/jobs/processors/thumbnail-generation.processor.ts', 'utf8');

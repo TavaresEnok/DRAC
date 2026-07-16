@@ -23,6 +23,7 @@ import {
   resolveRecordingRtspProfile,
   sanitizeRtspUrl,
 } from './helpers/rtsp-url.helper';
+import { sanitizeSensitiveText } from '../common/security/sensitive-text.helper';
 import { assessCameraCompatibility } from './helpers/camera-compatibility.helper';
 import {
   GRID_LIVE_MAX_HEIGHT,
@@ -1184,13 +1185,15 @@ export class CamerasService {
         proc.stderr.on('data', (chunk) => {
           stderr += chunk.toString();
         });
-        proc.on('error', (error) => finish({ ok: false, error: error.message, metadata: null }));
+        proc.on('error', (error) => finish({ ok: false, error: sanitizeSensitiveText(error), metadata: null }));
         proc.on('close', (code) => {
           if (code === 0) {
             finish({ ok: true, error: null, metadata: this.parseProbedStreamMetadata(stdout) });
             return;
           }
-          const clean = stderr.trim();
+          // O stderr do ffprobe imprime a URL de entrada INTEIRA (rtsp://user:senha@...).
+          // Sanitizar antes de propagar: este `error` vai para logs e diagnósticos.
+          const clean = sanitizeSensitiveText(stderr.trim());
           finish({ ok: false, error: clean.length ? clean.slice(0, 300) : `ffprobe exit ${code ?? -1}`, metadata: null });
         });
       });
