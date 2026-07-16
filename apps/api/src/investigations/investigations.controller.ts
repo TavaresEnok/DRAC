@@ -5,6 +5,7 @@ import { Request } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { RequirePermission } from '../role-permissions/require-permission.decorator';
 import { AuthUser } from '../common/types/auth-user.type';
 import { CreateInvestigationDto } from './dto/create-investigation.dto';
 import { UpdateInvestigationDto } from './dto/update-investigation.dto';
@@ -126,6 +127,11 @@ export class InvestigationsController {
   }
 
   @Roles(UserRole.OPERATOR)
+  // reportGenerate existia na matriz de permissões (e no painel "Perfis e Permissões")
+  // mas NÃO era exigido em rota nenhuma — desmarcar não surtia efeito. OPERATOR e ADMIN
+  // já o têm por padrão, então exigir aqui não muda o comportamento atual: apenas faz o
+  // controle passar a valer de verdade.
+  @RequirePermission('reportGenerate')
   @Get(':id/report')
   async report(
     @CurrentUser() user: AuthUser,

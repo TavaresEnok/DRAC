@@ -17,13 +17,15 @@ export class SiteMapLayoutsController {
 
   @Roles(UserRole.VIEWER)
   @Get()
-  list(@CurrentUser() user: AuthUser, @Param('siteId') siteId: string) {
+  async list(@CurrentUser() user: AuthUser, @Param('siteId') siteId: string) {
+    await this.siteMapLayoutsService.assertCanViewSite(user, siteId);
     return this.siteMapLayoutsService.list(siteId, user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN);
   }
 
   @Roles(UserRole.VIEWER)
   @Get(':floor')
-  getByFloor(@CurrentUser() user: AuthUser, @Param('siteId') siteId: string, @Param('floor') floor: string) {
+  async getByFloor(@CurrentUser() user: AuthUser, @Param('siteId') siteId: string, @Param('floor') floor: string) {
+    await this.siteMapLayoutsService.assertCanViewSite(user, siteId);
     return this.siteMapLayoutsService.getByFloor(
       siteId,
       floor,

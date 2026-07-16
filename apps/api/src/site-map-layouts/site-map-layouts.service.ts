@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { AccessControlService } from '../access-control/access-control.service';
+import { AuthUser } from '../common/types/auth-user.type';
 import { SitesService } from '../sites/sites.service';
 import { UpsertSiteMapLayoutDto } from './dto/upsert-site-map-layout.dto';
 
@@ -15,7 +17,26 @@ export class SiteMapLayoutsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sitesService: SitesService,
+    private readonly accessControlService: AccessControlService,
   ) {}
+
+  /**
+   * O site é dado de tenant: a planta baixa (SVG) e a posição das câmeras revelam o
+   * layout físico do cliente. Não havia escopo nenhum — o `user` só decidia se sites
+   * inativos entravam, e qualquer VIEWER lia o mapa de QUALQUER site (recon de outro
+   * tenant). Um site é acessível se o usuário enxerga ao menos uma câmera dele.
+   */
+  async assertCanViewSite(user: AuthUser, siteId: string) {
+    if (user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN) return;
+    const accessibleCameraIds = await this.accessControlService.getAccessibleCameraIds(user);
+    if (!accessibleCameraIds.length) throw new NotFoundException('Site não encontrado.');
+    const camera = await this.prisma.camera.findFirst({
+      where: { siteId, id: { in: accessibleCameraIds } },
+      select: { id: true },
+    });
+    // NotFound (e não Forbidden) para não confirmar a existência do site a quem não o vê.
+    if (!camera) throw new NotFoundException('Site não encontrado.');
+  }
 
   async list(siteId: string, includeInactiveSite: boolean) {
     await this.sitesService.getById(siteId, includeInactiveSite);

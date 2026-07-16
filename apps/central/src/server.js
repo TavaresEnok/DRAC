@@ -1280,8 +1280,27 @@ function runRemoteInstall(job, conn, opts, command) {
       username: opts.username,
       password: opts.password,
       readyTimeout: 20_000,
-      // Servidores de clientes têm host key desconhecida na 1ª conexão; como o
-      // operador forneceu as credenciais root, aceitamos a chave (TOFU).
+      // TOFU DE VERDADE. Antes o comentário dizia "TOFU" mas nada era guardado nem
+      // comparado — na prática aceitava QUALQUER host key, ou seja, a senha ROOT do
+      // servidor do cliente ia para quem respondesse naquele IP (MITM, DNS envenenado,
+      // IP reciclado). Agora: 1ª conexão aprende e persiste a fingerprint; nas seguintes,
+      // divergência ABORTA antes de enviar a senha.
+      hostVerifier: (key) => {
+        const fingerprint = crypto.createHash('sha256').update(key).digest('base64');
+        if (opts.knownHostKey) {
+          if (timingSafeTextEquals(opts.knownHostKey, fingerprint)) return true;
+          appendInstallLog(
+            job,
+            `>> ABORTADO: a host key SSH deste servidor MUDOU (esperada SHA256:${opts.knownHostKey}, ` +
+              `recebida SHA256:${fingerprint}). Pode ser man-in-the-middle. Se a troca foi legítima ` +
+              `(reinstalação do servidor), limpe a chave conhecida na instalação e tente de novo.\n`,
+          );
+          return false;
+        }
+        appendInstallLog(job, `>> host key aprendida (SHA256:${fingerprint}) — será exigida nas próximas conexões.\n`);
+        if (typeof opts.onLearnHostKey === 'function') opts.onLearnHostKey(fingerprint);
+        return true;
+      },
       algorithms: undefined,
     });
 }
@@ -1320,8 +1339,26 @@ async function handleRemoteInstall(req, res, db, actor, installationId) {
   addAuditEvent(db, req, { type: 'installation.remote_install_started', actor: actor.email, result: 'accepted', installationId });
   await saveDb(db);
 
+  // TOFU da host key SSH: guardada por host:porta (um mesmo cliente pode trocar de
+  // servidor, e servidores diferentes têm chaves diferentes).
+  const hostKeyId = `${host}:${port}`;
+  const knownHostKey = (item.sshHostKeys || {})[hostKeyId] || null;
+  const onLearnHostKey = (fingerprint) => {
+    void (async () => {
+      try {
+        const fresh = await loadDb();
+        const target = fresh.installations[installationId];
+        if (!target) return;
+        target.sshHostKeys = { ...(target.sshHostKeys || {}), [hostKeyId]: fingerprint };
+        await saveDb(fresh);
+      } catch {
+        /* aprender a chave é best-effort: não deve derrubar a instalação em curso */
+      }
+    })();
+  };
+
   // Dispara em background; o cliente acompanha por GET /remote-installs/:id.
-  runRemoteInstall(job, null, { host, port, username, password }, command);
+  runRemoteInstall(job, null, { host, port, username, password, knownHostKey, onLearnHostKey }, command);
 
   return json(req, res, 202, { jobId, status: job.status });
 }

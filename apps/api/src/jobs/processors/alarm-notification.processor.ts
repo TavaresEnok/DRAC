@@ -155,7 +155,12 @@ export class AlarmNotificationProcessor extends WorkerHost {
         .digest('hex');
     }
 
-    await axios.post(webhook, payload, { timeout: 8000, headers });
+    // maxRedirects: 0 — a allowlist e o check de IP privado acima cobrem só o PRIMEIRO
+    // salto. Com o default do axios (5 redirects), um host permitido responde 302 para
+    // http://169.254.169.254/... e a requisição sai para o metadata service levando junto
+    // o header X-Alarm-Signature. Webhook legítimo não precisa de redirect: se o destino
+    // mudou, o admin atualiza a URL.
+    await axios.post(webhook, payload, { timeout: 8000, headers, maxRedirects: 0 });
     return { skipped: false };
   }
 
