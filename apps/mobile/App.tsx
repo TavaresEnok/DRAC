@@ -14,6 +14,7 @@ import { BottomTabs } from './src/components/BottomTabs';
 import { AlarmsScreen } from './src/screens/AlarmsScreen';
 import { CentralScreen } from './src/screens/CentralScreen';
 import { HomeRedesign } from './src/screens/redesign/HomeRedesign';
+import { CamerasRedesign } from './src/screens/redesign/CamerasRedesign';
 import { BottomTabsRedesign } from './src/components/BottomTabsRedesign';
 import { LiveScreen } from './src/screens/LiveScreen';
 import { LoginScreen } from './src/screens/LoginScreen';
@@ -1428,6 +1429,15 @@ function AppInner() {
         )}
 
         {tab === 'mosaico' && (
+          isRedesign ? (
+            <CamerasRedesign
+              cameras={cameras}
+              streamPosters={streamPosters}
+              refreshing={refreshing}
+              onRefresh={loadAll}
+              onOpenCamera={openLive}
+            />
+          ) : (
           <MosaicScreen
             cameras={cameras}
             streamUrls={streamUrls}
@@ -1441,6 +1451,7 @@ function AppInner() {
             onRefreshStream={(cameraId) => { void loadStream(cameraId, 'grid', true); }}
             onPosterError={(cameraId) => { void refreshPoster(cameraId); }}
           />
+          )
         )}
 
         {tab === 'reproducao' && (
