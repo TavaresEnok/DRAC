@@ -13,6 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useColorScheme } from 'react-native';
 import { type Theme, darkTheme, lightTheme, themeFor } from './theme';
+import { isRedesign } from './redesign';
 import { EMPTY_BRANDING, type BrandingPalette, type RuntimeBranding, darkenHex, ensureReadableText, isValidHex, shiftHex, withAlpha } from '../services/branding';
 
 export type ThemeMode = 'dark' | 'light' | 'system';
@@ -156,9 +157,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const resolvedMode: 'dark' | 'light' = themeMode === 'system' ? (systemScheme === 'light' ? 'light' : 'dark') : themeMode;
   const value = useMemo<ThemeContextValue>(
     () => ({
-      // themeFor aplica as paletas do redesign quando a flag está ligada; com ela
-      // desligada devolve exatamente darkTheme/lightTheme (app atual inalterado).
-      theme: withBranding(themeFor(resolvedMode), branding[resolvedMode]),
+      // No REDESIGN as cores têm de ser EXATAMENTE as do mockup, então NÃO passamos pelo
+      // withBranding (que sobreporia o accent/fundo pela marca do servidor — foi o que
+      // deixava o azul do Grupo Flash no lugar do azul do mockup). Fora do redesign, o
+      // comportamento é o de sempre: tema base + branding do servidor.
+      theme: isRedesign ? themeFor(resolvedMode) : withBranding(themeFor(resolvedMode), branding[resolvedMode]),
       themeMode,
       setThemeMode,
       branding,
