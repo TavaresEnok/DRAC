@@ -4,9 +4,11 @@
  * armazenamento, lista de ações, sair. Ligado ao usuário/tema reais.
  */
 import Constants from 'expo-constants';
+import { useState } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useTheme } from '../../theme/ThemeProvider';
 import { Icon, type IconName } from '../../components/Icon';
+import { PersonalizationRedesign } from './PersonalizationRedesign';
 
 const TITLE = 'Sora';
 const UI = 'InstrumentSans';
@@ -35,6 +37,11 @@ export function SettingsRedesign(props: Props) {
   const s = makeStyles(theme);
   const isDark = themeMode === 'dark' || (themeMode === 'system' && theme.mode === 'dark');
   const version = Constants.expoConfig?.version ?? '1.0';
+  const [showPersonalization, setShowPersonalization] = useState(false);
+
+  if (showPersonalization) {
+    return <PersonalizationRedesign onBack={() => setShowPersonalization(false)} />;
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
@@ -61,9 +68,11 @@ export function SettingsRedesign(props: Props) {
           <View style={s.activeBadge}><Text style={s.activeText}>Ativo</Text></View>
         </View>
 
-        {/* Preferências */}
-        <Text style={s.section}>Preferências</Text>
+        {/* Configuração */}
+        <Text style={s.section}>Configuração</Text>
         <View style={s.group}>
+          <Item theme={theme} s={s} icon="aperture" label="Personalização do app" onPress={() => setShowPersonalization(true)} />
+          <View style={s.divider} />
           <Prefs theme={theme} s={s} icon="moon" label="Tema escuro" value={isDark} onChange={(v) => setThemeMode(v ? 'dark' : 'light')} />
           {biometricAvailable ? (
             <>
@@ -112,9 +121,9 @@ function Prefs({ theme, s, icon, label, value, onChange }: { theme: any; s: any;
   );
 }
 
-function Item({ theme, s, icon, label }: { theme: any; s: any; icon: IconName; label: string }) {
+function Item({ theme, s, icon, label, onPress }: { theme: any; s: any; icon: IconName; label: string; onPress?: () => void }) {
   return (
-    <TouchableOpacity style={s.pref} activeOpacity={0.7}>
+    <TouchableOpacity style={s.pref} activeOpacity={0.7} onPress={onPress}>
       <View style={s.prefIcon}><Icon name={icon} size={17} color={theme.textSub} /></View>
       <Text style={s.prefLabel}>{label}</Text>
       <Icon name="forward" size={16} color={theme.textMuted} />

@@ -14,6 +14,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { useColorScheme } from 'react-native';
 import { type Theme, darkTheme, lightTheme, themeFor } from './theme';
 import { isRedesign } from './redesign';
+import { loadAppAccent, saveAppAccent } from './appPersonalization';
 import { EMPTY_BRANDING, type BrandingPalette, type RuntimeBranding, darkenHex, ensureReadableText, isValidHex, shiftHex, withAlpha } from '../services/branding';
 
 export type ThemeMode = 'dark' | 'light' | 'system';
@@ -27,6 +28,22 @@ interface ThemeContextValue {
   branding: RuntimeBranding;
   /** Aplica a marca recebida do servidor (cores entram no tema na hora). */
   applyBranding: (branding: RuntimeBranding) => void;
+  /** Accent personalizado do app (redesign). null = padrão do mockup. */
+  appAccent: string | null;
+  /** Personaliza o accent do app; null volta ao padrão do mockup. */
+  setAppAccent: (color: string | null) => void;
+}
+
+/** Aplica um accent personalizado por cima da paleta base (só troca o destaque). */
+function withAppAccent(base: Theme, accent: string | null): Theme {
+  if (!accent || !isValidHex(accent)) return base;
+  const isDark = base.mode === 'dark';
+  return {
+    ...base,
+    accent,
+    accentDark: darkenHex(accent) ?? accent,
+    accentBg: withAlpha(accent, isDark ? 0.16 : 0.1) ?? base.accentBg,
+  };
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -138,12 +155,19 @@ function withBranding(base: Theme, branding: BrandingPalette): Theme {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [branding, setBranding] = useState<RuntimeBranding>(EMPTY_BRANDING);
   const [themeMode, setThemeModeState] = useState<ThemeMode>('system');
+  const [appAccent, setAppAccentState] = useState<string | null>(null);
   const systemScheme = useColorScheme();
 
   useEffect(() => {
     void AsyncStorage.getItem(THEME_MODE_KEY).then((stored) => {
       if (stored === 'dark' || stored === 'light' || stored === 'system') setThemeModeState(stored);
     }).catch(() => undefined);
+    if (isRedesign) void loadAppAccent().then((c) => setAppAccentState(c)).catch(() => undefined);
+  }, []);
+
+  const setAppAccent = useCallback((color: string | null) => {
+    setAppAccentState(color);
+    void saveAppAccent(color);
   }, []);
 
   const applyBranding = useCallback((next: RuntimeBranding) => {
@@ -157,17 +181,20 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const resolvedMode: 'dark' | 'light' = themeMode === 'system' ? (systemScheme === 'light' ? 'light' : 'dark') : themeMode;
   const value = useMemo<ThemeContextValue>(
     () => ({
-      // No REDESIGN as cores têm de ser EXATAMENTE as do mockup, então NÃO passamos pelo
-      // withBranding (que sobreporia o accent/fundo pela marca do servidor — foi o que
-      // deixava o azul do Grupo Flash no lugar do azul do mockup). Fora do redesign, o
-      // comportamento é o de sempre: tema base + branding do servidor.
-      theme: isRedesign ? themeFor(resolvedMode) : withBranding(themeFor(resolvedMode), branding[resolvedMode]),
+      // REDESIGN: base = paleta do mockup (o SISTEMA/servidor nunca personaliza). A
+      // personalização é só do APP, local: um accent opcional sobre o mockup (null =
+      // padrão). Fora do redesign, segue o comportamento antigo (branding do servidor).
+      theme: isRedesign
+        ? withAppAccent(themeFor(resolvedMode), appAccent)
+        : withBranding(themeFor(resolvedMode), branding[resolvedMode]),
       themeMode,
       setThemeMode,
       branding,
       applyBranding,
+      appAccent,
+      setAppAccent,
     }),
-    [themeMode, resolvedMode, setThemeMode, branding, applyBranding],
+    [themeMode, resolvedMode, setThemeMode, branding, applyBranding, appAccent, setAppAccent],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
