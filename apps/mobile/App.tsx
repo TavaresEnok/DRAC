@@ -15,6 +15,8 @@ import { AlarmsScreen } from './src/screens/AlarmsScreen';
 import { CentralScreen } from './src/screens/CentralScreen';
 import { HomeRedesign } from './src/screens/redesign/HomeRedesign';
 import { CamerasRedesign } from './src/screens/redesign/CamerasRedesign';
+import { EventsRedesign } from './src/screens/redesign/EventsRedesign';
+import { SettingsRedesign } from './src/screens/redesign/SettingsRedesign';
 import { BottomTabsRedesign } from './src/components/BottomTabsRedesign';
 import { LiveScreen } from './src/screens/LiveScreen';
 import { LoginScreen } from './src/screens/LoginScreen';
@@ -1482,6 +1484,16 @@ function AppInner() {
         )}
 
         {tab === 'alarmes' && (
+          isRedesign ? (
+            <EventsRedesign
+              alarms={alarms}
+              cameras={cameras}
+              streamPosters={streamPosters}
+              refreshing={refreshing}
+              onRefresh={() => { void reloadAlarms(); }}
+              onOpenCamera={(cameraId) => { const c = cameras.find((x) => x.id === cameraId); if (c) openLive(c); }}
+            />
+          ) : (
           <AlarmsScreen
             alarms={alarms}
             highlightedAlarmId={highlightedAlarmId}
@@ -1495,9 +1507,22 @@ function AppInner() {
               if (camera) openLive(camera);
             }}
           />
+          )
         )}
 
         {tab === 'ajustes' && (
+          isRedesign ? (
+            <SettingsRedesign
+              user={session.user}
+              apiUrl={session.apiUrl}
+              connected={!lastSyncError}
+              biometricAvailable={biometricAvailable}
+              biometricEnabled={biometricEnabled}
+              biometricLabel={biometricLabel}
+              onBiometricChange={(enabled) => { void changeBiometricPreference(enabled); }}
+              onLogout={() => { void logout(); }}
+            />
+          ) : (
           <SettingsScreen
             user={session.user}
             apiUrl={session.apiUrl}
@@ -1508,6 +1533,7 @@ function AppInner() {
             onBiometricChange={(enabled) => { void changeBiometricPreference(enabled); }}
             onLogout={() => { void logout(); }}
           />
+          )
         )}
       </View>
 
