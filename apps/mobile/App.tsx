@@ -13,6 +13,8 @@ import { DEFAULT_API_URL, TOP_SAFE } from './src/config';
 import { BottomTabs } from './src/components/BottomTabs';
 import { AlarmsScreen } from './src/screens/AlarmsScreen';
 import { CentralScreen } from './src/screens/CentralScreen';
+import { HomeRedesign } from './src/screens/redesign/HomeRedesign';
+import { BottomTabsRedesign } from './src/components/BottomTabsRedesign';
 import { LiveScreen } from './src/screens/LiveScreen';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { MosaicScreen } from './src/screens/MosaicScreen';
@@ -1392,6 +1394,21 @@ function AppInner() {
       ) : null}
       <View style={[styles.body, { paddingTop: TOP_SAFE }]}>
         {tab === 'central' && (
+          isRedesign ? (
+            <HomeRedesign
+              cameras={cameras}
+              user={session.user}
+              streamPosters={streamPosters}
+              alarms={alarms}
+              alarmCount={openAlarmCount}
+              refreshing={refreshing}
+              onRefresh={loadAll}
+              onOpenCamera={openLive}
+              onOpenAlarms={() => setTab('alarmes')}
+              onOpenMosaic={() => setTab('mosaico')}
+              onOpenPlayback={() => setTab('reproducao')}
+            />
+          ) : (
           <CentralScreen
             cameras={cameras}
             user={session.user}
@@ -1407,6 +1424,7 @@ function AppInner() {
             onOpenPlayback={() => setTab('reproducao')}
             onPosterError={(cameraId) => { void refreshPoster(cameraId); }}
           />
+          )
         )}
 
         {tab === 'mosaico' && (
@@ -1482,6 +1500,13 @@ function AppInner() {
         )}
       </View>
 
+      {isRedesign ? (
+        <BottomTabsRedesign
+          active={tab}
+          onChange={(next) => { if (next !== 'reproducao') closePlayback(); setTab(next); }}
+          alarmCount={openAlarmCount}
+        />
+      ) : (
       <BottomTabs
         active={tab}
         onChange={(next) => {
@@ -1490,6 +1515,7 @@ function AppInner() {
         }}
         alarmCount={openAlarmCount}
       />
+      )}
     </SafeAreaView>
   );
 }
