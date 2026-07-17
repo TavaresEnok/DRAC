@@ -1,3 +1,6 @@
+// PRIMEIRO import de propósito: o patch de tipografia precisa estar ativo antes de as
+// telas rodarem seus StyleSheet.create (que acontecem no import delas).
+import './src/theme/applyFonts';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -5,6 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, BackHandler, Image, SafeAreaView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { isRedesign } from './src/theme/redesign';
 import { DEFAULT_API_URL, TOP_SAFE } from './src/config';
 import { BottomTabs } from './src/components/BottomTabs';
 import { AlarmsScreen } from './src/screens/AlarmsScreen';

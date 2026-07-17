@@ -4,6 +4,8 @@
  * Os screens consomem o tema via useTheme() (ver ThemeProvider.tsx).
  */
 
+import { isRedesign } from './redesign';
+
 export interface Theme {
   mode: 'dark' | 'light';
 
@@ -103,6 +105,61 @@ export const lightTheme: Theme = {
 
 /** Compatibilidade para consumidores antigos que esperam um tema base. */
 export const baseTheme: Theme = darkTheme;
+
+/**
+ * Paletas do REDESIGN (handoff do mockup). Ficam separadas das de cima de propósito:
+ * com a flag desligada o app atual não muda em nada. Os valores vêm do tokens.css do
+ * designer — fundo um pouco mais fundo, acento mais brilhante, cinzas com viés de azul.
+ */
+const redesignDark: Theme = {
+  ...darkTheme,
+  bg: '#0A0D13',
+  bg2: '#0A0D13',
+  bgText: '#F1F4F9',
+  surface: '#12161F',
+  surfaceAlt: '#1A2029',
+  menu: '#12161F',
+  menuText: '#5C6779',
+  border: 'rgba(255,255,255,0.07)',
+  accent: '#3E8BFF',
+  accentDark: '#2E5EEF',
+  accentBg: 'rgba(62,139,255,0.13)',
+  success: '#33C481',
+  danger: '#F05B52',
+  dangerBg: 'rgba(240,91,82,0.13)',
+  warning: '#F0A33C',
+  text: '#F1F4F9',
+  textSub: '#96A0B0',
+  textMuted: '#5C6779',
+};
+
+const redesignLight: Theme = {
+  ...lightTheme,
+  bg: '#EFF2F7',
+  bg2: '#FFFFFF',
+  bgText: '#131A28',
+  surface: '#FFFFFF',
+  surfaceAlt: '#E7EBF2',
+  menu: '#FFFFFF',
+  menuText: '#9AA6B7',
+  border: 'rgba(16,24,40,0.09)',
+  accent: '#1F6FEB',
+  accentDark: '#1A53C7',
+  accentBg: 'rgba(31,111,235,0.09)',
+  success: '#17945C',
+  danger: '#D9453E',
+  dangerBg: 'rgba(217,69,62,0.10)',
+  warning: '#B57414',
+  text: '#131A28',
+  textSub: '#57657A',
+  textMuted: '#9AA6B7',
+};
+
+/** Tema base por modo, respeitando a flag do redesign. */
+export function themeFor(mode: 'dark' | 'light'): Theme {
+  if (isRedesign) return mode === 'dark' ? redesignDark : redesignLight;
+  return mode === 'dark' ? darkTheme : lightTheme;
+}
 
 /** Espaçamento e raios padronizados (8pt-ish). */
 export const radius = { sm: 10, md: 14, lg: 18, xl: 24, pill: 999 } as const;
