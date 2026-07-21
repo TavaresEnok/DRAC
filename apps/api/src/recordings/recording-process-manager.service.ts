@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
@@ -94,6 +95,19 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
   }
 
   onModuleInit() {
+    // Delegar a gravação ao worker Go troca a política de arquivamento sem que
+    // nada na interface indique isso: o worker é LEGADO e transcodifica para
+    // H.264 baseline/ultrafast (com perda), enquanto o caminho local desta classe
+    // grava em CÓPIA (TS→remux MP4, sem reencode). Avisa alto no boot para que a
+    // divergência nunca passe despercebida em produção.
+    if (this.controlMode === 'worker') {
+      this.logger.warn(
+        'RECORDING_CONTROL_MODE=worker: gravação delegada ao camera-worker-go (LEGADO). '
+        + 'Esse caminho TRANSCODIFICA para H.264 baseline/ultrafast — há PERDA de qualidade e uso contínuo de CPU. '
+        + 'O pipeline oficial (cópia sem reencode) é o modo "local".',
+      );
+    }
+
     const diskGuardEnabled = String(process.env.RECORDING_DISK_GUARD_ENABLED ?? 'true') !== 'false';
     if (diskGuardEnabled) {
       const intervalMs = Math.max(10_000, Number(process.env.RECORDING_DISK_GUARD_INTERVAL_MS ?? 30000));
@@ -127,6 +141,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
   private async startEnabledContinuousRecordings() {
     const cameras = await this.prisma.camera.findMany({
       where: {
+        enabled: true,
         recordingEnabled: true,
         recordingMode: 'continuous',
       },
@@ -274,9 +289,12 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
   async handleMotionDetected(cameraId: string, metadata?: Record<string, unknown>) {
     const camera = await this.prisma.camera.findUnique({
       where: { id: cameraId },
-      select: { id: true, name: true, recordingMode: true, recordingEnabled: true },
+      select: { id: true, name: true, recordingMode: true, recordingEnabled: true, enabled: true },
     });
     if (!camera) throw new NotFoundException('Camera não encontrada.');
+    if (camera.enabled === false) {
+      return { status: 'ignored', reason: 'camera_disabled', cameraId };
+    }
     if (camera.recordingMode !== 'motion') {
       return { status: 'ignored', reason: 'motion_recording_not_enabled', cameraId };
     }
@@ -437,16 +455,14 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
         ? { videoCodec: 'copy', transcode: false, outputIsHevc: false }
         : { videoCodec: 'libx264', transcode: true, outputIsHevc: false };
     }
-    // 'copy' (padrão): copia a fonte quando é seguro. MAS fonte HEVC NÃO pode
-    // ser copiada pro MP4 segmentado — o muxer `segment` não reinjeta VPS/SPS/PPS
-    // a cada corte, o ffmpeg falha ("VPS 0 does not exist" / "No start code is
-    // found"), sai com código 255 e o arquivo fica corrompido e sem registro no
-    // banco. Além disso o navegador não toca HEVC no playback. Então fonte HEVC
-    // é transcodada p/ H.264 (mesma decisão dos clipes). H.264 segue em copy.
-    if (sourceIsHevc) {
-      return { videoCodec: 'libx264', transcode: true, outputIsHevc: false };
-    }
-    return { videoCodec: 'copy', transcode: false, outputIsHevc: false };
+    // 'copy' (padrão): copia a fonte SEMPRE — inclusive HEVC. A captura agora é
+    // em MPEG-TS segmentado (Annex-B nativo, tolera cortes sem reinjetar
+    // VPS/SPS/PPS) e cada segmento fechado é remuxado para MP4 sem re-encode
+    // (hvc1 quando HEVC), o mesmo pipeline provado dos clipes. Isso arquiva o
+    // bitstream ORIGINAL da câmera (zero perda, zero CPU de encode); o playback
+    // no navegador toca HEVC direto quando suportado ou usa a transcodificação
+    // compatível sob demanda (cacheada).
+    return { videoCodec: 'copy', transcode: false, outputIsHevc: sourceIsHevc };
   }
 
   private buildArgs(camera: Camera, rtspUrl: string, outputPattern: string, segmentSeconds: number, probedCodec: string | null): string[] {
@@ -478,8 +494,8 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       ...(shouldTranscode && isH265Output ? ['-preset', 'medium', '-crf', '28'] : []),
       // H.264 (modo 'h264' com fonte não-H.264): preset rápido e qualidade alta.
       ...(shouldTranscode && !isH265Output ? ['-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p'] : []),
-      // H.265 needs tag for MP4 container compatibility (also when copying HEVC).
-      ...(isH265Output ? ['-tag:v', 'hvc1'] : []),
+      // A tag hvc1 NÃO se aplica ao MPEG-TS da captura; ela é aplicada no remux
+      // TS→MP4 de cada segmento fechado (remuxTsSegment).
       ...(shouldTranscode && camera.recordingWidth && camera.recordingHeight
         ? ['-vf', `scale=${camera.recordingWidth}:${camera.recordingHeight}`]
         : []),
@@ -495,6 +511,11 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
       '1',
       '-f',
       'segment',
+      // MPEG-TS: container de captura tolerante a cortes/quedas (não depende de
+      // moov nem de reinjetar parameter sets), suporta H.264 e HEVC em copy.
+      // Cada segmento fechado vira MP4 via remux sem re-encode (remuxTsSegment).
+      '-segment_format',
+      'mpegts',
       '-segment_time',
       String(segmentSeconds),
       '-reset_timestamps',
@@ -609,6 +630,54 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     }
   }
 
+  private async probeLocalVideoCodec(filePath: string): Promise<string | null> {
+    try {
+      const { stdout } = await execFileAsync('ffprobe', [
+        '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=codec_name',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        filePath,
+      ], { timeout: 20_000, maxBuffer: 1024 * 1024 });
+      return stdout.trim().split('\n')[0]?.trim().toLowerCase() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Remuxa um segmento .ts fechado para .mp4 SEM re-encode (mesmo pipeline dos
+  // clipes): HEVC recebe a tag hvc1 obrigatória em MP4; +faststart deixa o moov
+  // no início (seek imediato no navegador). Registra o MP4 no banco e apaga o
+  // .ts de origem. Lança em caso de remux/registro inválido para a varredura
+  // tentar de novo no próximo ciclo.
+  private async remuxAndRegisterTsSegment(cameraId: string, tsPath: string, segmentSeconds: number) {
+    const mp4Path = tsPath.replace(/\.ts$/i, '.mp4');
+    if (!existsSync(mp4Path) || statSync(mp4Path).size === 0) {
+      const codec = await this.probeLocalVideoCodec(tsPath);
+      const isHevc = Boolean(codec && (codec.includes('hevc') || codec.includes('h265')));
+      try {
+        await execFileAsync('ffmpeg', [
+          '-y',
+          '-hide_banner',
+          '-loglevel', 'error',
+          '-i', tsPath,
+          '-map', '0:v:0',
+          '-map', '0:a:0?',
+          '-c', 'copy',
+          ...(isHevc ? ['-tag:v', 'hvc1'] : []),
+          '-movflags', '+faststart',
+          mp4Path,
+        ], { timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
+      } catch (error) {
+        await unlink(mp4Path).catch(() => undefined);
+        throw new Error(`remux_ts_falhou: ${sanitizeSensitiveText(error)}`);
+      }
+    }
+    await this.registerSegment(cameraId, mp4Path, segmentSeconds);
+    await unlink(tsPath).catch(() => undefined);
+    return mp4Path;
+  }
+
   private async recoverOrphanedSegments() {
     if (!this.checkFfmpegAvailable()) return;
     const graceSeconds = Math.max(60, Number(process.env.RECORDING_ORPHAN_RECOVERY_GRACE_SECONDS ?? 300));
@@ -616,7 +685,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     const limit = Math.max(1, Math.min(10_000, Number(process.env.RECORDING_ORPHAN_RECOVERY_LIMIT ?? 2_000)));
     const cameras = await this.prisma.camera.findMany({ select: { id: true } });
     const registeredPaths = new Set((await this.prisma.recording.findMany({ select: { filePath: true } })).map((row) => row.filePath));
-    const candidates: Array<{ cameraId: string; filePath: string; ageSeconds: number }> = [];
+    const candidates: Array<{ cameraId: string; filePath: string; ageSeconds: number; kind: 'mp4' | 'ts' }> = [];
     const now = Date.now();
 
     for (const camera of cameras) {
@@ -631,7 +700,13 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
             walk(fullPath);
           } else if (entry.name.endsWith(`.${this.recordingFormat}`) && !registeredPaths.has(fullPath)) {
             const ageSeconds = Math.max(0, (now - statSync(fullPath).mtimeMs) / 1000);
-            if (ageSeconds >= graceSeconds) candidates.push({ cameraId: camera.id, filePath: fullPath, ageSeconds });
+            if (ageSeconds >= graceSeconds) candidates.push({ cameraId: camera.id, filePath: fullPath, ageSeconds, kind: 'mp4' });
+          } else if (entry.name.endsWith('.ts')) {
+            // Sobras de captura (queda do processo/da API). O .ts é reproduzível
+            // até o ponto do corte: remuxa e recupera; inválidos antigos são
+            // apagados. Se o .mp4 gêmeo já foi registrado, o .ts é só lixo.
+            const ageSeconds = Math.max(0, (now - statSync(fullPath).mtimeMs) / 1000);
+            if (ageSeconds >= graceSeconds) candidates.push({ cameraId: camera.id, filePath: fullPath, ageSeconds, kind: 'ts' });
           }
           if (candidates.length >= limit) return;
         }
@@ -641,8 +716,31 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
 
     let recovered = 0;
     let invalidDeleted = 0;
+    const defaultSegmentSeconds = Math.max(1, Number(process.env.RECORDING_SEGMENT_SECONDS ?? 300));
     for (const candidate of candidates) {
       if (this.active.has(candidate.cameraId)) continue;
+
+      if (candidate.kind === 'ts') {
+        const mp4Twin = candidate.filePath.replace(/\.ts$/i, '.mp4');
+        if (registeredPaths.has(mp4Twin)) {
+          await unlink(candidate.filePath).catch(() => undefined);
+          continue;
+        }
+        try {
+          const mp4Path = await this.remuxAndRegisterTsSegment(candidate.cameraId, candidate.filePath, defaultSegmentSeconds);
+          registeredPaths.add(mp4Path);
+          recovered += 1;
+        } catch (error) {
+          if (candidate.ageSeconds >= invalidDeleteSeconds) {
+            await unlink(candidate.filePath).catch(() => undefined);
+            invalidDeleted += 1;
+          } else {
+            this.logger.warn(`Falha ao recuperar segmento .ts órfão ${basename(candidate.filePath)}: ${sanitizeSensitiveText(error)}`);
+          }
+        }
+        continue;
+      }
+
       const metadata = await this.probeRecordedFileMetadata(candidate.filePath);
       if (metadata.durationSecondsExact == null) {
         if (candidate.ageSeconds >= invalidDeleteSeconds) {
@@ -652,11 +750,7 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
         continue;
       }
       try {
-        await this.registerSegment(
-          candidate.cameraId,
-          candidate.filePath,
-          Math.max(1, Number(process.env.RECORDING_SEGMENT_SECONDS ?? 300)),
-        );
+        await this.registerSegment(candidate.cameraId, candidate.filePath, defaultSegmentSeconds);
         registeredPaths.add(candidate.filePath);
         recovered += 1;
       } catch (error) {
@@ -679,20 +773,20 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
           walk(fullPath);
           continue;
         }
-        if (entry.name.endsWith(`.${this.recordingFormat}`)) files.push(fullPath);
+        if (entry.name.endsWith('.ts')) files.push(fullPath);
       }
     };
 
     walk(cameraRootDir);
     files.sort((left, right) => left.localeCompare(right));
     // O arquivo lexicograficamente mais novo é o segmento que o FFmpeg ainda
-    // pode estar escrevendo. Ele só é registrado depois da rotação, ou no close.
+    // pode estar escrevendo. Ele só é processado depois da rotação, ou no close.
     const candidates = finalize ? files : files.slice(0, -1);
     for (const fullPath of candidates) {
       if (knownFiles.has(fullPath)) continue;
       if (statSync(fullPath).size <= 0) continue;
       try {
-        await this.registerSegment(cameraId, fullPath, segmentSeconds);
+        await this.remuxAndRegisterTsSegment(cameraId, fullPath, segmentSeconds);
         knownFiles.add(fullPath);
       } catch {
         // Mantém fora de knownFiles para uma nova tentativa na próxima varredura.
@@ -772,6 +866,10 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
   }
 
   async start(cameraId: string, segmentSeconds: number, options?: { recordingMode?: Camera['recordingMode'] }) {
+    const enabledRow = await this.prisma.camera.findUnique({ where: { id: cameraId }, select: { enabled: true } });
+    if (enabledRow && enabledRow.enabled === false) {
+      throw new BadRequestException('Câmera desativada — reative-a para gravar.');
+    }
     await this.commercialPolicy.assertFeature('localRecording');
     await this.assertStorageWritable();
     await this.assertMinimumStorageFree();
@@ -826,7 +924,8 @@ export class RecordingProcessManagerService implements OnModuleInit, OnApplicati
     const startDate = new Date();
     const outputDir = buildRecordingOutputDir(this.recordingsRoot, cameraId, startDate);
     const cameraRootDir = join(this.recordingsRoot, `camera-${cameraId}`);
-    const outputPattern = buildRecordingOutputPattern(outputDir, this.recordingFormat);
+    // Captura sempre em .ts; o .mp4 final (this.recordingFormat) nasce no remux.
+    const outputPattern = buildRecordingOutputPattern(outputDir, 'ts');
 
     mkdirSync(outputDir, { recursive: true });
 

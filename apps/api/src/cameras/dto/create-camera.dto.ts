@@ -94,6 +94,10 @@ export class CreateCameraDto {
 
   @IsOptional()
   @IsBoolean()
+  enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   recordingEnabled?: boolean;
 
   @IsOptional()

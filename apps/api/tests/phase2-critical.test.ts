@@ -9,6 +9,7 @@ import { AuthService } from '../src/auth/auth.service';
 import { AiManagerService } from '../src/ai/ai-manager.service';
 import { AiService } from '../src/ai/ai.service';
 import { CameraStreamController } from '../src/camera-stream/camera-stream.controller';
+import { FfmpegMjpegService } from '../src/camera-stream/ffmpeg-mjpeg.service';
 import { StreamResourceAdvisorService } from '../src/camera-stream/stream-resource-advisor.service';
 import { MediamtxProxyService } from '../src/camera-stream/mediamtx-proxy.service';
 import { CamerasController } from '../src/cameras/cameras.controller';
@@ -76,6 +77,7 @@ test('settings branding: expõe paletas clara e escura com compatibilidade', asy
   const service = new SettingsService(prisma as any);
   const branding = await service.getBranding();
   assert.equal(branding.brandPrimaryColor, '', 'chaves históricas devem continuar disponíveis para tema escuro');
+  assert.equal(branding.brandUseDefaultColors, true, 'novas instalações devem iniciar com a paleta padrão do app');
   assert.equal(branding.brandLightBackgroundColor, '#f5f7fb', 'tema claro deve possuir fallback próprio');
   assert.equal(branding.brandLightPrimaryTextColor, '#111827', 'texto do tema claro deve ser exposto publicamente');
   assert.equal(await service.isStrongPasswordRequired(), true, 'instalações novas devem exigir senha forte');
@@ -140,6 +142,59 @@ test('security logs: pontos que carregam stderr de FFmpeg/ffprobe sanitizam a me
     /Não foi possível gravar o clipe[^`]*sanitizeSensitiveText\(st\.stderrTail\)/,
     'a exceção do clipe vai no corpo da resposta; sanitizar o stderr antes',
   );
+});
+
+test('poster das câmeras usa a fonte leve do grid sem iniciar live selected', () => {
+  const posterService = readFileSync('src/camera-stream/ffmpeg-mjpeg.service.ts', 'utf8');
+  assert.match(
+    posterService,
+    /resolveGridPosterSource\(cameraId\)/,
+    'poster deve reutilizar a seleção de sub-stream da grade',
+  );
+  assert.doesNotMatch(
+    posterService,
+    /getMediamtxPosterSource/,
+    'poster não pode voltar a abrir um path selected no MediaMTX',
+  );
+  assert.match(
+    posterService,
+    /withPosterCaptureSlot\(\(\) => this\.generateLivePosterFrame\(cameraId\)\)/,
+    'capturas de poster de câmeras diferentes devem possuir limite de concorrência',
+  );
+
+  const proxy = readFileSync('src/camera-stream/mediamtx-proxy.service.ts', 'utf8');
+  const methodStart = proxy.indexOf('async resolveGridPosterSource(cameraId: string)');
+  assert.notEqual(methodStart, -1, 'proxy deve expor a escolha leve da grade para snapshots');
+  const methodBody = proxy.slice(methodStart, proxy.indexOf('\n  private ', methodStart));
+  assert.match(methodBody, /chooseGridSource\(cameraId, camera, password, transport\)/);
+  assert.doesNotMatch(
+    methodBody,
+    /ensurePathForCamera/,
+    'resolver snapshot não deve criar um stream persistente no MediaMTX',
+  );
+});
+
+test('poster limita capturas FFmpeg simultâneas', async () => {
+  const service = new FfmpegMjpegService(
+    { get: (key: string) => key === 'livePosterMaxConcurrency' ? 3 : undefined } as any,
+    {} as any,
+    {} as any,
+    {} as any,
+  );
+  let active = 0;
+  let peak = 0;
+  const capture = async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    active -= 1;
+  };
+
+  await Promise.all(
+    Array.from({ length: 12 }, () => (service as any).withPosterCaptureSlot(capture)),
+  );
+  assert.equal(peak, 3);
+  assert.equal(active, 0);
 });
 
 // A trava acima é por arquivo/regex e só pega o que eu lembrei de listar — foi assim que
@@ -694,12 +749,18 @@ test('camera-stream controller: cria token somente apos validar permissao de vis
       order.push(`policy:${feature}`);
     },
   };
+  const cameras = {
+    getCameraOrThrow: async (cameraId: string) => {
+      order.push(`camera:${cameraId}`);
+      return { id: cameraId, enabled: true };
+    },
+  };
   const audit = { log: async () => order.push('audit') };
   const controller = new CameraStreamController(
     {} as any,
     {} as any,
     {} as any,
-    {} as any,
+    cameras as any,
     auth as any,
     access as any,
     audit as any,
@@ -711,7 +772,7 @@ test('camera-stream controller: cria token somente apos validar permissao de vis
   const result = await controller.createStreamToken(user, 'cam-1', { headers: {} } as any);
 
   assert.deepEqual(result, { streamToken: 'stream-token', expiresAt: '2026-05-22T00:05:00.000Z' });
-  assert.deepEqual(order, ['access:cam-1', 'policy:localLive', 'token:operator:cam-1', 'audit']);
+  assert.deepEqual(order, ['access:cam-1', 'policy:localLive', 'camera:cam-1', 'token:operator:cam-1', 'audit']);
 });
 
 test('camera-stream: URLs de FLV e poster preservam o prefixo público /api', async () => {

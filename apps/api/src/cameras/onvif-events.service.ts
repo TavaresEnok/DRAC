@@ -3,6 +3,9 @@ import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CryptoService } from '../common/crypto/crypto.service';
 import { RecordingProcessManagerService } from '../recordings/recording-process-manager.service';
+import { CamerasService } from './cameras.service';
+import { AiManagerService } from '../ai/ai-manager.service';
+import { AiService } from '../ai/ai.service';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const onvif = require('onvif');
 
@@ -11,22 +14,48 @@ const MOTION_TOPIC_RE = /motion|cellmotion|motionalarm|videomotion|motiondetect/
 // Eventos que significam FIM de movimento — não devem disparar gravação.
 const MOTION_STOP_RE = /action=Stop|IsMotion=false|State=false/i;
 
+type ListenerState = {
+  cam: any | null;          // instância conectada da lib onvif (null = conectando)
+  connectedAt: number | null;
+};
+
+type NativeMotionState = {
+  lastEventAt: number | null;  // último evento de movimento REAL recebido da câmera
+  fallbackActive: boolean;     // MOG2 local ligada como reserva desta câmera
+  deadSyncs: number;           // ciclos seguidos com a escuta caída (armada)
+};
+
 /**
  * Detecção de movimento pela PRÓPRIA câmera (ONVIF).
  *
- * Duas responsabilidades:
+ * Responsabilidades:
  *  1) AUTO-PROBE: descobre quais câmeras publicam eventos de movimento ONVIF e
  *     ajusta `motionTrigger` sozinho — 'CAMERA' quando a câmera detecta (custo
- *     zero de CPU nossa) ou 'SYSTEM' quando não (cai na nossa MOG2 leve).
+ *     zero de CPU nossa) ou 'SYSTEM' quando não (cai na nossa MOG2 leve). O flip
+ *     também SINCRONIZA a análise local na hora (liga/desliga a MOG2), sem
+ *     esperar restart.
  *  2) GRAVAÇÃO DIRETA: para câmeras 'CAMERA' ARMADAS (recordingMode='motion'),
  *     um evento de movimento da câmera dispara a gravação na hora
- *     (handleMotionDetected → grava + agenda parada por post-roll).
+ *     (handleMotionDetected → grava + agenda parada por post-roll). O evento
+ *     também é registrado como MOTION_DETECTED (timeline/alarmes), como já
+ *     acontece com o detector local.
+ *  3) RESILIÊNCIA (cinto e suspensório): escuta que cai é reconectada (erro
+ *     remove do mapa → sync de 60s reconecta; re-assinatura forçada periódica
+ *     cobre mortes silenciosas do pull-point). Câmera armada com a escuta caída
+ *     ou muda demais (sem eventos por horas) ganha a MOG2 local como RESERVA
+ *     automaticamente; a reserva desliga quando a câmera dá prova de vida (um
+ *     evento real). Promoção a 'CAMERA' de câmera armada também começa com a
+ *     reserva ligada até a primeira prova.
  */
 @Injectable()
 export class OnvifEventsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OnvifEventsService.name);
-  private activeCams: Map<string, any> = new Map();
+  private activeCams: Map<string, ListenerState> = new Map();
   private lastTriggerByCamera: Map<string, number> = new Map();
+  private nativeState: Map<string, NativeMotionState> = new Map();
+  // Backoff de conexão: câmera com ONVIF recusando (porta fechada) não deve ser
+  // re-tentada a cada 60s para sempre — após 3 falhas seguidas, tenta a cada 10min.
+  private connectFailures: Map<string, { count: number; nextRetryAt: number }> = new Map();
   private pollInterval: NodeJS.Timeout | null = null;
   private probeInterval: NodeJS.Timeout | null = null;
 
@@ -40,10 +69,25 @@ export class OnvifEventsService implements OnModuleInit, OnModuleDestroy {
     return String(process.env.AI_AUTO_START_ENABLED ?? 'true').trim().toLowerCase() === 'false';
   }
 
+  private resubscribeAfterMs() {
+    // 10 min (era 30): observamos em campo (2026-07-21 19:04→19:30) o pull-point
+    // ensurdecer em silêncio 4 min após conectar e só voltar na re-assinatura
+    // forçada. A janela de re-assinatura é o TETO da surdez possível.
+    return Math.max(5, Number(process.env.AI_ONVIF_RESUBSCRIBE_MINUTES ?? 10)) * 60_000;
+  }
+
+  private silenceFallbackMs() {
+    return Math.max(1, Number(process.env.AI_ONVIF_SILENCE_FALLBACK_HOURS ?? 12)) * 3_600_000;
+  }
+
+  private deadSyncsForFallback() {
+    return Math.max(1, Number(process.env.AI_ONVIF_DEAD_SYNCS_FOR_FALLBACK ?? 3));
+  }
+
   async onModuleInit() {
     if (this.isDisabled()) return;
     this.logger.log('Inicializando daemon de eventos ONVIF...');
-    // Escuta das câmeras 'CAMERA' (reavalia a cada 60s).
+    // Escuta das câmeras 'CAMERA' + watchdog de reserva (reavalia a cada 60s).
     this.pollInterval = setInterval(() => this.syncCameras(), 60000);
     setTimeout(() => this.syncCameras(), 5000);
     // Auto-probe: descobre suporte a movimento e ajusta motionTrigger.
@@ -56,11 +100,31 @@ export class OnvifEventsService implements OnModuleInit, OnModuleDestroy {
     if (this.probeInterval) clearInterval(this.probeInterval);
   }
 
+  private getNativeState(cameraId: string): NativeMotionState {
+    let state = this.nativeState.get(cameraId);
+    if (!state) {
+      state = { lastEventAt: null, fallbackActive: false, deadSyncs: 0 };
+      this.nativeState.set(cameraId, state);
+    }
+    return state;
+  }
+
+  private registerCameraEvent(cameraId: string, type: string, severity: string, message: string, metadata?: any) {
+    try {
+      const cameras = this.moduleRef.get(CamerasService, { strict: false });
+      return cameras.registerEvent(cameraId, type, severity, message, metadata).catch(() => undefined);
+    } catch {
+      return Promise.resolve(undefined);
+    }
+  }
+
   // ── AUTO-PROBE ─────────────────────────────────────────────────────────────
   /**
    * Sonda uma câmera via ONVIF e diz se ela publica eventos de movimento.
-   * Retorna true (suporta), false (ONVIF ok, mas sem movimento) ou null
-   * (inalcançável/sem porta — indeterminado, não mexe na config).
+   * Retorna true (suporta), false (ONVIF ok e RESPONDEU as propriedades, mas sem
+   * tópico de movimento) ou null (inalcançável/sem porta/erro transitório no
+   * serviço de eventos — indeterminado, NÃO mexe na config; um soluço de rede
+   * não pode rebaixar uma câmera 'CAMERA' que funciona).
    */
   private probeMotionSupport(camera: any): Promise<boolean | null> {
     return new Promise((resolve) => {
@@ -80,7 +144,8 @@ export class OnvifEventsService implements OnModuleInit, OnModuleDestroy {
             cam.getEventProperties((e2: any, data: any) => {
               if (settled) return;
               clearTimeout(timer);
-              if (e2) return finish(false); // conectou mas sem serviço de eventos usável
+              // Erro ao LER as propriedades ≠ "sem suporte": pode ser transitório.
+              if (e2) return finish(null);
               finish(MOTION_TOPIC_RE.test(JSON.stringify(data || {})));
             });
           },
@@ -91,24 +156,37 @@ export class OnvifEventsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Sonda todas as câmeras e ajusta motionTrigger automaticamente:
-   *  - suporta movimento ONVIF  → 'CAMERA' (usa a detecção da câmera)
-   *  - ONVIF ok mas sem movimento → 'SYSTEM' (nossa MOG2)
-   *  - indeterminado (sem porta/inalcançável) → não altera (preserva a config)
+   * Sonda todas as câmeras e ajusta motionTrigger automaticamente, SINCRONIZANDO
+   * a análise local no mesmo instante do flip (sem gap até o próximo restart):
+   *  - → 'CAMERA' (armada): a MOG2 fica LIGADA como reserva até a primeira prova
+   *    de vida (evento real da câmera); depois desliga sozinha.
+   *  - → 'SYSTEM' (armada): liga a MOG2 imediatamente.
    */
   private async probeAllCameras() {
     if (this.isDisabled()) return;
     try {
       const cameras = await this.prisma.camera.findMany({
-        select: { id: true, name: true, ip: true, onvifPort: true, username: true, passwordEncrypted: true, motionTrigger: true },
+        select: { id: true, name: true, ip: true, onvifPort: true, username: true, passwordEncrypted: true, motionTrigger: true, recordingMode: true, enabled: true },
       });
       for (const cam of cameras) {
+        if (cam.enabled === false) continue;
         const supports = await this.probeMotionSupport(cam);
         if (supports === null) continue; // indeterminado → não mexe
         const target = supports ? 'CAMERA' : 'SYSTEM';
-        if (cam.motionTrigger !== target) {
-          await this.prisma.camera.update({ where: { id: cam.id }, data: { motionTrigger: target } });
-          this.logger.log(`Auto-detecção de movimento: ${cam.name} → ${target} (ONVIF ${supports ? 'com' : 'sem'} movimento).`);
+        if (cam.motionTrigger === target) continue;
+
+        await this.prisma.camera.update({ where: { id: cam.id }, data: { motionTrigger: target } });
+        this.logger.log(`Auto-detecção de movimento: ${cam.name} → ${target} (ONVIF ${supports ? 'com' : 'sem'} movimento).`);
+
+        const armed = cam.recordingMode === 'motion';
+        if (!armed) continue;
+        if (target === 'SYSTEM') {
+          // Perdeu a detecção nativa: a local assume JÁ (não espera restart).
+          this.getNativeState(cam.id).fallbackActive = false;
+          await this.startLocalDetector(cam.id, false).catch(() => undefined);
+        } else {
+          // Promovida a nativa: mantém a local como reserva até a 1ª prova real.
+          await this.activateFallback(cam.id, cam.name, 'aguardando a primeira prova de vida da detecção nativa', 'INFO');
         }
       }
     } catch (error: any) {
@@ -116,20 +194,98 @@ export class OnvifEventsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // ── ESCUTA + GRAVAÇÃO DIRETA ───────────────────────────────────────────────
+  // ── RESERVA (MOG2 local como fallback da nativa) ───────────────────────────
+  private async startLocalDetector(cameraId: string, asFallback: boolean) {
+    const aiManager = this.moduleRef.get(AiManagerService, { strict: false });
+    await aiManager.startCamera(cameraId, asFallback ? { allowCameraTrigger: true } : undefined);
+  }
+
+  private async stopLocalDetector(cameraId: string) {
+    const aiService = this.moduleRef.get(AiService, { strict: false });
+    await aiService.stopAnalysis(cameraId).catch(() => undefined);
+  }
+
+  private async activateFallback(cameraId: string, cameraName: string, reason: string, severity: 'INFO' | 'WARNING' = 'WARNING') {
+    const state = this.getNativeState(cameraId);
+    if (state.fallbackActive) return;
+    state.fallbackActive = true;
+    try {
+      await this.startLocalDetector(cameraId, true);
+      this.logger.warn(`Detecção nativa sem sinal em ${cameraName} (${reason}) — detector LOCAL ativado como reserva.`);
+      await this.registerCameraEvent(cameraId, 'HEALTH_MOTION_NATIVE_DOWN', severity,
+        'Detecção de movimento nativa sem sinal — detector local ativado como reserva.', { reason });
+    } catch (error) {
+      state.fallbackActive = false;
+      this.logger.warn(`Falha ao ativar detector local reserva de ${cameraName}: ${(error as Error).message}`);
+    }
+  }
+
+  private async deactivateFallback(cameraId: string) {
+    const state = this.getNativeState(cameraId);
+    if (!state.fallbackActive) return;
+    state.fallbackActive = false;
+    await this.stopLocalDetector(cameraId);
+    this.logger.log(`Detecção nativa deu prova de vida (câmera ${cameraId}) — detector local reserva DESLIGADO.`);
+    await this.registerCameraEvent(cameraId, 'HEALTH_MOTION_NATIVE_RECOVERED', 'INFO',
+      'Detecção de movimento nativa voltou a enviar eventos — reserva local desligada.', {});
+  }
+
+  // ── ESCUTA + WATCHDOG + GRAVAÇÃO DIRETA ────────────────────────────────────
   private async syncCameras() {
     if (this.isDisabled()) return;
     try {
       const cameras = await this.prisma.camera.findMany({ where: { motionTrigger: 'CAMERA' } });
       const currentIds = new Set(cameras.map((c) => c.id));
-      for (const [id] of this.activeCams.entries()) {
+
+      for (const [id, state] of this.activeCams.entries()) {
         if (!currentIds.has(id)) {
           this.logger.log(`Removendo escuta ONVIF da câmera ${id}`);
           this.activeCams.delete(id);
+          continue;
+        }
+        // Re-assinatura forçada periódica: pull-point pode morrer em silêncio
+        // (renovação expirada, câmera reiniciada) sem emitir 'error'. Derrubar a
+        // escuta aqui faz o loop abaixo reconectar do zero — barato e garante vida.
+        if (state?.cam && state.connectedAt && Date.now() - state.connectedAt > this.resubscribeAfterMs()) {
+          this.logger.log(`Re-assinando eventos ONVIF da câmera ${id} (rotina de vida).`);
+          this.activeCams.delete(id);
         }
       }
+
       for (const c of cameras) {
-        if (!this.activeCams.has(c.id)) this.connectCamera(c);
+        if (c.enabled === false) {
+          this.activeCams.delete(c.id);
+          continue;
+        }
+        if (this.activeCams.has(c.id)) continue;
+        const backoff = this.connectFailures.get(c.id);
+        if (backoff && backoff.count >= 3 && Date.now() < backoff.nextRetryAt) continue;
+        this.connectCamera(c);
+      }
+
+      // WATCHDOG de reserva: só para câmeras nativas ARMADAS.
+      for (const c of cameras) {
+        if (c.enabled === false || c.recordingMode !== 'motion') continue;
+        const state = this.getNativeState(c.id);
+        const listener = this.activeCams.get(c.id);
+        const connected = Boolean(listener?.cam);
+
+        if (!connected) {
+          state.deadSyncs += 1;
+          if (state.deadSyncs >= this.deadSyncsForFallback() && !state.fallbackActive) {
+            await this.activateFallback(c.id, c.name, `escuta ONVIF sem conexão há ${state.deadSyncs} ciclos`);
+          }
+          continue;
+        }
+        state.deadSyncs = 0;
+
+        // Conectada mas MUDA há tempo demais: cena parada por horas é possível,
+        // mas acima do limiar preferimos gastar ~2% de CPU na reserva a arriscar
+        // perder gravação por uma detecção nativa quebrada/desconfigurada.
+        const sinceMs = Date.now() - Math.max(state.lastEventAt ?? 0, listener?.connectedAt ?? 0);
+        if (!state.fallbackActive && state.lastEventAt === null && sinceMs > this.silenceFallbackMs()) {
+          await this.activateFallback(c.id, c.name, `nenhum evento de movimento recebido há ${Math.round(sinceMs / 3_600_000)}h`);
+        }
       }
     } catch (error: any) {
       this.logger.error(`Erro ao sincronizar câmeras ONVIF: ${error.message}`);
@@ -138,7 +294,7 @@ export class OnvifEventsService implements OnModuleInit, OnModuleDestroy {
 
   private connectCamera(camera: any) {
     this.logger.log(`Conectando ONVIF na câmera ${camera.name} (${camera.ip})`);
-    this.activeCams.set(camera.id, null); // marca p/ não reconectar em loop
+    this.activeCams.set(camera.id, { cam: null, connectedAt: null }); // marca p/ não reconectar em loop
 
     let password: string;
     try { password = this.cryptoService.decrypt(camera.passwordEncrypted); }
@@ -148,12 +304,21 @@ export class OnvifEventsService implements OnModuleInit, OnModuleDestroy {
       { hostname: camera.ip, username: camera.username, password, port: camera.onvifPort || 80 },
       (err: any) => {
         if (err) {
-          this.logger.warn(`Falha na conexão ONVIF com ${camera.name}: ${err.message}`);
+          const failure = this.connectFailures.get(camera.id) ?? { count: 0, nextRetryAt: 0 };
+          failure.count += 1;
+          failure.nextRetryAt = Date.now() + 10 * 60_000;
+          this.connectFailures.set(camera.id, failure);
+          // Loga as 3 primeiras falhas e depois só 1 a cada ~10min (backoff) —
+          // porta ONVIF fechada não deve virar spam de WARN a cada 60s.
+          if (failure.count <= 3 || failure.count % 10 === 0) {
+            this.logger.warn(`Falha na conexão ONVIF com ${camera.name}: ${err.message}${failure.count >= 3 ? ` (tentativa ${failure.count}; próxima em ~10min)` : ''}`);
+          }
           this.activeCams.delete(camera.id);
           return;
         }
+        this.connectFailures.delete(camera.id);
         this.logger.log(`Conectado à câmera ${camera.name}, iniciando escuta de eventos...`);
-        this.activeCams.set(camera.id, cam);
+        this.activeCams.set(camera.id, { cam, connectedAt: Date.now() });
 
         cam.on('event', (camMessage: any) => {
           const str = JSON.stringify(camMessage);
@@ -161,23 +326,35 @@ export class OnvifEventsService implements OnModuleInit, OnModuleDestroy {
           if (MOTION_STOP_RE.test(str)) return;    // é FIM de movimento → ignora
           this.onCameraMotion(camera.id);
         });
+        // Erro DEPOIS de conectado (queda de rede/câmera reiniciou): derruba a
+        // escuta para o sync de 60s reconectar. Antes o erro era engolido e a
+        // câmera ficava SURDA para sempre, sem registro nenhum.
+        cam.on('error', (error: any) => {
+          const current = this.activeCams.get(camera.id);
+          if (current?.cam !== cam) return; // instância antiga — ignora
+          this.logger.warn(`Escuta ONVIF caiu em ${camera.name}: ${error?.message ?? 'erro desconhecido'} — reconectando no próximo ciclo.`);
+          this.activeCams.delete(camera.id);
+        });
       },
     );
     cam.on('error', () => {});
   }
 
   /**
-   * Movimento reportado pela câmera → dispara a gravação DIRETO (se a câmera
-   * estiver armada). handleMotionDetected checa recordingMode='motion', inicia
-   * a gravação e agenda a parada por post-roll (60s após o último movimento) —
-   * cada novo evento renova esse post-roll, então a gravação segue enquanto
-   * houver movimento e para sozinha quando cessa. Cooldown evita enxurrada.
+   * Movimento reportado pela câmera → registra MOTION_DETECTED (timeline/alarmes,
+   * como o detector local) e dispara a gravação DIRETO (se armada). Prova de vida
+   * da nativa: desliga a reserva local, se estava ligada. Cooldown evita enxurrada.
    */
   private onCameraMotion(cameraId: string) {
     const cooldownMs = Number(process.env.AI_ONVIF_TRIGGER_COOLDOWN_MS ?? 5000);
     const now = Date.now();
+    const state = this.getNativeState(cameraId);
+    state.lastEventAt = now;
+    if (state.fallbackActive) void this.deactivateFallback(cameraId);
     if (now - (this.lastTriggerByCamera.get(cameraId) ?? 0) < cooldownMs) return;
     this.lastTriggerByCamera.set(cameraId, now);
+    void this.registerCameraEvent(cameraId, 'MOTION_DETECTED', 'INFO',
+      'Movimento detectado pela própria câmera (ONVIF).', { source: 'onvif' });
     try {
       const recordingManager = this.moduleRef.get(RecordingProcessManagerService, { strict: false });
       void recordingManager.handleMotionDetected(cameraId, { source: 'onvif' }).catch(() => undefined);

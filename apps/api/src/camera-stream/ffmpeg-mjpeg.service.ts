@@ -62,6 +62,9 @@ export class FfmpegMjpegService {
   private readonly posterCache = new Map<string, PosterCacheEntry>();
   private readonly posterInFlight = new Map<string, Promise<PosterCacheEntry>>();
   private readonly posterCacheTtlMs: number;
+  private readonly posterMaxConcurrency: number;
+  private posterActiveCaptures = 0;
+  private readonly posterCaptureWaiters: Array<() => void> = [];
 
   constructor(
     private readonly configService: ConfigService,
@@ -79,7 +82,14 @@ export class FfmpegMjpegService {
       mjpegQ: Number(this.configService.get<number>('mjpegQ') ?? 5),
     };
     this.incidentCooldownMs = (this.configService.get<number>('streamIncidentCooldownSeconds') ?? 120) * 1000;
-    this.posterCacheTtlMs = Number(this.configService.get<number>('livePosterCacheTtlMs') ?? 15000);
+    this.posterCacheTtlMs = Math.max(
+      15000,
+      Number(this.configService.get<number>('livePosterCacheTtlMs') ?? 60000),
+    );
+    this.posterMaxConcurrency = Math.max(
+      1,
+      Math.min(6, Number(this.configService.get<number>('livePosterMaxConcurrency') ?? 3)),
+    );
   }
 
   checkFfmpegAvailable() {
@@ -365,7 +375,7 @@ export class FfmpegMjpegService {
     const inFlight = this.posterInFlight.get(cameraId);
     if (cached) {
       if (!inFlight) {
-        const refresh = this.generateLivePosterFrame(cameraId)
+        const refresh = this.withPosterCaptureSlot(() => this.generateLivePosterFrame(cameraId))
           .catch((error) => {
             this.logger.debug(`Falha ao atualizar poster live camera=${cameraId}: ${(error as Error).message}`);
             return cached;
@@ -380,11 +390,32 @@ export class FfmpegMjpegService {
 
     if (inFlight) return inFlight;
 
-    const promise = this.generateLivePosterFrame(cameraId).finally(() => {
+    const promise = this.withPosterCaptureSlot(() => this.generateLivePosterFrame(cameraId)).finally(() => {
       this.posterInFlight.delete(cameraId);
     });
     this.posterInFlight.set(cameraId, promise);
     return promise;
+  }
+
+  private async withPosterCaptureSlot<T>(capture: () => Promise<T>): Promise<T> {
+    if (this.posterActiveCaptures < this.posterMaxConcurrency) {
+      this.posterActiveCaptures += 1;
+    } else {
+      // O resolve transfere a vaga liberada diretamente para este waiter.
+      // Não incrementa novamente para evitar ultrapassar o limite quando uma
+      // nova requisição chega no mesmo tick da liberação.
+      await new Promise<void>((resolve) => this.posterCaptureWaiters.push(resolve));
+    }
+    try {
+      return await capture();
+    } finally {
+      const next = this.posterCaptureWaiters.shift();
+      if (next) {
+        next();
+      } else {
+        this.posterActiveCaptures -= 1;
+      }
+    }
   }
 
   private async generateLivePosterFrame(cameraId: string): Promise<PosterCacheEntry> {
@@ -397,8 +428,10 @@ export class FfmpegMjpegService {
     const primaryUrl = this.buildCameraRtspUrl(camera, password);
     const fallbackUrl = camera.subtype !== 0 ? this.buildCameraRtspUrl(camera, password, 0) : null;
     const directUrls = this.expandUrlsWithPortFallbacks(fallbackUrl ? [primaryUrl, fallbackUrl] : [primaryUrl], camera.rtspPort);
-    const mediamtxUrl = await this.getMediamtxPosterSource(cameraId);
-    const urls = Array.from(new Set([...(mediamtxUrl ? [mediamtxUrl] : []), ...directUrls]));
+    // Snapshot segue a mesma escolha leve da grade, mas lê DIRETO da câmera.
+    // Nunca inicializa o path selected do MediaMTX para capturar um único frame.
+    const gridUrl = await this.getGridPosterSource(cameraId);
+    const urls = Array.from(new Set([...(gridUrl ? [gridUrl] : []), ...directUrls]));
     const transports = this.getTransportCandidates(camera);
     let lastError: unknown = null;
 
@@ -439,13 +472,14 @@ export class FfmpegMjpegService {
     );
   }
 
-  private async getMediamtxPosterSource(cameraId: string) {
-    if (!this.mediamtxProxyService.isEnabled()) return null;
+  private async getGridPosterSource(cameraId: string) {
     try {
-      const ensured = await this.mediamtxProxyService.ensurePathForCamera(cameraId);
-      return this.mediamtxProxyService.buildInternalRtspUrl(ensured.pathName);
+      const selected = await this.mediamtxProxyService.resolveGridPosterSource(cameraId);
+      return selected.sourceUrl;
     } catch (error) {
-      this.logger.debug(`Poster live seguirá por RTSP direto; MediaMTX indisponível camera=${cameraId}: ${(error as Error).message}`);
+      this.logger.debug(
+        `Poster seguirá pelo perfil direto configurado; seleção de grid indisponível camera=${cameraId}: ${(error as Error).message}`,
+      );
       return null;
     }
   }

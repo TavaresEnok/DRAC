@@ -26,3 +26,9 @@ export type PlayTokenPayload = {
   recordingId: string;
   type: 'play';
 };
+
+export type DownloadZipTokenPayload = {
+  sub: string;
+  recordingIds: string[];
+  type: 'download-zip';
+};

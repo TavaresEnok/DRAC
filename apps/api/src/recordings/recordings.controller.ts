@@ -12,6 +12,7 @@ import { RequirePermission } from '../role-permissions/require-permission.decora
 import { ListRecordingsQueryDto } from './dto/list-recordings-query.dto';
 import { BulkThumbnailTokensDto } from './dto/bulk-thumbnail-tokens.dto';
 import { BulkRecordingDiagnosticsDto } from './dto/bulk-recording-diagnostics.dto';
+import { DownloadBatchDto } from './dto/download-batch.dto';
 import { RegisterRecordingDto } from './dto/register-recording.dto';
 import { StartRecordingDto } from './dto/start-recording.dto';
 import { StopRecordingDto } from './dto/stop-recording.dto';
@@ -488,7 +489,7 @@ export class RecordingsController {
     if (useCompatible) {
       return this.recordingsService.streamRecordingCompatible(id, res);
     }
-    return this.recordingsService.streamRecording(id, res);
+    return this.recordingsService.streamRecording(id, res, { allowAutoCompat: !forceDirectFlag });
   }
 
   @Roles(UserRole.OPERATOR)
@@ -504,6 +505,52 @@ export class RecordingsController {
     await this.accessControlService.assertCanViewCamera(user, recording.cameraId);
     await this.auditService.log(user.id, 'recording.download', 'Recording', id, { immediate: true }, req);
     return this.recordingsService.downloadRecording(id, res);
+  }
+
+  // Emite um token de curta duração para baixar várias gravações num único ZIP.
+  // O download em si acontece no GET público abaixo, para que o navegador possa
+  // usar o gerenciador de downloads nativo (progresso, retomada de UI, sem blob).
+  @Roles(UserRole.OPERATOR)
+  @RequirePermission('exportEvidence')
+  @Post('recordings/download-batch-token')
+  async createDownloadBatchToken(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: DownloadBatchDto,
+    @Req() req: Request,
+  ) {
+    const ids = [...new Set(dto.recordingIds)].slice(0, 50);
+    for (const id of ids) {
+      const recording = await this.recordingsService.ensureRecordingExists(id);
+      await this.accessControlService.assertCanViewCamera(user, recording.cameraId);
+    }
+    const token = await this.authService.createDownloadZipToken(user.id, ids);
+    await this.auditService.log(user.id, 'recording.download.batch_token', 'Recording', null, { count: ids.length }, req);
+    return {
+      ...token,
+      downloadUrl: `/recordings/download-zip?token=${encodeURIComponent(token.downloadToken)}`,
+      count: ids.length,
+    };
+  }
+
+  @Public()
+  @Get('recordings/download-zip')
+  async downloadRecordingsZip(
+    @Query('token') token: string | undefined,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    const tokenValue = token?.trim() || this.extractBearerToken(req);
+    if (!tokenValue) {
+      throw new UnauthorizedException('Token de download ausente.');
+    }
+    const payload = await this.authService.verifyDownloadZipToken(tokenValue);
+    const tokenUser = await this.authService.me(payload.sub);
+    for (const id of payload.recordingIds) {
+      const recording = await this.recordingsService.ensureRecordingExists(id);
+      await this.accessControlService.assertCanViewCamera(tokenUser, recording.cameraId);
+    }
+    await this.auditService.log(tokenUser.id, 'recording.download.zip', 'Recording', null, { count: payload.recordingIds.length }, req);
+    return this.recordingsService.downloadRecordingsZip(payload.recordingIds, res);
   }
 
   @Roles(UserRole.OPERATOR)

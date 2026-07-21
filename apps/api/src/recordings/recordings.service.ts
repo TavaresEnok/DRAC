@@ -20,6 +20,7 @@ import { ListRecordingsQueryDto } from './dto/list-recordings-query.dto';
 import { RegisterRecordingDto } from './dto/register-recording.dto';
 import { ExportClipDto } from './dto/export-clip.dto';
 import { ensureFileUnderRoot } from './helpers/safe-file.helper';
+import archiver from 'archiver';
 
 const execFileAsync = promisify(execFile);
 type RecordingHealthCacheEntry = {
@@ -178,7 +179,7 @@ export class RecordingsService implements OnModuleInit {
     };
   }
 
-  async streamRecording(recordingId: string, res: Response) {
+  async streamRecording(recordingId: string, res: Response, options?: { allowAutoCompat?: boolean }) {
     const recording = await this.ensureRecordingExists(recordingId);
 
     const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
@@ -189,9 +190,13 @@ export class RecordingsService implements OnModuleInit {
 
     // Auto-detect H.265 or incompatible codec and transparently transcode to H.264 for the browser.
     // The compatible file is cached in .playback-compatible/ so the transcoding only happens once.
-    const needsCompat = await this.shouldPreferCompatiblePlayback(recordingId).catch(() => false);
-    if (needsCompat) {
-      return this.streamRecordingCompatible(recordingId, res);
+    // forceDirect (allowAutoCompat=false) pula esta checagem: navegadores com
+    // decodificador HEVC pedem o arquivo ORIGINAL explicitamente.
+    if (options?.allowAutoCompat !== false) {
+      const needsCompat = await this.shouldPreferCompatiblePlayback(recordingId).catch(() => false);
+      if (needsCompat) {
+        return this.streamRecordingCompatible(recordingId, res);
+      }
     }
 
     const stats = statSync(filePath);
@@ -381,7 +386,65 @@ export class RecordingsService implements OnModuleInit {
     res.setHeader('Content-Length', validEnd - validStart + 1);
     createReadStream(filePath, { start: validStart, end: validEnd }).pipe(res);
   }
-  
+
+  // Streama um ZIP com várias gravações sem materializar nada em disco/memória.
+  // store (sem compressão): vídeo já é comprimido; recomprimir só gastaria CPU.
+  async downloadRecordingsZip(recordingIds: string[], res: Response) {
+    const recordingsRoot = process.env.RECORDINGS_ROOT ?? './storage/recordings';
+    const uniqueIds = [...new Set(recordingIds)].slice(0, 50);
+
+    const entries: Array<{ filePath: string; entryName: string }> = [];
+    const usedNames = new Set<string>();
+    for (const id of uniqueIds) {
+      const recording = await this.ensureRecordingExists(id);
+      const filePath = ensureFileUnderRoot(recordingsRoot, recording.filePath);
+      if (!existsSync(filePath) || statSync(filePath).size === 0) continue;
+      const cameraLabel = (recording.camera?.name || 'camera')
+        .replace(/[^\p{L}\p{N}_-]+/gu, '-')
+        .replace(/^-+|-+$/g, '') || 'camera';
+      const startedAt = new Date(recording.startedAt);
+      const stamp = Number.isNaN(startedAt.getTime())
+        ? recording.id.slice(0, 8)
+        : startedAt.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+      const extension = extname(filePath) || '.mp4';
+      let entryName = `${cameraLabel}-${stamp}${extension}`;
+      let suffix = 1;
+      while (usedNames.has(entryName)) {
+        suffix += 1;
+        entryName = `${cameraLabel}-${stamp}-${suffix}${extension}`;
+      }
+      usedNames.add(entryName);
+      entries.push({ filePath, entryName });
+    }
+
+    if (!entries.length) {
+      throw new NotFoundException('Nenhuma das gravações selecionadas possui arquivo disponível no disco.');
+    }
+
+    const zipDate = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="gravacoes-${zipDate}.zip"`);
+
+    const archive = archiver('zip', { store: true });
+    archive.on('warning', (warning) => {
+      this.logger.warn(`Aviso ao gerar ZIP de gravações: ${warning.message}`);
+    });
+    archive.on('error', (error) => {
+      this.logger.error(`Falha ao gerar ZIP de gravações: ${error.message}`);
+      res.destroy(error);
+    });
+    // Cliente cancelou o download: interrompe a leitura dos arquivos.
+    res.on('close', () => {
+      if (!res.writableEnded) archive.destroy();
+    });
+    archive.pipe(res);
+    for (const entry of entries) {
+      archive.file(entry.filePath, { name: entry.entryName });
+    }
+    await archive.finalize();
+    return { files: entries.length };
+  }
+
   async registerInternal(dto: RegisterRecordingDto) {
     const recording = await this.prisma.recording.create({
       data: {

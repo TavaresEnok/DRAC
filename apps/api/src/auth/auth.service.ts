@@ -7,7 +7,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import nodemailer from 'nodemailer';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
-import { AuthUser, JwtAuthPayload, PlayTokenPayload, StreamTokenPayload } from '../common/types/auth-user.type';
+import { AuthUser, DownloadZipTokenPayload, JwtAuthPayload, PlayTokenPayload, StreamTokenPayload } from '../common/types/auth-user.type';
 
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_REFRESH_INACTIVITY_DAYS = 7;
@@ -240,6 +240,32 @@ export class AuthService {
     const payload = await this.jwtService.verifyAsync<PlayTokenPayload>(token);
     if (payload.type !== 'play') {
       throw new UnauthorizedException('Token de playback inválido.');
+    }
+    return payload;
+  }
+
+  // Token de curta duração que autoriza o download em lote (ZIP) das gravações
+  // listadas. Emitido apenas para quem passou pelo gate OPERATOR+exportEvidence;
+  // permite ao navegador baixar via link direto (streaming nativo, com progresso)
+  // sem carregar o arquivo inteiro em memória via XHR.
+  async createDownloadZipToken(userId: string, recordingIds: string[]) {
+    const payload: DownloadZipTokenPayload = {
+      sub: userId,
+      recordingIds,
+      type: 'download-zip',
+    };
+    const downloadToken = await this.jwtService.signAsync(payload, { expiresIn: '15m' });
+    const decoded = this.jwtService.decode(downloadToken) as { exp?: number } | null;
+    return {
+      downloadToken,
+      expiresAt: decoded?.exp ? new Date(decoded.exp * 1000).toISOString() : null,
+    };
+  }
+
+  async verifyDownloadZipToken(token: string): Promise<DownloadZipTokenPayload> {
+    const payload = await this.jwtService.verifyAsync<DownloadZipTokenPayload>(token);
+    if (payload.type !== 'download-zip' || !Array.isArray(payload.recordingIds)) {
+      throw new UnauthorizedException('Token de download inválido.');
     }
     return payload;
   }

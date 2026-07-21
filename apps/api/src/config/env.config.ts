@@ -15,6 +15,10 @@ export const envConfig = () => ({
   ffmpegAnalyzedurationUs: Number(process.env.FFMPEG_ANALYZEDURATION_US ?? 1000000),
   mjpegFps: Number(process.env.MJPEG_FPS ?? 20),
   mjpegQ: Number(process.env.MJPEG_Q ?? 5),
+  // Posters dos cards são capturas pontuais, não lives. Cache maior e
+  // concorrência limitada evitam abrir dezenas de conexões RTSP/FFmpeg juntas.
+  livePosterCacheTtlMs: Number(process.env.LIVE_POSTER_CACHE_TTL_MS ?? 60000),
+  livePosterMaxConcurrency: Number(process.env.LIVE_POSTER_MAX_CONCURRENCY ?? 3),
   recordingsRoot: process.env.RECORDINGS_ROOT ?? './storage/recordings',
   storageBackend: process.env.STORAGE_BACKEND ?? 'local',
   storageWriteProbeEnabled: String(process.env.STORAGE_WRITE_PROBE_ENABLED ?? 'true') !== 'false',

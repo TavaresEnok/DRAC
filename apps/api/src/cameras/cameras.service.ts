@@ -222,6 +222,7 @@ export class CamerasService {
         siteId: dto.siteId,
         areaId: dto.areaId,
         groupId: dto.groupId,
+        enabled: dto.enabled !== undefined ? dto.enabled : existing.enabled,
         recordingEnabled: dto.recordingEnabled !== undefined ? dto.recordingEnabled : existing.recordingEnabled,
         recordingMode: dto.recordingMode,
         retentionDays: dto.retentionDays,
@@ -1303,7 +1304,13 @@ export class CamerasService {
       await this.prisma.camera.update({
         where: { id },
         data: {
-          rtspPath: detectedRtspPath ?? camera.rtspPath,
+          // NUNCA sobrescreve um rtspPath já preenchido: o probe testa vários
+          // caminhos candidatos e, em WAN, o caminho bom pode falhar por timeout
+          // enquanto um caminho "genérico" (ex.: /cam/realmonitor em câmera
+          // Hikvision) responde com um stream DEGRADADO (640x360). Persistir o
+          // vencedor da rodada fazia o caminho flip-flopar e derrubava a
+          // resolução da gravação. Só preenche quando estava vazio.
+          rtspPath: camera.rtspPath?.trim() ? camera.rtspPath : detectedRtspPath ?? camera.rtspPath,
           detectedVideoCodec: detectedStream?.codec ?? camera.detectedVideoCodec,
           recordingVideoCodec: recordingCodecSynced,
           detectedWidth: detectedStream?.width ?? camera.detectedWidth,

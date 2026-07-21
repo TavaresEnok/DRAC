@@ -1,4 +1,4 @@
-import { Injectable, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { spawn } from 'child_process';
 import { type Request } from 'express';
@@ -108,6 +108,40 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
    * sem fonte pronta, conta "ticks ruins". Após WATCHDOG_BAD_TICKS seguidos, força
    * o reset daquele path (DELETE + recriação), que sobe um restream novo e limpo.
    */
+  /**
+   * O MediaMTX guarda os paths criados por API apenas em memória: se o container
+   * for recriado (upgrade de imagem, `compose up` que reavalia o serviço, OOM),
+   * ele volta VAZIO — e o `pathEnsureCache` daqui continua achando que os paths
+   * existem, então nada os recria. Resultado observado em produção 2026-07-21:
+   * MediaMTX recriado às 21:19 → paths sumiram → live morto para TODAS as câmeras
+   * até alguém reiniciar a API (o warm-on-boot era a única cura).
+   *
+   * Aqui o watchdog reconcilia sozinho: se o MediaMTX tem MUITO menos paths do que
+   * as câmeras habilitadas exigem, limpa o cache e re-aquece. Barato (1 request por
+   * tick) e cobre o modo de falha real.
+   */
+  private async reconcileMissingPaths(activePathNames: Set<string>) {
+    try {
+      const cameras = await this.camerasService.findAllInternal();
+      const expected = cameras.filter((cam: any) => cam.enabled !== false);
+      if (!expected.length) return;
+
+      const missing = expected.filter((cam: any) => !activePathNames.has(this.pathNameFromCameraId(cam.id, 'grid')));
+      // Tolerância: só age quando a maioria sumiu (assinatura de MediaMTX zerado).
+      // Uma câmera isolada sem path é normal (on-demand/erro pontual) e já é
+      // tratada pelo fluxo de ensurePathForCamera quando alguém abre a câmera.
+      if (missing.length < Math.max(2, Math.ceil(expected.length * 0.5))) return;
+
+      this.logger.warn(
+        `MediaMTX está sem ${missing.length}/${expected.length} paths de grade (provável recriação do container). Re-aquecendo...`,
+      );
+      this.pathEnsureCache.clear();
+      await this.warmCameraPaths();
+    } catch (error) {
+      this.logger.warn(`Falha ao reconciliar paths do MediaMTX: ${(error as Error).message}`);
+    }
+  }
+
   private async streamWatchdogTick() {
     let items: any[] = [];
     try {
@@ -117,6 +151,8 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
     } catch {
       return; // MediaMTX indisponível neste tick; tenta no próximo.
     }
+
+    await this.reconcileMissingPaths(new Set(items.map((item: any) => String(item?.name ?? ''))));
 
     const seen = new Set<string>();
     for (const item of items) {
@@ -177,13 +213,13 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
     }
   }
 
-  /** Inverte pathNameFromCameraId: `cam_<32hex>[_grid]` → { cameraId(UUID), mode }. */
+  /** Inverte pathNameFromCameraId: `cam_<32hex>[_grid|_orig]` → { cameraId(UUID), mode }. */
   private cameraIdFromPathName(pathName: string): { cameraId: string; deliveryMode: LiveViewMode } | null {
-    const match = pathName.match(/^cam_([0-9a-fA-F]{32})(_grid)?$/);
+    const match = pathName.match(/^cam_([0-9a-fA-F]{32})(_grid|_orig)?$/);
     if (!match) return null;
     const h = match[1];
     const cameraId = `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-    return { cameraId, deliveryMode: match[2] ? 'grid' : 'selected' };
+    return { cameraId, deliveryMode: match[2] === '_grid' ? 'grid' : match[2] === '_orig' ? 'original' : 'selected' };
   }
 
   /**
@@ -231,7 +267,12 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
 
   private pathNameFromCameraId(cameraId: string, deliveryMode: LiveViewMode = 'selected') {
     const base = `cam_${cameraId.replace(/[^a-zA-Z0-9]/g, '')}`;
-    return deliveryMode === 'grid' ? `${base}_grid` : base;
+    // 'original' tem path PRÓPRIO (_orig): se compartilhasse o base com 'selected',
+    // dois espectadores em modos diferentes ficariam reconfigurando o mesmo path
+    // (transcode ↔ passthrough) um por cima do outro.
+    if (deliveryMode === 'grid') return `${base}_grid`;
+    if (deliveryMode === 'original') return `${base}_orig`;
+    return base;
   }
 
   getPathNameForCamera(cameraId: string, deliveryMode: LiveViewMode = 'selected') {
@@ -608,6 +649,35 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
     };
   }
 
+  /**
+   * Resolve a melhor fonte para uma captura estática usando exatamente a mesma
+   * regra da grade: sub-stream H.264 menor primeiro, sub-stream H.265 depois e
+   * stream principal apenas como fallback.
+   *
+   * Retorna a URL RTSP da câmera diretamente. Não cria nem lê um path MediaMTX:
+   * conectar ao path `selected` para extrair um único frame iniciava um encode
+   * de 6 Mbps que permanecia ativo por 90s e saturava a CPU ao carregar os
+   * posters de várias câmeras.
+   */
+  async resolveGridPosterSource(cameraId: string) {
+    const camera = await this.camerasService.getCameraOrThrow(cameraId);
+    if ((camera as { enabled?: boolean }).enabled === false) {
+      throw new BadRequestException('Câmera desativada.');
+    }
+    const password = this.cryptoService.decrypt(camera.passwordEncrypted);
+    const transport =
+      camera.preferredRtspTransport
+      ?? this.configService.get<string>('ffmpegRtspTransport')
+      ?? 'tcp';
+    const selected = await this.chooseGridSource(cameraId, camera, password, transport);
+    return {
+      sourceUrl: selected.sourceUrl,
+      profile: selected.profile,
+      sourceVideoCodec: selected.isHevc ? 'h265' : 'h264',
+      usedSubStream: selected.usedSubStream,
+    };
+  }
+
   private durationToMilliseconds(value: string | undefined | null) {
     if (!value) return null;
     const matches = [...value.trim().matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h)/g)];
@@ -743,7 +813,8 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
 
   private async warmCameraPaths() {
     try {
-      const cameras = await this.camerasService.findAllInternal();
+      const cameras = (await this.camerasService.findAllInternal())
+        .filter((camera) => (camera as { enabled?: boolean }).enabled !== false);
       if (!cameras.length) return;
 
       const warmSelectedPaths = this.configService.get<boolean>('mediaMtxWarmSelectedPathsOnBoot') === true;
@@ -780,6 +851,19 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
       const message = error instanceof Error ? error.message : 'erro desconhecido';
       this.logger.warn(`Falha ao aquecer paths MediaMTX: ${message}`);
     }
+  }
+
+  /** Remove os paths (selected + grid) de uma câmera no MediaMTX — usado ao
+   * DESATIVAR a câmera, para o vídeo parar imediatamente (sem esperar o
+   * closeAfter do on-demand). Best-effort: path inexistente é ignorado. */
+  async teardownPathsForCamera(cameraId: string): Promise<void> {
+    if (!this.isEnabled()) return;
+    for (const mode of ['selected', 'grid', 'original'] as const) {
+      const pathName = this.pathNameFromCameraId(cameraId, mode);
+      this.pathEnsureCache.delete(this.buildEnsureKey(cameraId, mode));
+      await this.apiRequest('DELETE', `/v3/config/paths/delete/${encodeURIComponent(pathName)}`).catch(() => undefined);
+    }
+    this.invalidateMainCodecCache(cameraId);
   }
 
   ensurePathForCamera(cameraId: string, deliveryMode: LiveViewMode = 'selected'): Promise<EnsuredCameraPath> {
@@ -819,6 +903,12 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
     }
 
     const camera = await this.camerasService.getCameraOrThrow(cameraId);
+    // Gate central: câmera desativada não ganha path (nem via warm/watchdog/live).
+    // Também derruba paths que já existam, para o vídeo parar na hora.
+    if ((camera as { enabled?: boolean }).enabled === false) {
+      await this.teardownPathsForCamera(cameraId);
+      throw new BadRequestException('Câmera desativada.');
+    }
     const password = this.cryptoService.decrypt(camera.passwordEncrypted);
 
     const pathName = this.pathNameFromCameraId(cameraId, deliveryMode);
@@ -859,13 +949,18 @@ export class MediamtxProxyService implements OnApplicationBootstrap, OnModuleDes
       deliveryMode === 'original' ? false : (isHevc || transcodeAudioForWebrtc || sanitizeGridSource);
     const gpuAccel =
       needsPublisher && !sanitizeGridSource && (await this.settingsService.isGpuAccelerationEnabled());
-    const transcodedForLive = isHevc || transcodeAudioForWebrtc;
+    // Só é "transcodificado" quando o publisher FFmpeg existe de fato — no modo
+    // 'original' (passthrough) a fonte HEVC segue intocada e o rótulo deve refletir isso.
+    const transcodedForLive = needsPublisher && (isHevc || transcodeAudioForWebrtc);
 
     const desiredPath: any = {
       source: sourceUrl,
-      sourceOnDemand,
+      // 'original' (máxima qualidade) puxa o stream PRINCIPAL direto da câmera em
+      // passthrough. Sempre sob demanda com janela curta: senão o path seguraria
+      // uma sessão RTSP + banda WAN do main 24/7 mesmo sem ninguém assistindo.
+      sourceOnDemand: deliveryMode === 'original' ? true : sourceOnDemand,
       sourceOnDemandStartTimeout,
-      sourceOnDemandCloseAfter,
+      sourceOnDemandCloseAfter: deliveryMode === 'original' ? selectedRunOnDemandCloseAfter : sourceOnDemandCloseAfter,
       rtspTransport,
     };
 

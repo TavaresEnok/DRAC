@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SkipThrottle } from '@nestjs/throttler';
 import { UserRole } from '@prisma/client';
@@ -126,7 +126,7 @@ export class CameraStreamController {
       return deny('Ação de mídia não autorizada.');
     }
 
-    const match = /^cam_([0-9a-f]{32})(?:_grid)?$/i.exec(String(body?.path ?? ''));
+    const match = /^cam_([0-9a-f]{32})(?:_grid|_orig)?$/i.exec(String(body?.path ?? ''));
     if (!match) return deny('Caminho de mídia inválido.');
 
     const token = String(body?.token ?? '').trim();
@@ -154,6 +154,9 @@ export class CameraStreamController {
   ) {
     await this.accessControlService.assertCanViewCamera(user, cameraId);
     await this.commercialPolicy.assertFeature('localLive', user);
+    if (((await this.camerasService.getCameraOrThrow(cameraId)) as { enabled?: boolean }).enabled === false) {
+      throw new BadRequestException('Câmera desativada.');
+    }
     const token = await this.authService.createStreamToken(user.id, cameraId);
     await this.auditService.log(user.id, 'stream.token.create', 'Camera', cameraId, null, req);
     return token;
@@ -245,8 +248,11 @@ export class CameraStreamController {
   ) {
     await this.accessControlService.assertCanViewCamera(user, cameraId);
     await this.commercialPolicy.assertFeature('localLive', user);
-    const token = await this.authService.createStreamToken(user.id, cameraId);
     const camera = await this.camerasService.getCameraOrThrow(cameraId);
+    if ((camera as { enabled?: boolean }).enabled === false) {
+      throw new BadRequestException('Câmera desativada. Reative-a nas configurações para ver ao vivo.');
+    }
+    const token = await this.authService.createStreamToken(user.id, cameraId);
     const viewMode = normalizeLiveViewMode(rawViewMode);
 
     // Atualiza metadados em segundo plano. Abrir uma live nunca deve esperar

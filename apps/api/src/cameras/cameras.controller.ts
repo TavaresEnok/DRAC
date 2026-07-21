@@ -104,10 +104,16 @@ export class CamerasController {
   @Roles(UserRole.VIEWER)
   @Get()
   async findAll(@CurrentUser() user: AuthUser) {
-    const cameras =
-      user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN
-        ? await this.camerasService.findAll()
-        : await this.camerasService.findAll(await this.accessControlService.getAccessibleCameraIds(user));
+    const isAdmin = user.role === UserRole.ADMIN || user.role === UserRole.SUPER_ADMIN;
+    let cameras = isAdmin
+      ? await this.camerasService.findAll()
+      : await this.camerasService.findAll(await this.accessControlService.getAccessibleCameraIds(user));
+
+    // Câmera DESATIVADA some para quem só assiste (inclusive apps antigos, que
+    // não conhecem o campo). Admin continua vendo, para poder reativar.
+    if (!isAdmin) {
+      cameras = cameras.filter((camera: any) => camera.enabled !== false);
+    }
 
     return Promise.all(cameras.map((camera: any) => this.withCapabilities(user, camera)));
   }
@@ -561,13 +567,27 @@ export class CamerasController {
   @Patch(':id')
   async update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: UpdateCameraDto, @Req() req: Request) {
     await this.accessControlService.assertCanAdminCamera(user, id);
+    const wasEnabled = (await this.camerasService.getCameraOrThrow(id)).enabled !== false;
     const camera = await this.camerasService.update(id, dto);
+    if (dto.enabled === false && wasEnabled) {
+      // Desativada: derruba gravação e live AGORA (sem esperar closeAfter/watchdog).
+      await this.recordingManager.stop(id).catch(() => undefined);
+      try {
+        const mediamtx = this.moduleRef.get(MediamtxProxyService, { strict: false });
+        await mediamtx.teardownPathsForCamera(id);
+      } catch {
+        // Sem MediaMTX ativo os paths on-demand morrem sozinhos.
+      }
+    } else if (dto.enabled === true && !wasEnabled) {
+      // Reativada: religa live/gravação/IA pelo mesmo fluxo do pós-criação.
+      this.schedulePostCreateProvisioning(id);
+    }
     await this.auditService.log(
       user.id,
       'camera.update',
       'Camera',
       camera.id,
-      { name: camera.name, siteId: camera.siteId, areaId: camera.areaId, groupId: camera.groupId },
+      { name: camera.name, siteId: camera.siteId, areaId: camera.areaId, groupId: camera.groupId, enabled: (camera as { enabled?: boolean }).enabled },
       req,
     );
     return camera;

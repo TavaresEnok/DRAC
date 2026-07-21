@@ -20,6 +20,7 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 const BRANDING_KEYS = [
   'facilityName',
   'brandLogoDataUrl',
+  'brandUseDefaultColors',
   'brandPrimaryColor',
   'brandBackgroundColor',
   'brandSecondaryColor',
@@ -75,6 +76,9 @@ const SETTING_SPECS: Record<string, SettingSpec> = {
   // ── Marca (branding) do app web — aplicado em runtime na interface ──────────
   // Logo em data URL (base64). Vazio = usa o logo padrão DRAC.
   brandLogoDataUrl: { type: 'image', default: '' },
+  // true = o app usa sua paleta original. As cores personalizadas continuam
+  // armazenadas para voltarem imediatamente quando o administrador desativar.
+  brandUseDefaultColors: { type: 'boolean', default: true },
   // Cor principal (#RRGGBB). Vazio = usa a cor do tema.
   brandPrimaryColor: { type: 'color', default: '' },
   // Cor de fundo (#RRGGBB). Vazio = usa a cor do tema.

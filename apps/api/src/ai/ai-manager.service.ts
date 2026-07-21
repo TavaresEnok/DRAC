@@ -106,6 +106,11 @@ function parseCsvEnv(raw: string | undefined): string[] {
 export class AiManagerService implements OnModuleInit {
   private readonly logger = new Logger(AiManagerService.name);
   private syncInFlight: Promise<any> | null = null;
+  // Auto-recuperação de processadores degradados: exige 2 ciclos seguidos
+  // "degraded" antes de agir (evita transientes) e respeita cooldown por câmera.
+  private readonly degradedStrikes = new Map<string, number>();
+  private readonly lastDegradedRecoveryAt = new Map<string, number>();
+  private degradedWatchdogTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly camerasService: CamerasService,
@@ -124,6 +129,82 @@ export class AiManagerService implements OnModuleInit {
     this.logger.log('Sincronizando IA com as câmeras...');
     // Aguarda um pouco para os serviços estarem prontos
     setTimeout(() => void this.syncAll(), 5000);
+
+    // Watchdog: um processador pode ficar "active" porém DEGRADED para sempre
+    // quando a fonte muda por baixo dele (ex.: site caiu e voltou com outro
+    // codec/URL — o detector fica cego sem se auto-curar). Aqui a análise é
+    // reiniciada com a fonte RE-RESOLVIDA (buildAiSource) automaticamente.
+    const watchdogIntervalMs = Math.max(60_000, Number(process.env.AI_DEGRADED_WATCHDOG_INTERVAL_MS ?? 120_000));
+    this.degradedWatchdogTimer = setInterval(() => void this.recoverDegradedProcessors(), watchdogIntervalMs);
+    if (typeof this.degradedWatchdogTimer.unref === 'function') this.degradedWatchdogTimer.unref();
+  }
+
+  private async recoverDegradedProcessors() {
+    try {
+      const health: any = await this.aiService.getHealth();
+      const degraded: string[] = Array.isArray(health?.degraded_processors) ? health.degraded_processors : [];
+      for (const cameraId of [...this.degradedStrikes.keys()]) {
+        if (!degraded.includes(cameraId)) this.degradedStrikes.delete(cameraId);
+      }
+
+      // Processador AUSENTE (ex.: ai-service reiniciou e perdeu tudo): religa a
+      // análise das câmeras armadas sem esperar um restart do api. O caso
+      // "degraded" abaixo cobre processador vivo porém cego; este cobre o morto.
+      if (health?.status === 'online' || health?.status === 'degraded') {
+        const active: string[] = Array.isArray(health?.active_processors) ? health.active_processors : [];
+        const settings = await this.getSettings();
+        if (settings.enabled && settings.mode === 'motion') {
+          const armed = await this.prisma.camera.findMany({
+            where: { recordingMode: 'motion', motionTrigger: 'SYSTEM', enabled: true },
+            select: { id: true, name: true },
+          });
+          for (const cam of armed) {
+            if (active.includes(cam.id)) continue;
+            const lastAt = this.lastDegradedRecoveryAt.get(cam.id) ?? 0;
+            if (Date.now() - lastAt < 5 * 60_000) continue;
+            this.lastDegradedRecoveryAt.set(cam.id, Date.now());
+            this.logger.warn(`Processador de IA AUSENTE para câmera armada ${cam.name} — religando análise.`);
+            await this.startCamera(cam.id).catch((error) => {
+              this.logger.warn(`Falha ao religar análise de ${cam.name}: ${(error as Error).message}`);
+            });
+          }
+        }
+      }
+
+      if (!degraded.length) return;
+
+      const cooldownMs = Math.max(2 * 60_000, Number(process.env.AI_DEGRADED_RECOVERY_COOLDOWN_MS ?? 10 * 60_000));
+      for (const cameraId of degraded) {
+        const strikes = (this.degradedStrikes.get(cameraId) ?? 0) + 1;
+        this.degradedStrikes.set(cameraId, strikes);
+        if (strikes < 2) continue;
+        const lastAt = this.lastDegradedRecoveryAt.get(cameraId) ?? 0;
+        if (Date.now() - lastAt < cooldownMs) continue;
+        this.lastDegradedRecoveryAt.set(cameraId, Date.now());
+        this.degradedStrikes.delete(cameraId);
+
+        this.logger.warn(`Processador de IA degradado (câmera ${cameraId}) — reiniciando análise com fonte re-resolvida.`);
+        try {
+          await this.aiService.stopAnalysis(cameraId).catch(() => undefined);
+          // allowCameraTrigger: se um processador EXISTIA para esta câmera, alguém o
+          // iniciou de propósito (fallback do ONVIF em câmera 'CAMERA', ou teste).
+          // Sem isso, o watchdog PARAVA o processador degradado e o startCamera
+          // recusava religar ('camera_self_detection') — matava a reserva em silêncio.
+          const result: any = await this.startCamera(cameraId, { allowCameraTrigger: true });
+          await this.camerasService.registerEvent(
+            cameraId,
+            'HEALTH_AI_PROCESSOR_RECOVERED',
+            'WARNING',
+            'Detector de IA degradado foi reiniciado automaticamente com a fonte re-resolvida.',
+            { result: result?.status ?? 'restarted' },
+          ).catch(() => undefined);
+        } catch (error) {
+          this.logger.warn(`Falha na auto-recuperação da IA da câmera ${cameraId}: ${(error as Error).message}`);
+        }
+      }
+    } catch {
+      // Watchdog é best-effort; falha de health check não pode derrubar nada.
+    }
   }
 
   async syncAll() {
@@ -155,6 +236,7 @@ export class AiManagerService implements OnModuleInit {
 
       const cameras = await this.camerasService.findAllInternal();
       const enabledCameras = cameras.filter((cam: any) => {
+        if (cam.enabled === false) return false; // câmera desativada no sistema
         if (cam.aiEnabled === false || !isCameraAllowedByAiEnv(cam)) return false;
         // No modo 'motion' a detecção existe para servir à GRAVAÇÃO por
         // movimento: analisa APENAS as câmeras armadas (recordingMode='motion')
@@ -194,7 +276,7 @@ export class AiManagerService implements OnModuleInit {
     return this.syncAll();
   }
 
-  async startCamera(cameraId: string) {
+  async startCamera(cameraId: string, options?: { allowCameraTrigger?: boolean }) {
     if (!(await this.commercialPolicy.isAllowed('aiAdvanced'))) {
       return { status: 'disabled', cameraId, reason: 'commercial_restriction' };
     }
@@ -208,7 +290,9 @@ export class AiManagerService implements OnModuleInit {
     }
     // No modo 'motion', câmeras com detecção própria (motionTrigger='CAMERA')
     // usam o evento ONVIF (OnvifEventsService) e NÃO consomem nossa CPU.
-    if (settings.mode === 'motion' && (cam as any).motionTrigger !== 'SYSTEM') {
+    // allowCameraTrigger=true é o FALLBACK do OnvifEventsService: liga a MOG2
+    // como reserva quando a detecção nativa está sem prova de vida.
+    if (settings.mode === 'motion' && (cam as any).motionTrigger !== 'SYSTEM' && !options?.allowCameraTrigger) {
       return { status: 'camera_self_detection', cameraId };
     }
     const source = await this.buildAiSource(cam);
