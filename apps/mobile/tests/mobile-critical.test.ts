@@ -87,6 +87,7 @@ test('branding: separa as paletas clara e escura recebidas do servidor', async (
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(JSON.stringify({
     facilityName: 'Instalação',
+    brandUseDefaultColors: true,
     brandPrimaryColor: '#111111',
     brandBackgroundColor: '#000000',
     brandLightPrimaryColor: '#222222',
@@ -94,6 +95,7 @@ test('branding: separa as paletas clara e escura recebidas do servidor', async (
   }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
   try {
     const branding = await fetchBranding('https://api.local');
+    assert(branding.useDefaultColors, 'toggle de cores padrão deve ser mapeado');
     assert(branding.dark.primaryColor === '#111111', 'tema escuro deve usar chaves históricas');
     assert(branding.dark.backgroundColor === '#000000', 'fundo escuro deve ser mapeado');
     assert(branding.light.primaryColor === '#222222', 'tema claro deve usar chaves brandLight');

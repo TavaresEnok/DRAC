@@ -190,11 +190,22 @@ function writeClient(body) {
   try {
     const dir = path.join(CLIENTS_DIR, slug);
     fs.mkdirSync(dir, { recursive: true });
+    // PRESERVA o config existente (flags manuais como redesign/skipFirebase não
+    // podem sumir numa regeração pela Central) e só sobrepõe o que veio no body.
+    let existing = {};
+    try { existing = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')); } catch { /* novo cliente */ }
     const cfg = {
+      ...existing,
       appName, slug: `drac-${slug}`, packageId, apiUrl,
-      primaryColor: body.primaryColor || '#3b82f6',
-      splashBackgroundColor: '#ffffff',
+      primaryColor: body.primaryColor || existing.primaryColor || '#3b82f6',
+      // O design NOVO (redesign) é o padrão de todo app gerado — o antigo só
+      // permanece se o config do cliente disser explicitamente redesign:false.
+      redesign: existing.redesign !== undefined ? existing.redesign : true,
     };
+    // Splash combina com o design: escuro no redesign, claro no antigo (a menos
+    // que o cliente já tenha um valor próprio salvo).
+    cfg.splashBackgroundColor = existing.splashBackgroundColor
+      || (cfg.redesign ? '#0A0D13' : '#ffffff');
     fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2) + '\n');
     if (stage) {
       for (const name of ['logo.png', 'splash.png', 'icon.png', 'adaptive-icon.png']) {

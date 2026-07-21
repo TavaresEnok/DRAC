@@ -10,6 +10,10 @@
 # Seguro para ser disparado por um worker: o slug é validado por regex e nada
 # do usuário é interpolado em shell sem checagem.
 set -euo pipefail
+# O nginx (worker sem privilégio) precisa LER os artefatos publicados. O agente de
+# build da Central roda com umask restritivo (077 → arquivos 600 = só o dono lê),
+# o que faz o /apk responder 403 e a Central mostrar 404. Força artefatos legíveis.
+umask 022
 
 SLUG="${1:-}"
 if [[ -z "$SLUG" ]]; then echo "uso: build-client.sh <slug>" >&2; exit 2; fi
@@ -175,6 +179,7 @@ echo ">> manifest final validado (sem overlay/storage legado, backup e cleartext
 # Publica no diretório do host servido pelo nginx (sobrevive a rebuilds) +
 # mantém a cópia em builds/.
 cp -f "$OUT" "$APK_PUBLISH_DIR/drac-$SLUG.apk"
+chmod 0644 "$APK_PUBLISH_DIR/drac-$SLUG.apk"
 
 VERSION="$($BUILD_TOOLS/aapt dump badging "$OUT" 2>/dev/null | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
 echo "OK_APK=$OUT"
@@ -261,6 +266,7 @@ NODE
   cp -f "$BUILD_INFO" "$APK_PUBLISH_DIR/drac-$SLUG-build-info.json"
   printf '%s  %s\n' "$APK_SHA256" "drac-$SLUG.apk" > "$APK_PUBLISH_DIR/drac-$SLUG.sha256"
   printf '%s  %s\n' "$AAB_SHA256" "drac-$SLUG.aab" >> "$APK_PUBLISH_DIR/drac-$SLUG.sha256"
+  chmod 0644 "$APK_PUBLISH_DIR/drac-$SLUG.aab" "$APK_PUBLISH_DIR/drac-$SLUG-build-info.json" "$APK_PUBLISH_DIR/drac-$SLUG.sha256"
   echo "OK_AAB=$AAB_OUT"
   echo "OK_AAB_URL=/apk/drac-$SLUG.aab"
 else
@@ -325,6 +331,7 @@ PY
   )
   if [[ -f "$BUILDS_DIR/drac-$SLUG-playstore-kit.zip" ]]; then
     cp -f "$BUILDS_DIR/drac-$SLUG-playstore-kit.zip" "$APK_PUBLISH_DIR/drac-$SLUG-playstore-kit.zip"
+    chmod 0644 "$APK_PUBLISH_DIR/drac-$SLUG-playstore-kit.zip"
     echo "OK_KIT_URL=/apk/drac-$SLUG-playstore-kit.zip"
   else
     echo ">> aviso: kit Play Store não gerado" >&2

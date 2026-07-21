@@ -12,7 +12,7 @@ export type IconName =
   | 'camera' | 'mic' | 'expand'
   | 'plus' | 'minus' | 'crosshair'
   | 'arrowUp' | 'arrowDown' | 'arrowLeft' | 'arrowRight'
-  | 'download' | 'check' | 'server' | 'logout'
+  | 'download' | 'check' | 'server' | 'logout' | 'cloud' | 'smartphone' | 'info' | 'share'
   | 'alert' | 'moon' | 'sun' | 'videoOff' | 'aperture' | 'maximize'
   | 'star' | 'edit' | 'trash' | 'close' | 'clock'
   | 'pause' | 'rewind' | 'forward';
@@ -151,6 +151,14 @@ export function Icon({ name, size = 22, color = '#fff', strokeWidth = 1.9, fill 
       );
     case 'logout':
       return (<Svg width={size} height={size} viewBox="0 0 24 24"><Path {...common} d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></Svg>);
+    case 'cloud':
+      return (<Svg width={size} height={size} viewBox="0 0 24 24"><Path {...common} d="M5 15.5a4.5 4.5 0 0 1 .8-8.9 5.5 5.5 0 0 1 10.5 1.3A3.8 3.8 0 0 1 18 15.4z" /></Svg>);
+    case 'smartphone':
+      return (<Svg width={size} height={size} viewBox="0 0 24 24"><Rect {...common} x={6} y={2.5} width={12} height={19} rx={3} /><Path {...common} d="M11 18.5h2" /></Svg>);
+    case 'info':
+      return (<Svg width={size} height={size} viewBox="0 0 24 24"><Circle {...common} cx={12} cy={12} r={9} /><Path {...common} d="M12 16v-4M12 8h.01" /></Svg>);
+    case 'share':
+      return (<Svg width={size} height={size} viewBox="0 0 24 24"><Circle {...common} cx={6} cy={12} r={2.6} /><Circle {...common} cx={17.5} cy={5.5} r={2.6} /><Circle {...common} cx={17.5} cy={18.5} r={2.6} /><Path {...common} d="m8.4 10.8 6.8-4M8.4 13.2l6.8 4" /></Svg>);
     case 'alert':
       return (<Svg width={size} height={size} viewBox="0 0 24 24"><Path {...common} strokeWidth={strokeWidth + 0.1} d="M12 3.5 21 19H3z" /><Path {...common} strokeWidth={strokeWidth + 0.1} d="M12 10v4M12 17h.01" /></Svg>);
     case 'moon':

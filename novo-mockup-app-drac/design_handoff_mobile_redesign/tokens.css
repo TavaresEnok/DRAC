@@ -1,0 +1,71 @@
+/* DRAC — Design tokens do redesign mobile
+   Cole no projeto e use as variáveis. Alterne tema com class="light" (ou data-theme).
+   Fontes: Sora (títulos/números), Instrument Sans (texto/UI), JetBrains Mono (técnico). */
+
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
+
+:root {
+  /* Tipografia */
+  --font-title: 'Sora', system-ui, sans-serif;   /* 600/700/800 */
+  --font-ui: 'Instrument Sans', system-ui, sans-serif; /* 400–700 */
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace; /* 500/600 */
+
+  /* Escuro (padrão) */
+  --bg: #0A0D13;
+  --sf: #12161F;      /* superfície (cards/campos) */
+  --sf2: #1A2029;     /* superfície 2 (trilhos/segmented) */
+  --bd: rgba(255,255,255,.07);
+  --bd2: rgba(255,255,255,.13);
+  --tx: #F1F4F9;      /* texto */
+  --ts: #96A0B0;      /* secundário */
+  --tm: #5C6779;      /* terciário/placeholder */
+  --ac: #3E8BFF;      /* acento */
+  --ac2: #2E5EEF;     /* fim do gradiente do acento */
+  --acdim: rgba(62,139,255,.13);
+  --acbd: rgba(62,139,255,.35);
+  --ok: #33C481;   --okbg: rgba(51,196,129,.13);
+  --dg: #F05B52;   --dgbg: rgba(240,91,82,.13);
+  --wn: #F0A33C;   --wnbg: rgba(240,163,60,.14);
+  --tabbg: rgba(14,18,26,.85); /* tab bar com blur */
+
+  /* Raios */
+  --r-pill: 999px;
+  --r-field: 16px;
+  --r-card: 18px;
+  --r-player: 20px;
+  --r-tabbar: 23px;
+  --r-icon: 14px;
+
+  /* Sombras */
+  --sh-card: 0 20px 44px -18px rgba(5,10,22,.5);
+  --sh-soft: 0 4px 12px rgba(6,12,24,.18);
+  --sh-accent: 0 16px 32px -12px var(--ac);
+}
+
+/* Tema claro */
+.light, [data-theme="light"] {
+  --bg: #EFF2F7;
+  --sf: #FFFFFF;
+  --sf2: #E7EBF2;
+  --bd: rgba(16,24,40,.09);
+  --bd2: rgba(16,24,40,.16);
+  --tx: #131A28;
+  --ts: #57657A;
+  --tm: #9AA6B7;
+  --ac: #1F6FEB;
+  --ac2: #1A53C7;
+  --acdim: rgba(31,111,235,.09);
+  --acbd: rgba(31,111,235,.32);
+  --ok: #17945C;   --okbg: rgba(23,148,92,.11);
+  --dg: #D9453E;   --dgbg: rgba(217,69,62,.10);
+  --wn: #B57414;   --wnbg: rgba(181,116,20,.12);
+  --tabbg: rgba(255,255,255,.9);
+}
+
+/* Gradiente do acento (logo, botões primários, avatar, PTZ home) */
+/* background: linear-gradient(140deg, var(--ac), var(--ac2)); */
+
+/* Animações usadas no protótipo */
+@keyframes scrIn { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:none } }
+@keyframes blk   { 0%,100% { opacity:1 } 50% { opacity:.25 } }   /* ponto ao vivo / REC */
+@keyframes flashv{ 0% { opacity:.9 } 100% { opacity:0 } }        /* flash de captura */

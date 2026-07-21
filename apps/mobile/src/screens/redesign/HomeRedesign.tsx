@@ -8,6 +8,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Image,
   RefreshControl,
   ScrollView,
@@ -19,6 +20,7 @@ import {
 import { useTheme } from '../../theme/ThemeProvider';
 import { Icon } from '../../components/Icon';
 import { isOnlineStatus } from '../../utils/camera-view';
+import { loadFeaturedCameraId, saveFeaturedCameraId } from './featuredCamera';
 import type { Alarm, Camera } from '../../types';
 
 const TITLE = 'Sora';
@@ -38,6 +40,10 @@ interface Props {
   onOpenMosaic: () => void;
   onOpenPlayback: () => void;
   facilityName?: string;
+  /** Avisos operacionais do servidor (mesma fonte da CentralScreen). */
+  operationalMessages?: string[];
+  /** Poster expirado/quebrado → pede um novo ao App. */
+  onPosterError?: (cameraId: string) => void;
 }
 
 function greeting(): string {
@@ -51,26 +57,53 @@ function initials(name?: string | null): string {
   return (parts[0][0] + (parts[1]?.[0] ?? '')).toUpperCase();
 }
 
-function useClock(): string {
+/** Relógio isolado: só ele re-renderiza a cada segundo (não a tela inteira). */
+function ClockBadge({ style, textStyle }: { style: any; textStyle: any }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
-  return now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  return (
+    <View style={style}>
+      <Text style={textStyle}>{now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</Text>
+    </View>
+  );
 }
 
 export function HomeRedesign(props: Props) {
-  const { cameras, user, streamPosters, alarms, alarmCount, refreshing, onRefresh, onOpenCamera, onOpenAlarms, facilityName } = props;
+  const { cameras, user, streamPosters, alarms, alarmCount, refreshing, onRefresh, onOpenCamera, onOpenAlarms, facilityName, operationalMessages, onPosterError } = props;
   const { theme } = useTheme();
-  const clock = useClock();
+
+  // Destaque: escolha fixada pelo usuário (long-press num card) > 1ª online.
+  const [featuredId, setFeaturedId] = useState<string | null>(null);
+  useEffect(() => { void loadFeaturedCameraId().then(setFeaturedId).catch(() => undefined); }, []);
 
   const online = useMemo(() => cameras.filter((c) => isOnlineStatus(c.status)), [cameras]);
   const offline = cameras.length - online.length;
   const recording = Math.min(online.length, Math.max(1, Math.round(online.length * 0.4))); // estimativa visual
-  const hero = online[0] ?? cameras[0] ?? null;
+  const pinned = featuredId ? cameras.find((c) => c.id === featuredId) ?? null : null;
+  const hero = pinned ?? online[0] ?? cameras[0] ?? null;
   const heroPoster = hero ? streamPosters[hero.id] : null;
   const clientName = facilityName || user?.name?.trim().split(/\s+/)[0] || 'Você';
+  const opAlert = operationalMessages?.[0] ?? null;
+
+  const pinCamera = (cam: Camera) => {
+    const isPinned = featuredId === cam.id;
+    Alert.alert(
+      cam.name,
+      isPinned ? 'Esta câmera está fixada no destaque do Início.' : 'Fixar esta câmera no destaque do Início?',
+      isPinned
+        ? [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Remover do destaque', style: 'destructive', onPress: () => { setFeaturedId(null); void saveFeaturedCameraId(null); } },
+          ]
+        : [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Fixar no destaque', onPress: () => { setFeaturedId(cam.id); void saveFeaturedCameraId(cam.id); } },
+          ],
+    );
+  };
 
   const styles = makeStyles(theme);
 
@@ -103,24 +136,38 @@ export function HomeRedesign(props: Props) {
         <Pill theme={theme} color={theme.textMuted} value={offline} label="offline" />
       </View>
 
-      {/* Hero: câmera em destaque */}
+      {/* Aviso operacional do servidor (paridade com a tela Início atual) */}
+      {opAlert ? (
+        <View style={styles.opBanner}>
+          <Icon name="alert" size={16} color={theme.warning} />
+          <Text style={styles.opBannerText} numberOfLines={2}>{opAlert}</Text>
+        </View>
+      ) : null}
+
+      {/* Hero: câmera em destaque (long-press para fixar/soltar) */}
       {hero ? (
-        <TouchableOpacity style={styles.hero} activeOpacity={0.9} onPress={() => onOpenCamera(hero)}>
+        <TouchableOpacity style={styles.hero} activeOpacity={0.9} onPress={() => onOpenCamera(hero)} onLongPress={() => pinCamera(hero)}>
           {heroPoster ? (
-            <Image source={{ uri: heroPoster }} style={styles.heroImg} resizeMode="cover" />
+            <Image source={{ uri: heroPoster }} style={styles.heroImg} resizeMode="cover" onError={() => onPosterError?.(hero.id)} />
           ) : (
             <View style={[styles.heroImg, styles.heroPlaceholder]}>
               <Icon name="camera" size={30} color={theme.textMuted} />
             </View>
           )}
           <View style={styles.heroShade} />
-          <View style={styles.liveBadge}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>AO VIVO</Text>
+          <View style={{ position: 'absolute', top: 12, left: 12, flexDirection: 'row', gap: 6 }}>
+            <View style={[styles.liveBadge, { position: 'relative', top: 0, left: 0 }]}>
+              <View style={styles.liveDot} />
+              <Text style={styles.liveText}>AO VIVO</Text>
+            </View>
+            {pinned ? (
+              <View style={styles.pinBadge}>
+                <Icon name="star" size={9} color="#fff" />
+                <Text style={styles.pinText}>FIXADA</Text>
+              </View>
+            ) : null}
           </View>
-          <View style={styles.clockBadge}>
-            <Text style={styles.clockText}>{clock}</Text>
-          </View>
+          <ClockBadge style={styles.clockBadge} textStyle={styles.clockText} />
           <View style={styles.heroFooter}>
             <View style={{ flex: 1 }}>
               <Text style={styles.heroName} numberOfLines={1}>{hero.name}</Text>
@@ -144,17 +191,21 @@ export function HomeRedesign(props: Props) {
         {cameras.slice(0, 10).map((cam) => {
           const isOn = isOnlineStatus(cam.status);
           const poster = streamPosters[cam.id];
+          const isPinnedCard = featuredId === cam.id;
           return (
-            <TouchableOpacity key={cam.id} style={styles.card} activeOpacity={0.85} onPress={() => onOpenCamera(cam)}>
+            <TouchableOpacity key={cam.id} style={styles.card} activeOpacity={0.85} onPress={() => onOpenCamera(cam)} onLongPress={() => pinCamera(cam)}>
               <View style={styles.cardThumb}>
                 {isOn && poster ? (
-                  <Image source={{ uri: poster }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+                  <Image source={{ uri: poster }} style={StyleSheet.absoluteFill} resizeMode="cover" onError={() => onPosterError?.(cam.id)} />
                 ) : (
                   <View style={[StyleSheet.absoluteFill, styles.cardThumbEmpty]}>
                     <Icon name="camera" size={16} color={theme.textMuted} />
                   </View>
                 )}
                 <View style={[styles.statusDot, { backgroundColor: isOn ? theme.success : theme.textMuted }]} />
+                {isPinnedCard ? (
+                  <View style={styles.cardPin}><Icon name="star" size={11} color="#fff" /></View>
+                ) : null}
               </View>
               <View style={styles.cardBody}>
                 <Text style={styles.cardName} numberOfLines={1}>{cam.name}</Text>
@@ -221,8 +272,14 @@ const pillStyle = StyleSheet.create({
 });
 
 function labelForEvent(type: string): string {
-  const map: Record<string, string> = { motion: 'Movimento detectado', person: 'Pessoa detectada', face: 'Rosto detectado', offline: 'Câmera offline' };
-  return map[type] ?? 'Evento detectado';
+  const k = String(type ?? '').toLowerCase();
+  if (k.includes('motion') || k.includes('movimento')) return 'Movimento detectado';
+  if (k.includes('person') || k.includes('pessoa')) return 'Pessoa detectada';
+  if (k.includes('face') || k.includes('rosto')) return 'Rosto detectado';
+  if (k.includes('offline')) return 'Câmera offline';
+  if (k.includes('online')) return 'Câmera online';
+  if (k.includes('disk') || k.includes('storage')) return 'Alerta de armazenamento';
+  return 'Evento detectado';
 }
 function timeAgo(iso?: string): string {
   if (!iso) return 'agora';
@@ -237,7 +294,7 @@ function timeAgo(iso?: string): string {
 
 function makeStyles(t: any) {
   return StyleSheet.create({
-    root: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 110 },
+    root: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 132 },
     header: { flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 16 },
     greet: { fontFamily: UI, fontSize: 13, fontWeight: '500', color: t.textSub },
     client: { fontFamily: TITLE, fontSize: 24, fontWeight: '800', color: t.text, letterSpacing: -0.4, marginTop: 1 },
@@ -247,6 +304,12 @@ function makeStyles(t: any) {
     avatarText: { fontFamily: TITLE, fontSize: 14, fontWeight: '700', color: '#fff' },
 
     pills: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+
+    opBanner: { flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: 'rgba(240,163,60,0.12)', borderWidth: 1, borderColor: 'rgba(240,163,60,0.45)', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 14 },
+    opBannerText: { flex: 1, fontFamily: UI, fontSize: 12.5, fontWeight: '500', color: t.text, lineHeight: 17 },
+    pinBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(5,8,14,0.6)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+    pinText: { color: '#fff', fontFamily: UI, fontSize: 9, fontWeight: '700', letterSpacing: 0.6 },
+    cardPin: { position: 'absolute', top: 6, right: 6, width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(5,8,14,0.55)', alignItems: 'center', justifyContent: 'center' },
 
     hero: { height: 214, borderRadius: 22, overflow: 'hidden', backgroundColor: '#0B0F16' },
     heroImg: { width: '100%', height: '100%' },

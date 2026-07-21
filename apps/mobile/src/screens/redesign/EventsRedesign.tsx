@@ -20,6 +20,8 @@ interface Props {
   refreshing: boolean;
   onRefresh: () => void;
   onOpenCamera: (cameraId: string) => void;
+  /** Alarme vindo de um push tocado — a linha ganha destaque. */
+  highlightedAlarmId?: string | null;
 }
 
 const FILTERS = [
@@ -28,14 +30,21 @@ const FILTERS = [
   { id: 'system', label: 'Sistema' },
 ] as const;
 
-const SYSTEM_TYPES = new Set(['offline', 'online', 'system', 'disk', 'recording']);
+/** Evento de SISTEMA (vs. movimento/IA) — tolerante a variações de caixa/formato. */
+function isSystemEvent(type: string): boolean {
+  const k = String(type ?? '').toLowerCase();
+  return ['offline', 'online', 'system', 'disk', 'storage', 'recording'].some((t) => k.includes(t));
+}
 
 function labelForEvent(type: string): string {
-  const map: Record<string, string> = {
-    motion: 'Movimento detectado', person: 'Pessoa detectada', face: 'Rosto detectado',
-    offline: 'Câmera offline', online: 'Câmera online', disk: 'Alerta de armazenamento',
-  };
-  return map[type] ?? 'Evento detectado';
+  const k = String(type ?? '').toLowerCase();
+  if (k.includes('motion') || k.includes('movimento')) return 'Movimento detectado';
+  if (k.includes('person') || k.includes('pessoa')) return 'Pessoa detectada';
+  if (k.includes('face') || k.includes('rosto')) return 'Rosto detectado';
+  if (k.includes('offline')) return 'Câmera offline';
+  if (k.includes('online')) return 'Câmera online';
+  if (k.includes('disk') || k.includes('storage')) return 'Alerta de armazenamento';
+  return 'Evento detectado';
 }
 
 function dayLabel(iso: string): string {
@@ -48,24 +57,29 @@ function dayLabel(iso: string): string {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' }).toUpperCase();
 }
 
-export function EventsRedesign({ alarms, cameras, streamPosters, refreshing, onRefresh, onOpenCamera }: Props) {
+export function EventsRedesign({ alarms, cameras, streamPosters, refreshing, onRefresh, onOpenCamera, highlightedAlarmId }: Props) {
   const { theme } = useTheme();
   const [filter, setFilter] = useState<'all' | 'motion' | 'system'>('all');
   const s = makeStyles(theme);
 
-  const groups = useMemo(() => {
+  // Teto de renderização: a lista NÃO é virtualizada (ScrollView), então sem
+  // limite uma instalação movimentada travaria a tela. 50 mais recentes bastam;
+  // o histórico completo vive no servidor/painel web.
+  const EVENT_CAP = 50;
+  const { groups, truncated } = useMemo(() => {
     const list = alarms.filter((a) => {
       if (filter === 'all') return true;
-      const sys = SYSTEM_TYPES.has(a.type);
+      const sys = isSystemEvent(a.type);
       return filter === 'system' ? sys : !sys;
     });
+    const capped = list.slice(0, EVENT_CAP);
     const byDay = new Map<string, Alarm[]>();
-    for (const a of list) {
+    for (const a of capped) {
       const key = dayLabel(a.occurredAt);
       if (!byDay.has(key)) byDay.set(key, []);
       byDay.get(key)!.push(a);
     }
-    return Array.from(byDay.entries());
+    return { groups: Array.from(byDay.entries()), truncated: list.length > EVENT_CAP };
   }, [alarms, filter]);
 
   return (
@@ -95,11 +109,11 @@ export function EventsRedesign({ alarms, cameras, streamPosters, refreshing, onR
               {items.map((a) => {
                 const cam = a.cameraId ? cameras.find((c) => c.id === a.cameraId) : undefined;
                 const poster = cam ? streamPosters[cam.id] : null;
-                const sys = SYSTEM_TYPES.has(a.type);
+                const sys = isSystemEvent(a.type);
                 return (
                   <TouchableOpacity
                     key={a.id}
-                    style={s.row}
+                    style={[s.row, highlightedAlarmId === a.id && { borderColor: theme.accent, borderWidth: 1.5 }]}
                     activeOpacity={0.85}
                     onPress={() => a.cameraId && onOpenCamera(a.cameraId)}
                   >
@@ -125,6 +139,9 @@ export function EventsRedesign({ alarms, cameras, streamPosters, refreshing, onR
           </View>
         ))}
         {alarms.length === 0 ? <Text style={s.empty}>Nenhum evento ainda.</Text> : null}
+        {truncated ? (
+          <Text style={s.capNote}>Mostrando os 50 eventos mais recentes.</Text>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -132,7 +149,8 @@ export function EventsRedesign({ alarms, cameras, streamPosters, refreshing, onR
 
 function makeStyles(t: any) {
   return StyleSheet.create({
-    root: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 110 },
+    capNote: { fontFamily: UI, fontSize: 12, color: t.textMuted, textAlign: 'center', marginTop: 18 },
+    root: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 132 },
     title: { fontFamily: TITLE, fontSize: 26, fontWeight: '800', color: t.text, letterSpacing: -0.5, marginBottom: 14 },
     chips: { flexDirection: 'row', gap: 8 },
     chip: { backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, borderRadius: 999, paddingHorizontal: 16, height: 36, alignItems: 'center', justifyContent: 'center' },

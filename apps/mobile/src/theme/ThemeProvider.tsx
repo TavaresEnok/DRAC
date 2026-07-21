@@ -179,14 +179,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const resolvedMode: 'dark' | 'light' = themeMode === 'system' ? (systemScheme === 'light' ? 'light' : 'dark') : themeMode;
+  const resolvedTheme = branding.useDefaultColors
+    ? themeFor(resolvedMode)
+    : withBranding(themeFor(resolvedMode), branding[resolvedMode]);
   const value = useMemo<ThemeContextValue>(
     () => ({
-      // REDESIGN: base = paleta do mockup (o SISTEMA/servidor nunca personaliza). A
-      // personalização é só do APP, local: um accent opcional sobre o mockup (null =
-      // padrão). Fora do redesign, segue o comportamento antigo (branding do servidor).
-      theme: isRedesign
-        ? withAppAccent(themeFor(resolvedMode), appAccent)
-        : withBranding(themeFor(resolvedMode), branding[resolvedMode]),
+      // O toggle da Central decide entre a paleta original do app e a
+      // personalização da instalação. O accent local, quando existir no
+      // redesign, só complementa o modo personalizado.
+      theme: isRedesign && !branding.useDefaultColors
+        ? withAppAccent(resolvedTheme, appAccent)
+        : resolvedTheme,
       themeMode,
       setThemeMode,
       branding,
@@ -194,7 +197,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       appAccent,
       setAppAccent,
     }),
-    [themeMode, resolvedMode, setThemeMode, branding, applyBranding, appAccent, setAppAccent],
+    [themeMode, resolvedTheme, setThemeMode, branding, applyBranding, appAccent, setAppAccent],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

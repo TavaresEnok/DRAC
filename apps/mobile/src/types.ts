@@ -48,6 +48,8 @@ export type Camera = {
   name: string;
   ip: string;
   status: string;
+  /** false = câmera desativada no sistema (não mostrar nem transmitir). */
+  enabled?: boolean;
   group?: { id: string; name: string } | null;
   canView?: boolean;
   canControl?: boolean;

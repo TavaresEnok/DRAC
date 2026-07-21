@@ -4,5 +4,6 @@
   "packageId": "com.ajustconsulting.grupoflash",
   "apiUrl": "https://ajustcam.ajustconsulting.com.br/api",
   "primaryColor": "#0077a8",
-  "splashBackgroundColor": "#ffffff"
+  "redesign": true,
+  "splashBackgroundColor": "#0A0D13"
 }

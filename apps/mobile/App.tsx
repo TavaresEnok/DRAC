@@ -19,6 +19,7 @@ import { EventsRedesign } from './src/screens/redesign/EventsRedesign';
 import { SettingsRedesign } from './src/screens/redesign/SettingsRedesign';
 import { BottomTabsRedesign } from './src/components/BottomTabsRedesign';
 import { LiveScreen } from './src/screens/LiveScreen';
+import { LiveScreenRedesign } from './src/screens/redesign/LiveScreenRedesign';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { MosaicScreen } from './src/screens/MosaicScreen';
 import { PlaybackScreen } from './src/screens/PlaybackScreen';
@@ -82,6 +83,8 @@ function AppInner() {
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
   const [liveCamera, setLiveCamera] = useState<Camera | null>(null);
   const [highlightedAlarmId, setHighlightedAlarmId] = useState<string | null>(null);
+  // Câmera pedida por um push tocado antes da lista de câmeras carregar (cold start).
+  const [pendingPushCameraId, setPendingPushCameraId] = useState<string | null>(null);
   const [notificationsMuted, setNotificationsMuted] = useState(false);
   const [canManageAlarms, setCanManageAlarms] = useState(false);
   const [streamUrls, setStreamUrls] = useState<Record<string, string | null>>({});
@@ -355,6 +358,10 @@ function AppInner() {
       setHighlightedAlarmId(data.alarmId ?? null);
       setTab('alarmes');
       void reloadAlarms();
+      // Deep link: push de uma câmera específica abre a câmera AO VIVO direto
+      // (a lista pode ainda não ter carregado no cold start — fica pendente e
+      // o efeito abaixo dispara quando as câmeras chegarem).
+      if (data.cameraId) setPendingPushCameraId(data.cameraId);
     });
     return () => {
       disposed = true;
@@ -569,8 +576,11 @@ function AppInner() {
     const generation = ++camerasRequestRef.current;
     if (!quiet) setRefreshing(true);
     try {
-      const data = await request<Camera[]>(session.apiUrl, '/cameras', session.token);
+      const raw = await request<Camera[]>(session.apiUrl, '/cameras', session.token);
       if (sessionTokenRef.current !== token || camerasRequestRef.current !== generation) return;
+      // Câmeras DESATIVADAS no sistema não aparecem no app (o servidor também
+      // recusa o stream delas; some da lista para não virar "câmera quebrada").
+      const data = raw.filter((camera) => camera.enabled !== false);
       setCameras(data);
       setLastSyncError(null);
       setSelectedCameraId((current) => (current && data.some((camera) => camera.id === current) ? current : data[0]?.id ?? null));
@@ -1231,6 +1241,23 @@ function AppInner() {
     setLiveCamera(camera);
   };
 
+  // Deep link do push: quando as câmeras estiverem carregadas, abre AO VIVO a
+  // câmera do alarme tocado (funciona também no cold start pelo push).
+  useEffect(() => {
+    if (!pendingPushCameraId || cameras.length === 0) return;
+    const target = cameras.find((camera) => camera.id === pendingPushCameraId);
+    setPendingPushCameraId(null);
+    if (target && target.enabled !== false) openLive(target);
+  }, [pendingPushCameraId, cameras]);
+
+  // Rede de segurança da orientação: fora da câmera aberta o app é SEMPRE
+  // retrato. A tela cheia trava paisagem; se qualquer caminho de saída pular o
+  // destravamento (back físico, crash da tela, troca de aba), aqui conserta.
+  useEffect(() => {
+    if (!isRedesign || liveCamera) return;
+    void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => undefined);
+  }, [liveCamera?.id]);
+
   // Voltar físico respeita a confirmação de gravação em vez de encerrar o app.
   useEffect(() => {
     if (!liveCamera) return;
@@ -1329,6 +1356,53 @@ function AppInner() {
     return (
       <SafeAreaView style={[styles.screen, { backgroundColor: '#070809' }]}>
         <StatusBar style="light" />
+        {isRedesign ? (
+          <LiveScreenRedesign
+            camera={live}
+            topInset={TOP_SAFE}
+            streamUrl={streamUrls[live.id] ?? null}
+            whepUrl={streamWhep[live.id] ?? null}
+            posterUrl={streamPosters[live.id] ?? null}
+            hdUrl={hdUrl}
+            onRequestHd={() => loadHdStream(live.id)}
+            onExitHd={() => setHdUrl(null)}
+            recordings={recordings}
+            recordingsLoading={recordingsLoading}
+            recordingsLoadingMore={recordingsLoadingMore}
+            recordingsError={recordingsError}
+            recordingsTotal={recordingsTotal}
+            recordingDate={recordingDate}
+            activePlayback={activePlayback}
+            recordingActive={recordingActive}
+            recordingBusy={recordingBusy}
+            ptzActive={ptzActive}
+            ptzFeedback={ptzFeedback}
+            detections={liveDetections}
+            canPlayback={capabilities.playback}
+            canDownload={capabilities.exportEvidence}
+            downloadingIds={downloadingIds}
+            myRecordings={savedClips.filter((c) => c.cameraId === live.id)}
+            notificationsMuted={notificationsMuted}
+            onToggleNotifications={toggleNotifications}
+            onBack={() => leaveLive()}
+            onSendPtz={sendPtz}
+            onToggleRecording={toggleRecording}
+            onSnapshot={takeSnapshot}
+            onOpenPlayback={openPlayback}
+            onClosePlayback={closePlayback}
+            onRetryPlayback={retryPlayback}
+            onPreviousDate={() => shiftRecordingDate(-1)}
+            onNextDate={() => shiftRecordingDate(1)}
+            onSelectDate={(key) => setRecordingDate(key)}
+            onDownloadRecording={downloadRecording}
+            onLoadMoreRecordings={loadMoreRecordings}
+            onRetryRecordings={() => { if (selectedCamera) void loadRecordings(selectedCamera.id, recordingDateRef.current); }}
+            onThumbnailError={refreshExpiredThumbnails}
+            onPlayLocal={playLocalClip}
+            onDeleteLocal={deleteLocalClip}
+            onRefreshStream={() => { void loadStream(live.id, 'selected', true); }}
+          />
+        ) : (
         <LiveScreen
           camera={live}
           topInset={TOP_SAFE}
@@ -1373,9 +1447,11 @@ function AppInner() {
           notificationsMuted={notificationsMuted}
           onToggleNotifications={toggleNotifications}
         />
+        )}
         {/* Menu inferior também na câmera aberta — tocar numa aba sai do vídeo e
-            vai pra ela. Escondido em paisagem (vídeo em tela cheia usa a área). */}
-        {winWidth <= winHeight ? (
+            vai pra ela. Escondido em paisagem (vídeo em tela cheia usa a área).
+            No redesign a tela da câmera é cheia (tem o próprio "voltar"). */}
+        {!isRedesign && winWidth <= winHeight ? (
           <BottomTabs
             active={tab}
             alarmCount={openAlarmCount}
@@ -1410,6 +1486,8 @@ function AppInner() {
               onOpenAlarms={() => setTab('alarmes')}
               onOpenMosaic={() => setTab('mosaico')}
               onOpenPlayback={() => setTab('reproducao')}
+              operationalMessages={operationalMessages}
+              onPosterError={(cameraId) => { void refreshPoster(cameraId); }}
             />
           ) : (
           <CentralScreen
@@ -1435,9 +1513,13 @@ function AppInner() {
             <CamerasRedesign
               cameras={cameras}
               streamPosters={streamPosters}
+              streamUrls={streamUrls}
+              streamWhep={streamWhep}
               refreshing={refreshing}
               onRefresh={loadAll}
               onOpenCamera={openLive}
+              onRequestStreams={(cameraIds) => { void Promise.all(cameraIds.map((id) => loadStream(id, 'grid'))); }}
+              onRefreshStream={(cameraId) => { void loadStream(cameraId, 'grid', true); }}
             />
           ) : (
           <MosaicScreen
@@ -1489,6 +1571,7 @@ function AppInner() {
               alarms={alarms}
               cameras={cameras}
               streamPosters={streamPosters}
+              highlightedAlarmId={highlightedAlarmId}
               refreshing={refreshing}
               onRefresh={() => { void reloadAlarms(); }}
               onOpenCamera={(cameraId) => { const c = cameras.find((x) => x.id === cameraId); if (c) openLive(c); }}

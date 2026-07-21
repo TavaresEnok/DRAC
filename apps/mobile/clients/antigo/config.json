@@ -1,0 +1,8 @@
+{
+  "appName": "Grupo Flash Antigo",
+  "packageId": "com.ajustconsulting.dracantigo",
+  "apiUrl": "https://ajustcam.ajustconsulting.com.br/api",
+  "primaryColor": "#0077a8",
+  "splashBackgroundColor": "#ffffff",
+  "skipFirebase": true
+}

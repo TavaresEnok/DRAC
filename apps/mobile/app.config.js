@@ -77,18 +77,34 @@ const plugins = (base.plugins || []).map((plugin) => {
   ];
 });
 
-// A variante do redesign carrega as fontes; o app atual não (não pesa o APK dele).
+// A variante do redesign carrega as fontes; o design antigo não (não pesa o APK dele).
 const isRedesignBuild = c.redesign === true || process.env.REDESIGN === '1';
-// No REDESIGN não entra Firebase: é um build só para avaliar o design com as câmeras
-// reais. Sem expo-notifications não há FirebaseMessaging/FirebaseInitProvider, some a
-// dependência do google-services.json e o app deixa de depender de push para abrir.
+// Firebase é DESACOPLADO do redesign: o app OFICIAL com o design novo mantém push.
+// O Firebase só entra quando o PACOTE do cliente está registrado no google-services
+// (o do cliente, se existir; senão o da raiz). Pacote não registrado quebraria o
+// build no plugin do Google ("No matching client found") — típico de apps gerados
+// pela Central com pacote novo. `skipFirebase: true` força a remoção manualmente.
 // registerForPush() é todo try/catch e devolve null — o app tolera a ausência.
-const pluginsWithFonts = isRedesignBuild
-  ? [
-      ...plugins.filter((p) => (Array.isArray(p) ? p[0] : p) !== 'expo-notifications'),
-      ['expo-font', { android: { fonts: REDESIGN_FONTS } }],
-    ]
+function firebaseRegistered(pkg) {
+  try {
+    const own = path.join(clientDir, 'google-services.json');
+    const file = fs.existsSync(own) ? own : path.join(__dirname, 'google-services.json');
+    const g = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return (g.client || []).some(
+      (cl) => cl && cl.client_info && cl.client_info.android_client_info
+        && cl.client_info.android_client_info.package_name === pkg,
+    );
+  } catch {
+    return false;
+  }
+}
+const skipFirebase = c.skipFirebase === true || !firebaseRegistered(c.packageId || base.android.package);
+let effectivePlugins = skipFirebase
+  ? plugins.filter((p) => (Array.isArray(p) ? p[0] : p) !== 'expo-notifications')
   : plugins;
+if (isRedesignBuild) {
+  effectivePlugins = [...effectivePlugins, ['expo-font', { android: { fonts: REDESIGN_FONTS } }]];
+}
 
 module.exports = () => ({
   expo: {
@@ -99,7 +115,7 @@ module.exports = () => ({
     // (Antes trocava o slug por cliente, o que conflita com o projectId do EAS.)
     slug: base.slug,
     icon: asset('icon.png', base.icon),
-    plugins: pluginsWithFonts,
+    plugins: effectivePlugins,
     splash: {
       ...base.splash,
       image: asset('splash.png', base.splash && base.splash.image),
@@ -111,7 +127,7 @@ module.exports = () => ({
       // FCM/push por cliente: cada cliente tem seu próprio pacote → seu próprio
       // google-services.json (registrado no MESMO projeto Firebase). Se o cliente
       // tiver o arquivo, usa o dele; senão cai no padrão (app principal).
-      googleServicesFile: isRedesignBuild ? undefined : asset('google-services.json', base.android.googleServicesFile),
+      googleServicesFile: skipFirebase ? undefined : asset('google-services.json', base.android.googleServicesFile),
       adaptiveIcon: {
         ...(base.android && base.android.adaptiveIcon),
         foregroundImage: asset('adaptive-icon.png', base.android && base.android.adaptiveIcon && base.android.adaptiveIcon.foregroundImage),

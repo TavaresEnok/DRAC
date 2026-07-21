@@ -38,6 +38,8 @@ export interface BrandingPalette {
 export interface RuntimeBranding {
   facilityName: string;
   logoDataUrl: string;
+  /** true = usa a paleta original do app e preserva as cores personalizadas. */
+  useDefaultColors: boolean;
   /** Chaves históricas sem prefixo: tema escuro. */
   dark: BrandingPalette;
   /** Chaves brandLight*: tema claro. */
@@ -47,6 +49,7 @@ export interface RuntimeBranding {
 type BrandingResponse = {
   facilityName?: string;
   brandLogoDataUrl?: string;
+  brandUseDefaultColors?: boolean;
   brandPrimaryColor?: string;
   brandBackgroundColor?: string;
   brandBackgroundColor2?: string;
@@ -97,6 +100,7 @@ export const EMPTY_PALETTE: BrandingPalette = {
 export const EMPTY_BRANDING: RuntimeBranding = {
   facilityName: '',
   logoDataUrl: '',
+  useDefaultColors: true,
   dark: EMPTY_PALETTE,
   light: EMPTY_PALETTE,
 };
@@ -124,6 +128,9 @@ export async function fetchBranding(apiUrl: string): Promise<RuntimeBranding> {
   return {
     facilityName: t(data.facilityName),
     logoDataUrl: t(data.brandLogoDataUrl),
+    // Ausente mantém compatibilidade com servidores antigos, que sempre
+    // aplicavam as cores personalizadas retornadas pelo endpoint.
+    useDefaultColors: data.brandUseDefaultColors === true,
     dark: palette(''),
     light: palette('Light'),
   };

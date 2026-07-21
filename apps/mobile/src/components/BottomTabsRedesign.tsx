@@ -4,6 +4,7 @@
  * a lógica de navegação. Reprodução continua acessível de dentro das telas.
  */
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../theme/ThemeProvider';
 import { Icon, type IconName } from './Icon';
 import type { Tab } from '../types';
@@ -23,8 +24,11 @@ const TABS: Array<{ id: Tab; label: string; icon: IconName }> = [
 
 export function BottomTabsRedesign({ active, onChange, alarmCount = 0 }: Props) {
   const { theme } = useTheme();
+  // edge-to-edge: o app desenha atrás da barra de navegação do Android; o inset
+  // empurra a barra flutuante para cima dos botões do sistema (gesto ou 3 botões).
+  const insets = useSafeAreaInsets();
   return (
-    <View style={styles.wrap} pointerEvents="box-none">
+    <View style={[styles.wrap, { paddingBottom: 10 + insets.bottom }]} pointerEvents="box-none">
       <View style={[styles.bar, { backgroundColor: theme.surface, borderColor: theme.border }]}>
         {TABS.map((tab) => {
           const on = active === tab.id;
@@ -45,7 +49,7 @@ export function BottomTabsRedesign({ active, onChange, alarmCount = 0 }: Props) 
 }
 
 const styles = StyleSheet.create({
-  wrap: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 14, paddingBottom: 14 },
+  wrap: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 14 },
   bar: { height: 62, borderRadius: 23, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingHorizontal: 6,
     shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 24, shadowOffset: { width: 0, height: 12 }, elevation: 16 },
   item: { alignItems: 'center', justifyContent: 'center', gap: 4, flex: 1, paddingVertical: 6 },

@@ -4,11 +4,9 @@
  * armazenamento, lista de ações, sair. Ligado ao usuário/tema reais.
  */
 import Constants from 'expo-constants';
-import { useState } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useTheme } from '../../theme/ThemeProvider';
 import { Icon, type IconName } from '../../components/Icon';
-import { PersonalizationRedesign } from './PersonalizationRedesign';
 
 const TITLE = 'Sora';
 const UI = 'InstrumentSans';
@@ -37,11 +35,6 @@ export function SettingsRedesign(props: Props) {
   const s = makeStyles(theme);
   const isDark = themeMode === 'dark' || (themeMode === 'system' && theme.mode === 'dark');
   const version = Constants.expoConfig?.version ?? '1.0';
-  const [showPersonalization, setShowPersonalization] = useState(false);
-
-  if (showPersonalization) {
-    return <PersonalizationRedesign onBack={() => setShowPersonalization(false)} />;
-  }
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
@@ -55,7 +48,6 @@ export function SettingsRedesign(props: Props) {
             <Text style={s.profileName} numberOfLines={1}>{user?.name || 'Usuário'}</Text>
             <Text style={s.profileEmail} numberOfLines={1}>{user?.email || '—'}</Text>
           </View>
-          <Icon name="forward" size={18} color={theme.textMuted} />
         </View>
 
         {/* Provedor / plano */}
@@ -71,8 +63,6 @@ export function SettingsRedesign(props: Props) {
         {/* Configuração */}
         <Text style={s.section}>Configuração</Text>
         <View style={s.group}>
-          <Item theme={theme} s={s} icon="aperture" label="Personalização do app" onPress={() => setShowPersonalization(true)} />
-          <View style={s.divider} />
           <Prefs theme={theme} s={s} icon="moon" label="Tema escuro" value={isDark} onChange={(v) => setThemeMode(v ? 'dark' : 'light')} />
           {biometricAvailable ? (
             <>
@@ -80,16 +70,6 @@ export function SettingsRedesign(props: Props) {
               <Prefs theme={theme} s={s} icon="lock" label={`Entrar com ${biometricLabel}`} value={biometricEnabled} onChange={onBiometricChange} />
             </>
           ) : null}
-        </View>
-
-        {/* Lista */}
-        <Text style={s.section}>Conta</Text>
-        <View style={s.group}>
-          <Item theme={theme} s={s} icon="camera" label="Câmeras e grupos" />
-          <View style={s.divider} />
-          <Item theme={theme} s={s} icon="eye" label="Compartilhar acesso" />
-          <View style={s.divider} />
-          <Item theme={theme} s={s} icon="alert" label="Ajuda e suporte" />
         </View>
 
         <TouchableOpacity style={s.logout} activeOpacity={0.85} onPress={onLogout}>
@@ -133,7 +113,7 @@ function Item({ theme, s, icon, label, onPress }: { theme: any; s: any; icon: Ic
 
 function makeStyles(t: any) {
   return StyleSheet.create({
-    root: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 110 },
+    root: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 132 },
     title: { fontFamily: TITLE, fontSize: 26, fontWeight: '800', color: t.text, letterSpacing: -0.5, marginBottom: 16 },
     card: { flexDirection: 'row', alignItems: 'center', gap: 13, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, borderRadius: 18, padding: 15 },
     avatar: { width: 50, height: 50, borderRadius: 16, backgroundColor: t.accent, alignItems: 'center', justifyContent: 'center' },

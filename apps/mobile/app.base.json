@@ -2,7 +2,7 @@
   "expo": {
     "name": "DRAC Mobile",
     "slug": "drac-mobile",
-    "version": "1.0.5",
+    "version": "2.0.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
