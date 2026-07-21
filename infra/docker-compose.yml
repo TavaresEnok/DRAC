@@ -425,7 +425,13 @@ services:
       - vms-net
 
   mediamtx:
-    image: bluenviron/mediamtx:1-ffmpeg
+    # Imagem FIXADA POR DIGEST (2026-07-21). A tag `1-ffmpeg` é móvel: qualquer
+    # recriação futura poderia puxar outra minor do 1.x sem aviso, trocando o
+    # servidor de mídia de produção por baixo (já tivemos incidentes de /live com
+    # mudanças de configuração do MediaMTX). O digest abaixo é exatamente a
+    # v1.18.2 validada em produção. Para atualizar: testar a nova versão e
+    # trocar o digest conscientemente.
+    image: bluenviron/mediamtx:1-ffmpeg@sha256:65a3d7fff1debd4a33846eb0f3c28326ecb871d1359b6ad951848ace91ea1b20
     container_name: vms-mediamtx
     restart: unless-stopped
     # PORTAS (não deixar só no docker-compose.dev.yml — recriar o container sem o override
@@ -460,6 +466,33 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    networks:
+      - vms-net
+
+  # ── AVALIAÇÃO go2rtc (Fase 0 do plano híbrido, 2026-07-21) ──────────────────
+  # Sidecar ISOLADO para comparação A/B com o MediaMTX. NÃO serve produção:
+  # nenhuma câmera, o nginx e a API não apontam para cá. Portas em loopback e
+  # fora das faixas do MediaMTX (8888/8889/8189) para não haver conflito.
+  # Sob o profile 'eval': só sobe com `--profile eval`, nunca num `up` normal.
+  go2rtc-eval:
+    image: alexxit/go2rtc:latest
+    container_name: vms-go2rtc-eval
+    restart: unless-stopped
+    profiles: ["eval"]
+    init: true
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:1984:1984"     # API/UI de teste
+      - "127.0.0.1:8555:8555/tcp" # WebRTC (mídia) — avaliação local
+      - "8555:8555/udp"           # ICE/UDP p/ teste de latência real no browser
+    volumes:
+      - ./go2rtc.yml:/config/go2rtc.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:1984/api || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - vms-net
 

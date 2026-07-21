@@ -1,0 +1,29 @@
+# go2rtc — AVALIAÇÃO (Fase 0/1 do plano híbrido, 2026-07-21).
+# Sidecar ISOLADO: não substitui nada. Roda ao lado do MediaMTX para permitir
+# comparação A/B honesta (latência, 1º frame, CPU, e principalmente se o HLS dele
+# atende o app mobile, que é HLS-only). Nenhuma câmera de produção depende dele.
+#
+# As portas ficam em loopback e FORA das faixas do MediaMTX (8888/8889/8189).
+
+api:
+  listen: ":1984"          # API + página de teste (via loopback do host)
+  origin: "*"              # avaliação apenas; produção exigiria auth_request no nginx
+
+rtsp:
+  listen: ":8554"          # interno ao container (não publicado no host)
+
+webrtc:
+  listen: ":8555"          # TCP/UDP para mídia WebRTC
+  candidates:
+    - stun:8555            # descobre o IP público automaticamente
+
+# O go2rtc chama o FFmpeg para transcodificar (mesma dependência do MediaMTX).
+ffmpeg:
+  bin: ffmpeg
+
+log:
+  level: info
+
+# Streams são injetados dinamicamente pela API (PUT /api/streams) durante o teste,
+# para não deixar credenciais de câmera neste arquivo versionado.
+streams: {}

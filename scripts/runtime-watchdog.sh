@@ -107,6 +107,29 @@ if [ -z "$latest_backup" ] || [ $((now_epoch - latest_backup)) -gt 129600 ]; the
 credential_lines="$(for name in vms-api vms-ai-service; do docker logs --since 10m "$name" 2>&1 || true; done | grep -Eic 'rtsp(s)?://[^/@[:space:]:]+:[^/@[:space:]]+@' || true)"
 if [ "${credential_lines:-0}" -gt 0 ]; then issues+=("security:credencial-em-log:$credential_lines"); fi
 
+# ── 7) SITES DE CÂMERAS remotos (link do cliente caiu?) ──────────────────────
+# Agrupa câmeras HABILITADAS por IP e testa TCP em até 3 portas RTSP do site.
+# Só acusa quando NENHUMA porta responde (site inteiro fora), com reconfirmação
+# após 3s para não alertar num soluço de rede. Uma câmera isolada fora não dispara.
+site_rows="$(docker exec vms-postgres psql -U vms -d vms_db -tAc \
+  "SELECT ip || '|' || string_agg(DISTINCT \"rtspPort\"::text, ',') FROM \"Camera\" WHERE enabled IS DISTINCT FROM false GROUP BY ip;" 2>/dev/null || true)"
+if [ -n "$site_rows" ]; then
+  while IFS='|' read -r site_ip site_ports; do
+    [ -n "$site_ip" ] || continue
+    site_reachable=0
+    for attempt in 1 2; do
+      port_idx=0
+      for port in $(echo "$site_ports" | tr ',' ' '); do
+        port_idx=$((port_idx + 1)); [ "$port_idx" -gt 3 ] && break
+        if timeout 4 bash -c "echo > /dev/tcp/$site_ip/$port" 2>/dev/null; then site_reachable=1; break; fi
+      done
+      [ "$site_reachable" = "1" ] && break
+      [ "$attempt" = "1" ] && sleep 3
+    done
+    [ "$site_reachable" = "1" ] || issues+=("site-cameras:${site_ip}:inacessivel")
+  done <<< "$site_rows"
+fi
+
 # ── STATUS JSON (consumível pela Central / painel) ───────────────────────────
 ISSUES="$(printf '%s\n' "${issues[@]:-}" | sed '/^$/d')" \
 ACTIONS="$(printf '%s\n' "${actions[@]:-}" | sed '/^$/d')" \
