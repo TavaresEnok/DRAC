@@ -72,6 +72,14 @@ func requireStrongEnv(name string, minLen int, blocked map[string]bool) string {
 
 func main() {
 	fmt.Println("Camera Worker Go - Iniciando...")
+	// Aviso alto e claro: quem sobe este worker precisa saber que a gravação dele
+	// NÃO é a oficial. Ver o bloco de comentário em recorder.go (videoArgs).
+	log.Println("=====================================================================")
+	log.Println("ATENCAO: worker LEGADO. A gravacao aqui transcodifica para H.264")
+	log.Println("baseline/ultrafast (com PERDA de qualidade e uso continuo de CPU).")
+	log.Println("O pipeline oficial e o da API, que grava em COPIA sem reencode.")
+	log.Println("Use apenas com RECORDING_CONTROL_MODE=worker e ciente da diferenca.")
+	log.Println("=====================================================================")
 
 	apiURL := os.Getenv("API_URL")
 	if apiURL == "" {

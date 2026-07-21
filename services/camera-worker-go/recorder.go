@@ -79,8 +79,25 @@ func startRecording(cam Camera, apiURL, secretToken string) {
 			rtspTransport = "tcp"
 		}
 
-		// Sempre usar H.264 (libx264) para garantir compatibilidade universal com browsers
-		// Isso evita HEVC/H.265 que não é suportado nativamente pela maioria dos browsers
+		// ⚠️ POLÍTICA DE GRAVAÇÃO LEGADA — DIVERGE DO PIPELINE OFICIAL.
+		//
+		// O caminho CANÔNICO de gravação é a API
+		// (apps/api/src/recordings/recording-process-manager.service.ts), que desde
+		// 2026-07-21 arquiva em CÓPIA (`-c copy`), sem reencode e sem perda:
+		// captura em MPEG-TS segmentado e remuxa cada segmento fechado para MP4
+		// (tag hvc1 quando HEVC, +faststart), preservando resolução, fps e bitrate
+		// originais da câmera — e com CPU praticamente zero.
+		//
+		// Este worker Go continua transcodificando para H.264 **baseline
+		// ultrafast**, o que significa: perda de qualidade a cada gravação, CPU
+		// gasta 24/7 e perfil baseline (sem B-frames/CABAC, o pior custo-benefício).
+		// Mantido apenas para compatibilidade histórica; roda só sob o profile
+		// `legacy-worker` do compose E com RECORDING_CONTROL_MODE=worker na API.
+		//
+		// NÃO basta trocar para `-c copy` aqui: fonte HEVC em MP4 segmentado
+		// corrompe os arquivos ("VPS 0 does not exist") — foi exatamente por isso
+		// que o pipeline oficial passou a gravar em TS e remuxar. Portar aquela
+		// lógica para cá só se este worker voltar a ser suportado.
 		videoArgs := []string{
 			"-c:v", "libx264",
 			"-preset", "ultrafast",
