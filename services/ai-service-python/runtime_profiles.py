@@ -61,15 +61,38 @@ def _env_csv_int(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
             continue
     return tuple(values) or default
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return float(str(raw).strip())
+    except Exception:
+        return default
+
 MOTION_PROFILE = {
     "mode": "motion",
     "detection_fps": 2.0,
     "analysis_width": 320,
     "analysis_height": 180,
     "motion_trigger": "SYSTEM",
-    "motion_pixels_threshold": 1800,
+    # Limiar por OBJETO (componente conectado), como FRAÇÃO da área analisada.
+    # 0,0012 = 0,12% da tela (~69 px em 320×180) ≈ pessoa/moto distante — calibrado
+    # pelo comparativo de campo com a detecção nativa ONVIF (2026-07-21). O limiar
+    # antigo de 1800 px (3,1% da tela) ignorava tudo que não estivesse perto.
+    "motion_min_component_ratio": _env_float("MOTION_MIN_COMPONENT_RATIO", 0.0012),
+    # Fração da tela mudando de uma vez que caracteriza ALTERAÇÃO GLOBAL
+    # (IR dia/noite, exposição, relâmpago, câmera mexida) — reaprende, não dispara.
+    "motion_global_change_ratio": _env_float("MOTION_GLOBAL_CHANGE_RATIO", 0.55),
     "motion_min_consecutive_hits": 3,
-    "motion_warmup_frames": 60,
+    # 30 frames a 2 fps = 15s de aprendizado no boot (antes 60 = 30s cego).
+    "motion_warmup_frames": _env_int("MOTION_WARMUP_FRAMES", 30),
+    # Normalização de contraste pré-diff (padrão Frigate) — essencial à noite.
+    "motion_improve_contrast": str(os.getenv("MOTION_IMPROVE_CONTRAST", "true")).strip().lower() != "false",
+    # Congela o aprendizado do fundo nos primeiros N frames de movimento (padrão
+    # Frigate): quem entra e FICA continua sendo detectado; mudança persistente
+    # (carro estacionado) é absorvida gradualmente depois.
+    "motion_freeze_learning_frames": _env_int("MOTION_FREEZE_LEARNING_FRAMES", 6),
     # O primeiro movimento continua imediato; apenas eventos repetidos da mesma
     # cena são consolidados. Mantém o post-roll da gravação acima deste valor.
     "event_debounce_seconds": _env_int("MOTION_EVENT_DEBOUNCE_SECONDS", 45),
