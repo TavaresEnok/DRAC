@@ -76,6 +76,9 @@ model Camera {
   analyticsChannel       Int?
   analyticsSubtype       Int?
   status                 CameraStatus @default(UNKNOWN)
+  /// Câmera ativa no sistema. false = desativada: não aparece nas telas ao vivo,
+  /// não abre stream (MediaMTX) e não grava — sem apagar o cadastro/histórico.
+  enabled                Boolean      @default(true)
   lastSeenAt             DateTime?
   siteId                 String?
   areaId                 String?
