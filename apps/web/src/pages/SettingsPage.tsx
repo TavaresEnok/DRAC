@@ -2,21 +2,28 @@ import type { InputHTMLAttributes, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import {
+  Bell,
+  Camera as CameraIcon,
   Check,
   Cpu,
   Database,
   HardDrive,
+  Home,
+  LayoutGrid,
   LoaderCircle,
   Lock,
   Moon,
   Palette,
+  Play,
   Save,
   Server,
+  Settings as SettingsIcon,
   Shield,
   Sun,
   Trash2,
   Upload,
   Users,
+  VideoOff,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
@@ -51,6 +58,7 @@ type SystemSettings = {
   requireStrongPassword: boolean;
   alarmAudioEnabled: boolean;
   brandLogoDataUrl: string;
+  brandUseDefaultColors: boolean;
   brandPrimaryColor: string;
   brandBackgroundColor: string;
   brandBackgroundColor2: string;
@@ -91,6 +99,7 @@ type BrandingColorKey = Exclude<keyof SystemSettings,
   | 'requireStrongPassword'
   | 'alarmAudioEnabled'
   | 'brandLogoDataUrl'
+  | 'brandUseDefaultColors'
 >;
 
 const BRANDING_KEYS = {
@@ -181,15 +190,26 @@ function SettingRow({ label, description, children }: { label: string; descripti
   );
 }
 
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
+function Toggle({ checked, onChange, label = 'Alternar opção' }: { checked: boolean; onChange: (value: boolean) => void; label?: string }) {
   return (
     <button
       type="button"
       onClick={() => onChange(!checked)}
-      className={`relative h-7 w-12 rounded-full border transition-colors ${checked ? 'border-[hsl(var(--status-online)_/_0.4)] bg-[hsl(var(--status-online)_/_0.2)]' : 'border-border bg-muted'}`}
-      aria-pressed={checked}
+      className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary)_/_0.45)] focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
+        checked
+          ? 'border-[hsl(var(--status-online)_/_0.55)] bg-[hsl(var(--status-online))]'
+          : 'border-border bg-muted'
+      }`}
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
     >
-      <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${checked ? 'translate-x-5' : 'translate-x-1'}`} />
+      <span
+        aria-hidden="true"
+        className={`block h-5 w-5 rounded-full bg-white shadow-md transition-transform duration-200 ease-out ${
+          checked ? 'translate-x-5' : 'translate-x-0'
+        }`}
+      />
     </button>
   );
 }
@@ -243,16 +263,158 @@ function ColorGroup({ title, hint, children }: { title: string; hint?: string; c
   );
 }
 
+/**
+ * Prévia FIEL da tela Início do app móvel (CentralScreen). Renderizada em tamanho
+ * REAL de celular (375px) usando os MESMOS valores do StyleSheet do app — fontes,
+ * paddings, radius e cores — e depois apenas reduzida com transform:scale().
+ * Assim a prévia é o layout do app de verdade, não uma imitação apertada.
+ */
+type PreviewColorKey = keyof (typeof BRANDING_KEYS)['dark'];
+function AppHomePreview({ color }: { color: (key: PreviewColorKey) => string }) {
+  const S = 0.75;               // escala de exibição
+  const W = 375;                // largura real do "celular"
+  const H = 700;                // altura do frame (conteúdo + bezel)
+  const accent = color('primary');
+  const onAccent = color('buttonText');
+  const heroGrad = `linear-gradient(135deg, ${accent}, color-mix(in srgb, ${accent} 70%, #000))`;
+  const tabs = [
+    { Icon: Home, label: 'Central', active: true },
+    { Icon: LayoutGrid, label: 'Mosaico' },
+    { Icon: Play, label: 'Reprodução' },
+    { Icon: Bell, label: 'Alarmes', badge: true },
+    { Icon: SettingsIcon, label: 'Ajustes' },
+  ];
+  return (
+    <div style={{ width: W * S, height: H * S }}>
+      <div style={{ width: W, transformOrigin: 'top left', transform: `scale(${S})` }}>
+        {/* Moldura do aparelho */}
+        <div className="rounded-[38px] p-[9px] shadow-2xl" style={{ backgroundColor: '#0a0c11', boxShadow: '0 18px 44px -18px rgba(0,0,0,0.6)' }}>
+          <div
+            className="relative flex flex-col overflow-hidden rounded-[30px]"
+            style={{ height: H - 18, background: `linear-gradient(165deg, ${color('background')}, ${color('background2')})` }}
+          >
+            {/* Conteúdo (paddingHorizontal: 20 como no app) */}
+            <div className="flex-1 overflow-hidden" style={{ padding: '14px 20px 0' }}>
+              {/* Cabeçalho: data + nome | sino + avatar (42x42, r14) */}
+              <div className="flex items-center justify-between gap-3" style={{ marginTop: 10 }}>
+                <div className="min-w-0">
+                  <p style={{ color: color('textSub'), fontSize: 12, fontWeight: 600, textTransform: 'capitalize' }}>sexta, 18 de julho</p>
+                  <p className="truncate" style={{ color: color('backgroundText'), fontSize: 25, fontWeight: 800, letterSpacing: -0.5, marginTop: 1 }}>Grupo Flash</p>
+                </div>
+                <div className="flex shrink-0 items-center" style={{ gap: 10 }}>
+                  <span className="relative flex items-center justify-center border" style={{ width: 42, height: 42, borderRadius: 14, backgroundColor: color('surface'), borderColor: color('border') }}>
+                    <Bell style={{ width: 19, height: 19, color: color('text') }} />
+                    <span className="absolute flex items-center justify-center" style={{ top: -6, right: -6, minWidth: 19, height: 19, borderRadius: 10, backgroundColor: color('danger'), border: `1.5px solid ${color('surface')}` }}>
+                      <span style={{ color: '#fff', fontSize: 10, fontWeight: 800 }}>2</span>
+                    </span>
+                  </span>
+                  <span className="flex items-center justify-center" style={{ width: 42, height: 42, borderRadius: 14, backgroundColor: accent }}>
+                    <span style={{ color: onAccent, fontSize: 15, fontWeight: 800 }}>GF</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Hero (r22, p18, gradiente do accent) */}
+              <div style={{ marginTop: 15, borderRadius: 22, padding: 18, paddingBottom: 16, background: heroGrad }}>
+                <div className="flex items-center justify-between" style={{ gap: 12 }}>
+                  <div className="min-w-0">
+                    <p style={{ color: 'rgba(255,255,255,0.72)', fontSize: 9.5, fontWeight: 800, letterSpacing: 1.2, whiteSpace: 'nowrap' }}>SISTEMA DE MONITORAMENTO</p>
+                    <p className="truncate" style={{ color: '#fff', fontSize: 18.5, fontWeight: 800, letterSpacing: -0.3, marginTop: 2 }}>Grupo Flash</p>
+                  </div>
+                  <span className="flex shrink-0 items-center" style={{ gap: 6, backgroundColor: 'rgba(255,255,255,0.16)', borderRadius: 999, padding: '6px 11px' }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: '#4ade80' }} />
+                    <span style={{ color: '#fff', fontSize: 11, fontWeight: 800 }}>Operacional</span>
+                  </span>
+                </div>
+                <div style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.25)', margin: '14px 0' }} />
+                <div className="flex items-stretch">
+                  {[{ Icon: CameraIcon, v: 2, l: 'Online' }, { Icon: VideoOff, v: 1, l: 'Offline' }, { Icon: LayoutGrid, v: 3, l: 'Total' }].map(({ Icon, v, l }) => (
+                    <div key={l} className="flex flex-1 flex-col items-center" style={{ gap: 3 }}>
+                      <span className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: 10, backgroundColor: 'rgba(255,255,255,0.18)', marginBottom: 3 }}>
+                        <Icon style={{ width: 15, height: 15, color: '#fff' }} />
+                      </span>
+                      <span style={{ color: '#fff', fontSize: 21, fontWeight: 800, letterSpacing: -0.5, lineHeight: 1 }}>{v}</span>
+                      <span style={{ color: 'rgba(255,255,255,0.75)', fontSize: 10.5, fontWeight: 700 }}>{l}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Ações rápidas (minHeight 75, r17) */}
+              <div className="flex" style={{ gap: 9, marginTop: 15 }}>
+                {[{ Icon: LayoutGrid, l: 'Mosaico' }, { Icon: Play, l: 'Gravações' }, { Icon: Bell, l: 'Alarmes' }].map(({ Icon, l }) => (
+                  <div key={l} className="flex flex-1 flex-col items-center justify-center border" style={{ minHeight: 75, borderRadius: 17, gap: 6, backgroundColor: color('surface'), borderColor: color('border') }}>
+                    <span className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: 11, backgroundColor: `color-mix(in srgb, ${accent} 15%, transparent)` }}>
+                      <Icon style={{ width: 17, height: 17, color: accent }} />
+                    </span>
+                    <span style={{ color: color('text'), fontSize: 10.5, fontWeight: 800 }}>{l}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Favoritas: título + chip de contagem */}
+              <div className="flex items-center justify-between" style={{ marginTop: 19 }}>
+                <span style={{ color: color('backgroundText'), fontSize: 16, fontWeight: 800, letterSpacing: -0.2 }}>Favoritas</span>
+                <span className="border" style={{ borderRadius: 999, padding: '3px 10px', borderColor: color('border'), backgroundColor: color('surface') }}>
+                  <span style={{ color: color('textSub'), fontSize: 11.5, fontWeight: 800 }}>3</span>
+                </span>
+              </div>
+
+              {/* CameraTile destaque (height 198, r18) */}
+              <div className="relative overflow-hidden border" style={{ marginTop: 12, height: 198, borderRadius: 18, borderColor: color('border'), background: 'linear-gradient(180deg, #1a2230 0%, #0c111a 60%, #05080e 100%)' }}>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="flex items-center justify-center" style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.18)', border: '1px solid rgba(255,255,255,0.25)' }}>
+                    <Play style={{ width: 16, height: 16, color: '#fff', marginLeft: 2 }} />
+                  </span>
+                </div>
+                <span className="absolute flex items-center" style={{ top: 10, left: 10, gap: 5, backgroundColor: 'rgba(239,68,68,0.92)', padding: '3px 7px', borderRadius: 7 }}>
+                  <span style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: '#fff' }} />
+                  <span style={{ color: '#fff', fontSize: 8.5, fontWeight: 800, letterSpacing: 0.5 }}>AO VIVO</span>
+                </span>
+                <span className="absolute flex items-center justify-center" style={{ top: 6, right: 6, width: 27, height: 27, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.4)' }}>
+                  <span style={{ color: '#facc15', fontSize: 13, lineHeight: 1 }}>★</span>
+                </span>
+                <div className="absolute" style={{ left: 13, right: 13, bottom: 13 }}>
+                  <p style={{ color: '#fff', fontSize: 16, fontWeight: 800, textShadow: '0 1px 4px rgba(0,0,0,0.6)' }}>Entrada principal</p>
+                  <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11.5, fontWeight: 600, marginTop: 1, textShadow: '0 1px 4px rgba(0,0,0,0.6)' }}>Grupo Flash · 1080p · AO VIVO</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Menu inferior (5 abas reais, labels 9.5/800) */}
+            <div className="flex items-start justify-around" style={{ padding: '11px 12px 16px', borderTop: `1px solid ${color('border')}`, backgroundColor: color('menu') }}>
+              {tabs.map(({ Icon, label, active, badge }) => (
+                <div key={label} className="relative flex flex-1 flex-col items-center" style={{ gap: 5 }}>
+                  <span className="relative flex items-center justify-center" style={{ height: 24 }}>
+                    <Icon style={{ width: 21, height: 21, color: active ? accent : color('menuText') }} />
+                    {badge ? (
+                      <span className="absolute flex items-center justify-center" style={{ top: -5, right: -9, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: color('danger'), border: `1.5px solid ${color('menu')}` }}>
+                        <span style={{ color: '#fff', fontSize: 9, fontWeight: 800 }}>2</span>
+                      </span>
+                    ) : null}
+                  </span>
+                  <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: 0.2, color: active ? accent : color('menuText') }}>{label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BrandingPaletteEditor({
-  mode, settings, onChange,
+  mode, settings, useDefaultColors, onChange,
 }: {
   mode: BrandingEditorTheme;
   settings: SystemSettings;
+  useDefaultColors: boolean;
   onChange: (key: BrandingColorKey, value: string) => void;
 }) {
   const keys = BRANDING_KEYS[mode];
   const fallback = BRANDING_FALLBACKS[mode];
-  const color = (key: keyof typeof keys) => settings[keys[key]] || fallback[key];
+  const color = (key: keyof typeof keys) => useDefaultColors ? fallback[key] : settings[keys[key]] || fallback[key];
   const contrastChecks = [
     { label: 'Botão', ratio: contrastRatio(color('buttonText'), color('primary')) },
     { label: 'Fundo', ratio: contrastRatio(color('backgroundText'), color('background')) },
@@ -263,7 +425,7 @@ function BrandingPaletteEditor({
   const hasContrastWarning = contrastChecks.some((check) => check.ratio < 4.5);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+    <fieldset disabled={useDefaultColors} className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
       <div className="space-y-3">
         <ColorGroup title="Destaque" hint="Botões, links e ícones ativos.">
           <CompactColor label="Cor principal" value={settings[keys.primary]} onChange={(v) => onChange(keys.primary, v)} fallback={fallback.primary} />
@@ -293,35 +455,7 @@ function BrandingPaletteEditor({
 
       <div>
         <p className="mb-2 text-[11px] font-semibold text-muted-foreground">PRÉVIA DO APP</p>
-        <div
-          className="overflow-hidden rounded-[26px] border p-3 shadow-lg"
-          style={{
-            borderColor: color('border'),
-            background: `linear-gradient(145deg, ${color('background')}, ${color('background2')})`,
-          }}
-        >
-          <p className="text-base font-extrabold" style={{ color: color('backgroundText') }}>Minhas câmeras</p>
-          <p className="mb-3 text-[10px]" style={{ color: color('backgroundText'), opacity: 0.72 }}>2 câmeras online</p>
-          <div className="rounded-2xl border p-3" style={{ backgroundColor: color('surface'), borderColor: color('border') }}>
-            <div className="mb-8 flex items-center justify-between gap-2">
-              <span className="text-xs font-bold" style={{ color: color('text') }}>Entrada principal</span>
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color('success') }} />
-            </div>
-            <p className="text-[10px]" style={{ color: color('textSub') }}>Ao vivo · 1080p</p>
-          </div>
-          <button
-            type="button"
-            className="mt-3 h-9 w-full rounded-xl text-xs font-bold"
-            style={{ backgroundColor: color('primary'), color: color('buttonText') }}
-          >
-            Abrir câmera
-          </button>
-          <div className="mt-3 flex items-center justify-around rounded-2xl border px-2 py-3" style={{ backgroundColor: color('menu'), borderColor: color('border') }}>
-            {['Central', 'Mosaico', 'Ajustes'].map((label, index) => (
-              <span key={label} className="text-[8px] font-bold" style={{ color: index === 0 ? color('primary') : color('menuText') }}>{label}</span>
-            ))}
-          </div>
-        </div>
+        <AppHomePreview color={color} />
         <div className={`mt-3 rounded-lg border p-2.5 ${hasContrastWarning ? 'border-[hsl(var(--status-warning)_/_0.4)] bg-[hsl(var(--status-warning)_/_0.08)]' : 'border-[hsl(var(--status-online)_/_0.35)] bg-[hsl(var(--status-online)_/_0.08)]'}`}>
           <div className="mb-1.5 text-[10px] font-semibold text-foreground">
             {hasContrastWarning ? 'Contraste a revisar' : 'Contraste aprovado'}
@@ -339,7 +473,7 @@ function BrandingPaletteEditor({
           <p className="mt-1.5 text-[9px] leading-snug text-muted-foreground">Meta mínima: 4,5:1 para textos pequenos.</p>
         </div>
       </div>
-    </div>
+    </fieldset>
   );
 }
 
@@ -444,16 +578,15 @@ export default function ConfiguracoesPage() {
     };
   }, [cameras, system, users]);
 
-  const handleSave = async () => {
-    if (!settings) return;
+  const saveSettings = async (payload: SystemSettings, successDescription: string) => {
     setSaving(true);
     try {
-      const { data } = await axios.patch<SystemSettings>(`${API_URL}/settings`, settings, { headers: authHeaders });
+      const { data } = await axios.patch<SystemSettings>(`${API_URL}/settings`, payload, { headers: authHeaders });
       setSettings(data);
       await reloadBranding();
       setSaved(true);
       setTimeout(() => setSaved(false), 1800);
-      toast({ title: 'Configurações salvas', description: 'As alterações foram aplicadas no servidor.' });
+      toast({ title: 'Configurações salvas', description: successDescription });
     } catch (error) {
       toast({
         title: 'Falha ao salvar',
@@ -463,6 +596,11 @@ export default function ConfiguracoesPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSave = async () => {
+    if (!settings) return;
+    await saveSettings(settings, 'As alterações foram aplicadas no servidor.');
   };
 
   return (
@@ -591,6 +729,29 @@ export default function ConfiguracoesPage() {
                       </SettingRow>
                     </Card>
                     <Card className="space-y-4 p-3">
+                      <div className="flex flex-col gap-3 rounded-xl border border-border bg-background/50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold text-foreground">Cores padrão do app</p>
+                            <Pill tone={settings.brandUseDefaultColors ? 'success' : 'neutral'}>
+                              {settings.brandUseDefaultColors ? 'Padrão ativo' : 'Personalização ativa'}
+                            </Pill>
+                          </div>
+                          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                            Ative para usar a paleta original do aplicativo. Desative para aplicar as cores personalizadas abaixo; elas permanecem salvas ao alternar.
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-3 self-end sm:self-auto">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {settings.brandUseDefaultColors ? 'Ativado' : 'Desativado'}
+                          </span>
+                          <Toggle
+                            checked={settings.brandUseDefaultColors}
+                            onChange={(value) => update('brandUseDefaultColors', value)}
+                            label="Usar cores padrão do app"
+                          />
+                        </div>
+                      </div>
                       <div>
                         <p className="text-xs text-muted-foreground">
                           Configure as duas aparências separadamente. Cada pessoa escolhe no aplicativo qual deseja usar.
@@ -615,11 +776,14 @@ export default function ConfiguracoesPage() {
                           ))}
                         </div>
                       </div>
-                      <BrandingPaletteEditor
-                        mode={brandingEditorTheme}
-                        settings={settings}
-                        onChange={(key, value) => update(key, value)}
-                      />
+                      <div className={settings.brandUseDefaultColors ? 'opacity-55' : ''}>
+                        <BrandingPaletteEditor
+                          mode={brandingEditorTheme}
+                          settings={settings}
+                          useDefaultColors={settings.brandUseDefaultColors}
+                          onChange={(key, value) => update(key, value)}
+                        />
+                      </div>
                     </Card>
                     <p className="px-1 text-xs text-muted-foreground">
                       Estas configurações valem para o <strong>aplicativo móvel</strong>. A escolha Claro/Escuro é pessoal e fica salva no aparelho de cada usuário.

@@ -144,7 +144,9 @@ function persistSavedLayouts(layouts: SavedLayout[]) {
 export default function LiveViewPage() {
   const API_URL = getApiBaseUrl();
   const accessToken = useAuthStore((state) => state.accessToken);
-  const cameras = useVmsDataStore((state) => state.cameras);
+  const allCameras = useVmsDataStore((state) => state.cameras);
+  // Câmeras desativadas não aparecem no ao vivo (continuam na página Câmeras p/ reativar).
+  const cameras = useMemo(() => allCameras.filter((camera) => camera.enabled !== false), [allCameras]);
   const loadData = useVmsDataStore((state) => state.load);
   const generatedLayouts = useVmsDataStore((state) => state.layouts);
   const { gridSize, cameraIds, wallMode, prevLayout, setGridSize, setCameraIds, toggleWallMode, savePrevLayout, clearPrevLayout } = useGridStore();
@@ -262,7 +264,15 @@ export default function LiveViewPage() {
   const count = gridCols * gridRows;
   const cameraById = useMemo(() => new Map(cameras.map((camera) => [camera.id, camera])), [cameras]);
   const displayedCams = useMemo<(Camera | null)[]>(() => {
-    const slots: (Camera | null)[] = cameraIds.slice(0, count).map((id) => cameraById.get(id) ?? null);
+    // Dedupe: layouts antigos podem repetir a mesma câmera; a 2ª ocorrência vira
+    // slot vazio (as keys da grade são por id — duplicado quebraria o React).
+    const seen = new Set<string>();
+    const slots: (Camera | null)[] = cameraIds.slice(0, count).map((id) => {
+      const cam = cameraById.get(id) ?? null;
+      if (!cam || seen.has(cam.id)) return null;
+      seen.add(cam.id);
+      return cam;
+    });
     while (slots.length < count) slots.push(null);
     return slots;
   }, [cameraIds, count, cameraById]);
@@ -309,12 +319,19 @@ export default function LiveViewPage() {
     clearPrevLayout();
   }, [prevLayout, setGridSize, setCameraIds, clearPrevLayout]);
 
-  // Esc volta para a grade anterior.
+  // Esc volta para a grade anterior — exceto digitando num campo ou com diálogo
+  // aberto (nesses casos o Esc pertence ao campo/diálogo).
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') restoreLayout(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (layoutDialog || deleteTarget) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      restoreLayout();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [restoreLayout]);
+  }, [restoreLayout, layoutDialog, deleteTarget]);
 
   const handleCamAction = useCallback((action: string, camera: Camera) => {
     if (action === 'playback') setLocation(`/playback?cameraId=${encodeURIComponent(camera.id)}`);
@@ -801,7 +818,9 @@ export default function LiveViewPage() {
         >
           {displayedCams.map((cam, i) => (
             <div
-              key={`${i}-${cam ? cam.id : 'empty'}`}
+              // Key por id de câmera: mover uma câmera de quadro MOVE o nó no DOM
+              // (stream preservado) em vez de desmontar/remontar o player.
+              key={cam ? `cam-${cam.id}` : `empty-${i}`}
               className={`group relative min-h-0 rounded-md ${selectedSlotIndex === i ? 'ring-2 ring-[hsl(var(--primary))]' : ''}`}
               style={{ minHeight: 80 }}
             >

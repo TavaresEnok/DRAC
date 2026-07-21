@@ -23,6 +23,8 @@ export interface Camera {
   hasAudio: boolean;
   aiEnabled: boolean;
   alarmsEnabled: boolean;
+  /** Câmera ativa no sistema; false = desativada (não mostra nem grava). */
+  enabled: boolean;
   isOnline: boolean;
   signalStrength: number;
   recordingMode: 'continuous' | 'motion' | 'schedule' | 'manual';
@@ -297,6 +299,7 @@ function mapCameraItems(
       hasAudio: Boolean(camera.audioEnabled),
       aiEnabled: camera.aiEnabled !== false,
       alarmsEnabled: camera.alarmsEnabled !== false,
+      enabled: camera.enabled !== false,
       isOnline: camera.status === 'ONLINE',
       signalStrength: camera.status === 'ONLINE' ? 100 : 0,
       recordingMode: effectiveRecordingMode,

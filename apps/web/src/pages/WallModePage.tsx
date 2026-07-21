@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 import { Camera, Bell, ArrowLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -26,7 +26,8 @@ const statusOverlay = (s: string) => {
 
 export default function WallModePage() {
   const [, setLocation] = useLocation();
-  const cameras = useVmsDataStore((state) => state.cameras);
+  const allCameras = useVmsDataStore((state) => state.cameras);
+  const cameras = useMemo(() => allCameras.filter((camera) => camera.enabled !== false), [allCameras]);
   const [layout, setLayout] = useState(layouts[0]);
   const [showBar, setShowBar] = useState(true);
 

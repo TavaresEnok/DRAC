@@ -5,6 +5,7 @@ import {
   Camera as CameraIcon,
   Download,
   FastForward,
+  FolderArchive,
   LoaderCircle,
   Maximize2,
   Minimize2,
@@ -140,6 +141,29 @@ type PaginatedResponse<T> = {
 
 const API_URL = getApiBaseUrl();
 const SPEEDS = ['0.25x', '0.5x', '1x', '2x', '4x', '8x'];
+// Mesmo limite do backend (tamanho do token JWT na URL do download).
+const ZIP_MAX_RECORDINGS = 50;
+// 192x sobre 24h = janela mínima de 7,5 min na timeline.
+const TIMELINE_MAX_ZOOM = 192;
+
+// O navegador decodifica H.265/HEVC? (Safari nativamente; Chrome/Edge quando o
+// SO/GPU tem decodificador de HEVC.) Quando sim, tocamos a gravação HEVC DIRETO
+// (forceDirect=1), sem transcodificar; senão o servidor serve a versão
+// compatível sob demanda como antes. Falsos positivos ("maybe") são cobertos
+// pelo fallback automático de erro/timeout → modo compatível.
+function detectHevcPlayback(): boolean {
+  if (typeof document === 'undefined') return false;
+  try {
+    const probe = document.createElement('video');
+    return Boolean(
+      probe.canPlayType('video/mp4; codecs="hvc1.1.6.L123.B0"') ||
+      probe.canPlayType('video/mp4; codecs="hev1.1.6.L123.B0"'),
+    );
+  } catch {
+    return false;
+  }
+}
+const BROWSER_PLAYS_HEVC = detectHevcPlayback();
 const TOTAL_MINS = 24 * 60;
 const API_TIMEOUT_MS = 20000;
 const PLAYBACK_TIMEOUT_DIRECT_MS = 8000;
@@ -266,16 +290,23 @@ export default function PlaybackPage() {
   const [speed, setSpeed] = useState('1x');
   const [playhead, setPlayhead] = useState(480);
   const [zoom, setZoom] = useState(1);
+  const [viewCenter, setViewCenter] = useState(480);
+  const timelineTrackRef = useRef<HTMLDivElement | null>(null);
+  const timelinePanRef = useRef<{ startX: number; startCenter: number; windowMins: number; moved: boolean } | null>(null);
+  const timelineDraggedRef = useRef(false);
   const [selectedRecordingId, setSelectedRecordingId] = useState<string | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [loadingPlayback, setLoadingPlayback] = useState(false);
   const [loadingRecordings, setLoadingRecordings] = useState(false);
   const [downloadingRecordingId, setDownloadingRecordingId] = useState<string | null>(null);
+  const [selectedForZip, setSelectedForZip] = useState<Set<string>>(new Set());
+  const [downloadingZip, setDownloadingZip] = useState(false);
   const [pendingSeekSeconds, setPendingSeekSeconds] = useState<number | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [compatMode, setCompatMode] = useState(false);
   const [playing, setPlaying] = useState(false);
+  const [buffering, setBuffering] = useState(false);
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [playbackEvents, setPlaybackEvents] = useState<PlaybackEvent[]>([]);
   const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>({});
@@ -300,6 +331,12 @@ export default function PlaybackPage() {
   const [compareRecordingsByCamera, setCompareRecordingsByCamera] = useState<Record<string, RecordingItem[]>>({});
   const playbackReadyRef = useRef(false);
   const autoSkipTriedRef = useRef<Set<string>>(new Set());
+  // Continuidade: retoma a reprodução automaticamente após navegação/troca de segmento.
+  const autoResumeRef = useRef(false);
+  // Último playhead escrito pelo próprio vídeo (onTimeUpdate). Serve para distinguir
+  // movimento do playhead causado pela reprodução (não deve re-navegar) de navegação
+  // feita pelo usuário (deve trocar segmento/fazer seek).
+  const lastVideoPlayheadRef = useRef<number | null>(null);
   const playerColumnRef = useRef<HTMLDivElement | null>(null);
   // Estado do player (controles nativos do <video> ficam ocultos; usamos barra própria)
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
@@ -615,6 +652,10 @@ export default function PlaybackPage() {
       setVideoError('Nenhuma gravação utilizável foi encontrada no disco para esta data.');
       return;
     }
+    // Movimento do playhead vindo da própria reprodução (onTimeUpdate): não re-navegar.
+    // O arredondamento por minuto fazia o efeito trocar de segmento até ~30s antes do
+    // fim do trecho, remontando o player e derrubando a reprodução no meio do vídeo.
+    if (lastVideoPlayheadRef.current === playhead) return;
     const minuteTarget = playhead;
     const containing = playableRecordings.find((recording) => {
       const start = minuteOfDay(recording.startedAt);
@@ -631,7 +672,7 @@ export default function PlaybackPage() {
   const selectedThumbnailUrl = selectedRecordingId ? thumbnailUrls[selectedRecordingId] ?? null : null;
   const standbyThumbnailUrl = selectedThumbnailUrl ?? (recordings.length ? thumbnailUrls[recordings[recordings.length - 1].id] ?? null : null);
   const selectedDiagnostics = useMemo(() => (selectedRecordingId ? diagnosticsByRecordingId[selectedRecordingId] ?? null : null), [diagnosticsByRecordingId, selectedRecordingId]);
-  const playbackMayUseCompatible = compatMode || Boolean(selectedDiagnostics?.compatibleRecommended);
+  const playbackMayUseCompatible = compatMode || (Boolean(selectedDiagnostics?.compatibleRecommended) && !BROWSER_PLAYS_HEVC);
   const recordingById = useMemo(() => new Map(recordings.map((recording) => [recording.id, recording] as const)), [recordings]);
   const selectedHealth = useMemo(() => healthSummary?.cameras.find((item) => item.cameraId === selectedCamId) ?? null, [healthSummary, selectedCamId]);
 
@@ -661,6 +702,9 @@ export default function PlaybackPage() {
         if (cancelled) return;
         const params = new URLSearchParams();
         if (compatMode) params.set('compatible', '1');
+        // Navegador com decodificador HEVC: pede o arquivo ORIGINAL (o servidor
+        // auto-preferiria a versão transcodada para gravações H.265).
+        else if (BROWSER_PLAYS_HEVC) params.set('forceDirect', '1');
         if (token.playToken) params.set('token', token.playToken);
         params.set('v', String(reloadNonce));
         setPlaybackUrl(`${API_URL}/recordings/${selectedRecordingId}/play?${params.toString()}`);
@@ -684,6 +728,16 @@ export default function PlaybackPage() {
     setReloadNonce(0);
     autoSkipTriedRef.current.clear();
   }, [selectedRecordingId]);
+
+  // O <video> remonta a cada URL (key). O elemento novo nasce PAUSADO — sem este
+  // reset, o botão play/pause ficava mostrando o estado da gravação anterior
+  // enquanto o vídeo novo ainda nem começou a andar.
+  useEffect(() => {
+    setPlaying(false);
+    setBuffering(false);
+    setVideoCurrentTime(0);
+    setVideoDuration(0);
+  }, [playbackUrl]);
 
   useEffect(() => {
     if (!playbackUrl) return;
@@ -714,12 +768,104 @@ export default function PlaybackPage() {
     setPendingSeekSeconds(null);
   }, [pendingSeekSeconds]);
 
+  // Seek dentro do MESMO segmento: quando o clique na timeline não troca de gravação,
+  // não há novo onLoadedMetadata — aplica o seek pendente direto no vídeo já carregado.
+  // GUARDA: ao trocar de gravação, o <video> antigo ainda está montado enquanto a URL
+  // nova é buscada; sem conferir se o vídeo atual É a gravação selecionada, o seek era
+  // aplicado no vídeo ERRADO e consumia o auto-resume antes da hora (segmento novo
+  // carregava pausado).
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || pendingSeekSeconds == null) return;
+    if (!playbackUrl || !selectedRecordingId || !playbackUrl.includes(selectedRecordingId)) return;
+    if (video.readyState < 1) return; // vídeo novo: onLoadedMetadata aplica via syncVideoToPlayhead
+    video.currentTime = pendingSeekSeconds;
+    setPendingSeekSeconds(null);
+    if (autoResumeRef.current) {
+      autoResumeRef.current = false;
+      void video.play().catch(() => {});
+    }
+  }, [pendingSeekSeconds, playbackUrl, selectedRecordingId]);
+
   const currentTime = addMinutes(dayStart, playhead);
+  // A janela visível da timeline é independente do playhead: centrada em viewCenter,
+  // que o usuário controla (scroll = zoom ancorado no cursor, arrastar = mover) e que
+  // volta a seguir o playhead quando ele sai da área visível.
   const zoomedWindow = TOTAL_MINS / zoom;
-  const viewStart = clamp(playhead - zoomedWindow / 2, 0, TOTAL_MINS - zoomedWindow);
-  const viewEnd = clamp(viewStart + zoomedWindow, zoomedWindow, TOTAL_MINS);
+  const viewStart = clamp(viewCenter - zoomedWindow / 2, 0, TOTAL_MINS - zoomedWindow);
+  const viewEnd = viewStart + zoomedWindow;
+
+  useEffect(() => {
+    setViewCenter((center) => {
+      const windowMins = TOTAL_MINS / zoom;
+      const start = clamp(center - windowMins / 2, 0, TOTAL_MINS - windowMins);
+      const margin = windowMins * 0.05;
+      if (playhead >= start + margin && playhead <= start + windowMins - margin) return center;
+      return playhead;
+    });
+  }, [playhead, zoom]);
+
+  // Zoom com a roda do mouse, sempre centrado no PONTEIRO de reprodução: ao
+  // aproximar/afastar, o indicador continua no centro e as gravações não "fogem"
+  // para o lado. Listener manual não-passivo: o onWheel do React não garante
+  // preventDefault (a página rolaria junto).
+  const handleTimelineWheelZoom = useCallback((event: globalThis.WheelEvent) => {
+    const el = timelineTrackRef.current;
+    if (!el) return;
+    event.preventDefault();
+    const factor = event.deltaY < 0 ? 1.35 : 1 / 1.35;
+    const nextZoom = clamp(zoom * factor, 1, TIMELINE_MAX_ZOOM);
+    setZoom(nextZoom);
+    setViewCenter(playhead);
+  }, [playhead, zoom]);
+
+  useEffect(() => {
+    const el = timelineTrackRef.current;
+    if (!el) return;
+    el.addEventListener('wheel', handleTimelineWheelZoom, { passive: false });
+    return () => el.removeEventListener('wheel', handleTimelineWheelZoom);
+  }, [handleTimelineWheelZoom]);
+
+  const onTimelinePanStart = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    timelinePanRef.current = { startX: event.clientX, startCenter: viewCenter, windowMins: zoomedWindow, moved: false };
+    timelineDraggedRef.current = false;
+  }, [viewCenter, zoomedWindow]);
+
+  useEffect(() => {
+    const onMove = (event: globalThis.MouseEvent) => {
+      const pan = timelinePanRef.current;
+      const el = timelineTrackRef.current;
+      if (!pan || !el) return;
+      const dx = event.clientX - pan.startX;
+      if (!pan.moved && Math.abs(dx) < 5) return;
+      pan.moved = true;
+      timelineDraggedRef.current = true;
+      const deltaMins = (dx / el.getBoundingClientRect().width) * pan.windowMins;
+      setViewCenter(clamp(pan.startCenter - deltaMins, pan.windowMins / 2, TOTAL_MINS - pan.windowMins / 2));
+    };
+    const onUp = () => {
+      if (timelinePanRef.current?.moved) {
+        // O click dispara logo após o mouseup; limpa a flag só no próximo tick para
+        // que o clique que encerrou o arraste não seja tratado como seek.
+        window.setTimeout(() => {
+          timelineDraggedRef.current = false;
+        }, 0);
+      }
+      timelinePanRef.current = null;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
 
   const setPlayheadFromMinute = useCallback((minute: number) => {
+    // Navegação explícita do usuário: libera a re-seleção de segmento e retoma a
+    // reprodução assim que o vídeo estiver pronto (comportamento padrão de VMS).
+    lastVideoPlayheadRef.current = null;
+    autoResumeRef.current = true;
     setPlayhead(clamp(Math.round(minute), 0, TOTAL_MINS));
   }, []);
 
@@ -750,6 +896,7 @@ export default function PlaybackPage() {
   }, [selectedCamId]);
 
   const onTimelineClick = (clientX: number, rect: DOMRect) => {
+    if (timelineDraggedRef.current) return; // fim de arraste (pan), não é seek
     const pct = (clientX - rect.left) / rect.width;
     const minute = viewStart + pct * (viewEnd - viewStart);
     setPlayheadFromMinute(minute);
@@ -771,6 +918,80 @@ export default function PlaybackPage() {
   const selectedRecordingDuration = selectedRecording?.durationSeconds ?? 0;
   const selectedRecordingStartLabel = selectedRecording ? format(new Date(selectedRecording.startedAt), 'HH:mm:ss') : '--';
   const selectedRecordingEndLabel = selectedRecording?.endedAt ? format(new Date(selectedRecording.endedAt), 'HH:mm:ss') : '--';
+
+  const usableRecordingIds = useMemo(
+    () => recordings.filter((item) => item.fileUsable ?? item.fileExists).map((item) => item.id),
+    [recordings],
+  );
+  const allUsableSelected = usableRecordingIds.length > 0 && usableRecordingIds.every((id) => selectedForZip.has(id));
+
+  const toggleZipSelection = useCallback((recordingId: string) => {
+    setSelectedForZip((current) => {
+      const next = new Set(current);
+      if (next.has(recordingId)) next.delete(recordingId);
+      else if (next.size >= ZIP_MAX_RECORDINGS) {
+        toast({ title: 'Limite de seleção', description: `Máximo de ${ZIP_MAX_RECORDINGS} gravações por ZIP.`, variant: 'destructive' });
+        return current;
+      } else next.add(recordingId);
+      return next;
+    });
+  }, []);
+
+  const toggleSelectAllForZip = useCallback(() => {
+    setSelectedForZip((current) => {
+      if (usableRecordingIds.length && usableRecordingIds.every((id) => current.has(id))) return new Set();
+      const capped = usableRecordingIds.slice(0, ZIP_MAX_RECORDINGS);
+      if (usableRecordingIds.length > ZIP_MAX_RECORDINGS) {
+        toast({ title: 'Seleção limitada', description: `Selecionadas as ${ZIP_MAX_RECORDINGS} primeiras gravações (limite por ZIP).` });
+      }
+      return new Set(capped);
+    });
+  }, [usableRecordingIds]);
+
+  // Limpa a seleção ao trocar câmera/data e remove ids que saíram da lista.
+  useEffect(() => {
+    setSelectedForZip(new Set());
+  }, [selectedCamId, selectedDate]);
+  useEffect(() => {
+    setSelectedForZip((current) => {
+      if (!current.size) return current;
+      const valid = new Set(recordings.map((item) => item.id));
+      const next = new Set([...current].filter((id) => valid.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [recordings]);
+
+  const downloadSelectedAsZip = useCallback(async () => {
+    if (!accessToken || !selectedForZip.size) return;
+    setDownloadingZip(true);
+    try {
+      const recordingIds = [...selectedForZip].slice(0, ZIP_MAX_RECORDINGS);
+      const { data } = await client.post<{ downloadUrl: string; count: number }>(
+        '/recordings/download-batch-token',
+        { recordingIds },
+      );
+      // Link direto com token: o navegador baixa em streaming, com progresso nativo,
+      // sem montar o ZIP inteiro na memória da página.
+      const anchor = document.createElement('a');
+      anchor.href = `${API_URL}${data.downloadUrl}`;
+      anchor.rel = 'noopener';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      toast({ title: 'Download iniciado', description: `Baixando ${data.count} gravação(ões) em um único arquivo ZIP.` });
+    } catch (error) {
+      const forbidden = axios.isAxiosError(error) && error.response?.status === 403;
+      toast({
+        title: 'Falha ao baixar ZIP',
+        description: forbidden
+          ? 'Seu usuário não tem permissão para exportar gravações (exportar evidências).'
+          : error instanceof Error ? error.message : 'Não foi possível preparar o download em lote.',
+        variant: 'destructive',
+      });
+    } finally {
+      setDownloadingZip(false);
+    }
+  }, [accessToken, client, selectedForZip]);
 
   const handleDownload = async (recording = selectedRecording) => {
     if (!recording || !selectedCam || !accessToken) return;
@@ -1091,19 +1312,31 @@ export default function PlaybackPage() {
 
         <div style={{ flex: 1 }} />
 
-        {/* Janela de zoom da timeline (24h/12h/6h) */}
+        {/* Janela de zoom da timeline (presets + zoom livre pela roda do mouse) */}
         <div className="segment">
-          {[1, 2, 4].map((value) => (
+          {[
+            { value: 1, label: '24h' },
+            { value: 2, label: '12h' },
+            { value: 4, label: '6h' },
+            { value: 24, label: '1h' },
+            { value: 96, label: '15m' },
+          ].map(({ value, label }) => (
             <button
               key={value}
               type="button"
-              onClick={() => setZoom(value)}
-              className={`seg-btn ${zoom === value ? 'active' : ''}`}
+              onClick={() => {
+                setZoom(value);
+                setViewCenter(playhead);
+              }}
+              className={`seg-btn ${Math.abs(zoom - value) < 0.01 ? 'active' : ''}`}
             >
-              {value === 1 ? '24h' : value === 2 ? '12h' : '6h'}
+              {label}
             </button>
           ))}
         </div>
+        <span className="hidden font-mono text-[10px] text-[hsl(var(--muted-foreground))] sm:inline" title="Role o mouse sobre a timeline para dar zoom; arraste para mover">
+          {zoomedWindow >= 60 ? `${(zoomedWindow / 60).toFixed(zoomedWindow % 60 === 0 ? 0 : 1)}h` : `${Math.round(zoomedWindow)}min`}
+        </span>
 
         {/* Recursos avançados ocultos para espelhar o mock (funcionalidade preservada) */}
         <div className="hidden">
@@ -1154,14 +1387,16 @@ export default function PlaybackPage() {
                     const segStart = Math.max(segment.start, viewStart);
                     const segEnd = Math.min(segment.end, viewEnd);
                     const windowSize = viewEnd - viewStart;
+                    const isEventMarker = segment.type === 'motion' || segment.type === 'alarm';
                     return (
                       <div
                         key={`${camera.id}-${segment.type}-${index}-${segStart}`}
-                        className="absolute top-0 h-full"
+                        className={`absolute top-0 ${isEventMarker ? 'h-[35%]' : 'h-full'}`}
                         style={{
                           left: `${((segStart - viewStart) / windowSize) * 100}%`,
                           width: `${((segEnd - segStart) / windowSize) * 100}%`,
                           background: getSegmentColor(segment.type),
+                          zIndex: isEventMarker ? 2 : 1,
                         }}
                       />
                     );
@@ -1255,16 +1490,46 @@ export default function PlaybackPage() {
                   onCanPlay={() => {
                     playbackReadyRef.current = true;
                     setVideoError(null);
+                    if (autoResumeRef.current) {
+                      autoResumeRef.current = false;
+                      void videoRef.current?.play().catch(() => {});
+                    }
                   }}
                   onPlay={() => setPlaying(true)}
-                  onPause={() => setPlaying(false)}
-                  onEnded={() => setPlaying(false)}
+                  onPlaying={() => {
+                    setPlaying(true);
+                    setBuffering(false);
+                  }}
+                  onWaiting={() => setBuffering(true)}
+                  onStalled={() => setBuffering(true)}
+                  onPause={() => {
+                    setPlaying(false);
+                    setBuffering(false);
+                  }}
+                  onEnded={() => {
+                    setPlaying(false);
+                    // Continuidade: ao terminar o segmento, avança para o próximo trecho
+                    // utilizável do dia e continua reproduzindo automaticamente.
+                    const idx = recordings.findIndex((item) => item.id === selectedRecordingId);
+                    if (idx < 0) return;
+                    for (let i = idx + 1; i < recordings.length; i += 1) {
+                      const item = recordings[i];
+                      if (!(item.fileUsable ?? item.fileExists)) continue;
+                      lastVideoPlayheadRef.current = null;
+                      autoResumeRef.current = true;
+                      setSelectedRecordingId(item.id);
+                      setPendingSeekSeconds(0);
+                      setPlayhead(clamp(minuteOfDay(item.startedAt), 0, TOTAL_MINS));
+                      break;
+                    }
+                  }}
                   onTimeUpdate={() => {
                     if (!selectedRecording || !videoRef.current) return;
                     setVideoCurrentTime(videoRef.current.currentTime);
                     const base = minuteOfDay(selectedRecording.startedAt);
-                    const minute = base + videoRef.current.currentTime / 60;
-                    setPlayhead(clamp(Math.round(minute), 0, TOTAL_MINS));
+                    const minute = clamp(Math.round(base + videoRef.current.currentTime / 60), 0, TOTAL_MINS);
+                    lastVideoPlayheadRef.current = minute;
+                    setPlayhead(minute);
                   }}
                   onError={() => {
                     if (!playbackMayUseCompatible) {
@@ -1295,6 +1560,15 @@ export default function PlaybackPage() {
                   <div className="text-xs text-white/30">
                     {recordings.length ? 'Selecione um ponto da timeline' : 'Sem gravações nesta data'}
                   </div>
+                </div>
+              </div>
+            )}
+
+            {buffering && playbackUrl && !videoError && !loadingPlayback && !loadingRecordings && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+                <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/55 px-3 py-2 text-xs text-white/80">
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                  Carregando vídeo…
                 </div>
               </div>
             )}
@@ -1333,16 +1607,36 @@ export default function PlaybackPage() {
           </div>
 
           <div className="rounded-xl border border-border bg-card p-3">
-            <div className="relative mb-2 h-9 cursor-pointer overflow-hidden rounded bg-[hsl(var(--muted))]" onClick={(event) => onTimelineClick(event.clientX, event.currentTarget.getBoundingClientRect())}>
+            <div
+              ref={timelineTrackRef}
+              className="relative mb-2 h-9 cursor-pointer select-none overflow-hidden rounded bg-[hsl(var(--muted))]"
+              title="Clique para posicionar · role para dar zoom · arraste para mover"
+              onMouseDown={onTimelinePanStart}
+              onClick={(event) => onTimelineClick(event.clientX, event.currentTarget.getBoundingClientRect())}
+            >
               {timelineSegments.filter((segment) => segment.end >= viewStart && segment.start <= viewEnd).map((segment, index) => {
                 const segStart = Math.max(segment.start, viewStart);
                 const segEnd = Math.min(segment.end, viewEnd);
                 const windowSize = viewEnd - viewStart;
+                // Movimento/alarme são EVENTOS dentro de uma gravação, não trechos:
+                // desenhados como marcador fino no topo, sobre a faixa verde.
+                const isEventMarker = segment.type === 'motion' || segment.type === 'alarm';
+                const segmentTitle = segment.type === 'recorded'
+                  ? `Gravação ${format(addMinutes(dayStart, segment.start), 'HH:mm')}–${format(addMinutes(dayStart, segment.end), 'HH:mm')}`
+                  : segment.type === 'recorded_broken'
+                    ? 'Trecho com arquivo ausente/corrompido'
+                    : segment.type === 'motion'
+                      ? `Evento de movimento ${format(addMinutes(dayStart, segment.start), 'HH:mm')}`
+                      : segment.type === 'alarm'
+                        ? `Evento de alarme ${format(addMinutes(dayStart, segment.start), 'HH:mm')}`
+                        : 'Sem gravação';
                 return (
                   <div
                     key={`${segment.type}-${index}-${segStart}`}
-                    className="absolute top-0 h-full"
+                    className={`absolute top-0 ${isEventMarker ? 'h-[35%] rounded-b-sm' : 'h-full'}`}
+                    title={segmentTitle}
                     onClick={(event) => {
+                      if (timelineDraggedRef.current) return; // fim de arraste (pan), não é seek
                       if ((segment.type !== 'recorded' && segment.type !== 'recorded_broken') || !segment.recordingId) return;
                       const rec = recordingById.get(segment.recordingId);
                       if (segment.type === 'recorded_broken' || !(rec?.fileUsable ?? rec?.fileExists)) {
@@ -1354,7 +1648,7 @@ export default function PlaybackPage() {
                         return;
                       }
                       const recDiag = diagnosticsByRecordingId[segment.recordingId];
-                      if (recDiag?.compatibleRecommended) {
+                      if (recDiag?.compatibleRecommended && !BROWSER_PLAYS_HEVC) {
                         setCompatMode(true);
                       }
                       event.stopPropagation();
@@ -1367,6 +1661,7 @@ export default function PlaybackPage() {
                       width: `${((segEnd - segStart) / windowSize) * 100}%`,
                       background: getSegmentColor(segment.type),
                       cursor: segment.type === 'recorded' || segment.type === 'recorded_broken' ? 'pointer' : 'default',
+                      zIndex: isEventMarker ? 2 : 1,
                     }}
                   />
                 );
@@ -1384,14 +1679,17 @@ export default function PlaybackPage() {
               })}
             </div>
 
-            <div className="mb-3 flex items-center gap-3">
+            <div className="mb-3 flex flex-wrap items-center gap-3">
               {[
-                ['Gravado', 'recorded'],
-                ['Movimento', 'motion'],
-                ['Alarme', 'alarm'],
-              ].map(([label, type]) => (
-                <div key={type} className="flex items-center gap-1">
-                  <span className="h-2.5 w-2.5 rounded-sm" style={{ background: getSegmentColor(type as TimelineSegment['type']) }} />
+                ['Gravação', 'recorded', 'Trecho com vídeo gravado em disco'],
+                ['Evento de movimento', 'motion', 'Marcador no topo: movimento detectado dentro da gravação'],
+                ['Evento de alarme', 'alarm', 'Marcador no topo: alarme dentro da gravação'],
+              ].map(([label, type, hint]) => (
+                <div key={type} className="flex items-center gap-1" title={hint}>
+                  <span
+                    className={type === 'recorded' ? 'h-2.5 w-2.5 rounded-sm' : 'h-1 w-2.5 rounded-sm'}
+                    style={{ background: getSegmentColor(type as TimelineSegment['type']) }}
+                  />
                   <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{label}</span>
                 </div>
               ))}
@@ -1399,7 +1697,7 @@ export default function PlaybackPage() {
                 {downloadingRecordingId === selectedRecording?.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                 Baixar
               </button>
-              {selectedDiagnostics?.compatibleRecommended && !selectedRecording?.compatibleCached && (
+              {selectedDiagnostics?.compatibleRecommended && !BROWSER_PLAYS_HEVC && !selectedRecording?.compatibleCached && (
                 <button
                   type="button"
                   onClick={() => void prepareCompatiblePlayback()}
@@ -1545,7 +1843,29 @@ export default function PlaybackPage() {
 
         <div className="flex max-h-80 w-full shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card xl:max-h-none xl:w-80">
           <div className="border-b border-border px-3 py-2.5">
-            <span className="text-xs font-semibold">Gravações do dia</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold">Gravações do dia</span>
+              {usableRecordingIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={toggleSelectAllForZip}
+                  className="text-[10px] text-[hsl(var(--muted-foreground))] underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  {allUsableSelected ? 'Limpar seleção' : 'Selecionar todas'}
+                </button>
+              )}
+            </div>
+            {selectedForZip.size > 0 && (
+              <button
+                type="button"
+                onClick={() => void downloadSelectedAsZip()}
+                disabled={downloadingZip}
+                className="mt-2 flex w-full items-center justify-center gap-1.5 rounded border border-[hsl(var(--primary)_/_0.35)] bg-[hsl(var(--primary)_/_0.08)] px-3 py-1.5 text-xs text-[hsl(var(--primary))] transition-colors hover:bg-[hsl(var(--primary)_/_0.14)] disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {downloadingZip ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <FolderArchive className="h-3.5 w-3.5" />}
+                Baixar {selectedForZip.size} em ZIP
+              </button>
+            )}
           </div>
           <div className="flex-1 overflow-y-auto divide-y divide-border">
             {recordings.length ? [...recordings].reverse().map((item) => {
@@ -1559,7 +1879,7 @@ export default function PlaybackPage() {
                   key={item.id}
                   onClick={() => {
                     if (!usable) return;
-                    if (recDiag?.compatibleRecommended) setCompatMode(true);
+                    if (recDiag?.compatibleRecommended && !BROWSER_PLAYS_HEVC) setCompatMode(true);
                     setSelectedRecordingId(item.id);
                     setPendingSeekSeconds(0);
                     setPlayheadFromMinute(minuteOfDay(item.startedAt));
@@ -1573,6 +1893,16 @@ export default function PlaybackPage() {
                   }`}
                 >
                   <div className="flex items-center gap-2.5">
+                    <input
+                      type="checkbox"
+                      checked={selectedForZip.has(item.id)}
+                      disabled={!usable}
+                      onClick={(event) => event.stopPropagation()}
+                      onChange={() => toggleZipSelection(item.id)}
+                      title="Selecionar para baixar em ZIP"
+                      aria-label={`Selecionar gravação de ${startLabel}`}
+                      className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-[hsl(var(--primary))] disabled:cursor-not-allowed"
+                    />
                     <div className="relative h-11 w-[72px] shrink-0 overflow-hidden rounded-md bg-black/50">
                       {thumbnailUrls[item.id] ? (
                         <img src={thumbnailUrls[item.id]} onError={retryExpiredThumbnails} alt={`Prévia de ${startLabel}`} loading="lazy" className="h-full w-full object-cover" />

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Camera, Eye, Info, PlaySquare, X } from 'lucide-react';
-import { useLocation } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useVmsDataStore, type Camera as VmsCamera } from '../store/vmsDataStore';
 
@@ -255,17 +255,17 @@ export default function MapPage() {
             <div className="grid grid-cols-3 gap-2">
               <Tooltip delayDuration={0}>
                 <TooltipTrigger asChild>
-                  <button onClick={() => setLocation(`/cameras/${selectedCamera.id}`)} className="h-9 rounded border border-border bg-background hover:bg-accent flex items-center justify-center">
+                  <Link href={`/cameras/${selectedCamera.id}`} className="h-9 rounded border border-border bg-background hover:bg-accent flex items-center justify-center">
                     <Eye className="w-4 h-4" />
-                  </button>
+                  </Link>
                 </TooltipTrigger>
                 <TooltipContent className="text-xs">Abrir câmera</TooltipContent>
               </Tooltip>
               <Tooltip delayDuration={0}>
                 <TooltipTrigger asChild>
-                  <button onClick={() => setLocation('/playback')} className="h-9 rounded border border-border bg-background hover:bg-accent flex items-center justify-center">
+                  <Link href="/playback" className="h-9 rounded border border-border bg-background hover:bg-accent flex items-center justify-center">
                     <PlaySquare className="w-4 h-4" />
-                  </button>
+                  </Link>
                 </TooltipTrigger>
                 <TooltipContent className="text-xs">Abrir reprodução</TooltipContent>
               </Tooltip>

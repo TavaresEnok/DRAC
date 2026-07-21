@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { format } from 'date-fns';
-import { useLocation } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import {
   Bell, BellOff, CheckCheck, ChevronUp, ChevronDown,
   AlertTriangle, Flame, DoorOpen, Shield, MapPin,
@@ -752,8 +752,8 @@ export default function AlertasPage() {
                 </div>
 
                 {selectedCamera && (
-                  <button
-                    onClick={() => setLocation(`/playback?cameraId=${encodeURIComponent(selectedCamera.id)}&at=${encodeURIComponent(selectedAlarm.triggeredAt)}`)}
+                  <Link
+                    href={`/playback?cameraId=${encodeURIComponent(selectedCamera.id)}&at=${encodeURIComponent(selectedAlarm.triggeredAt)}`}
                     className="flex w-full items-center gap-3 rounded-lg border border-border px-4 py-3 text-left transition-colors hover:bg-accent"
                   >
                     <div className="min-w-0 flex-1">
@@ -761,7 +761,7 @@ export default function AlertasPage() {
                       <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">{selectedCamera.ipAddress} · {selectedCamera.resolution}</div>
                     </div>
                     <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  </button>
+                  </Link>
                 )}
 
                 {selectedAlarm.notes && (

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PlaySquare, Crosshair, Maximize2, Info, AlertTriangle, Circle } from 'lucide-react';
 import { Camera } from '../store/vmsDataStore';
-import { LiveStreamPlayer } from './LiveStreamPlayer';
+import { LiveStreamPlayer, type LivePlayerStatus } from './LiveStreamPlayer';
 
 import { useGridStore } from '../store/gridStore';
 
@@ -40,9 +40,14 @@ export function CameraTile({
   liveViewMode = 'grid',
 }: CameraTileProps) {
   const [hovered, setHovered] = useState(false);
+  const [playerStatus, setPlayerStatus] = useState<LivePlayerStatus | null>(null);
   const wallMode = useGridStore((state) => state.wallMode);
 
   const isOffline  = camera.status === 'offline' || camera.status === 'no_signal';
+  // Overlay "Offline" do tile só quando o player também não tem imagem viva; e
+  // enquanto ele estiver visível, o chrome do player (spinner/erro) fica oculto
+  // para não empilhar mensagens técnicas sobre o aviso limpo de offline.
+  const showOfflineOverlay = isOffline && playerStatus?.state !== 'playing';
   const isAlarm    = camera.status === 'alarm';
   const isMotion   = camera.status === 'motion';
   const isManualRecordingActive = camera.status === 'recording';
@@ -58,20 +63,24 @@ export function CameraTile({
       onHoverEnd={() => setHovered(false)}
       transition={{ duration: 0.12 }}
     >
-      {!isOffline && (
-        <div className="absolute inset-0">
-          <LiveStreamPlayer
-            cameraId={camera.id}
-            cameraName={camera.name}
-            showOverlay={showDetectionOverlay && !wallMode}
-            aiEnabled={camera.aiEnabled}
-            liveViewMode={liveViewMode}
-            className="h-full w-full"
-            muted
-            startDelayMs={streamStartDelayMs}
-          />
-        </div>
-      )}
+      {/* O stream fica MONTADO mesmo com status "offline": o status vem de sondagem
+          periódica e pode flapear em WAN — desmontar aqui derrubava uma conexão
+          WebRTC saudável (piscada) por causa de um falso-offline de um ciclo. O
+          próprio player cuida de retry/backoff quando o stream realmente cai; o
+          overlay de offline abaixo só cobre a imagem enquanto não há frame vivo. */}
+      <div className="absolute inset-0">
+        <LiveStreamPlayer
+          cameraId={camera.id}
+          cameraName={camera.name}
+          showOverlay={showDetectionOverlay && !wallMode && !showOfflineOverlay}
+          aiEnabled={camera.aiEnabled}
+          liveViewMode={liveViewMode}
+          className="h-full w-full"
+          muted
+          startDelayMs={streamStartDelayMs}
+          onStatusChange={setPlayerStatus}
+        />
+      </div>
 
       <button
         type="button"
@@ -86,9 +95,10 @@ export function CameraTile({
 
       <div className="absolute inset-0 bg-gradient-to-b from-black/10 via-transparent to-black/10" />
 
-      {/* Offline overlay */}
-      {isOffline && (
-        <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+      {/* Offline overlay — só quando o player também não tem imagem viva (status
+          "offline" com stream tocando = sondagem desatualizada; mostra o vídeo). */}
+      {showOfflineOverlay && (
+        <div className="absolute inset-0 z-20 bg-black/60 flex items-center justify-center">
           <div className="text-center">
             <AlertTriangle className="w-4 h-4 text-[hsl(var(--status-offline))] mx-auto mb-1" />
             <div className="font-mono text-[9px] text-[hsl(var(--muted-foreground))] tracking-widest uppercase">

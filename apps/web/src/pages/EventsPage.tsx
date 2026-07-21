@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 import { Search, Filter, CheckCheck, X, ChevronRight, ExternalLink, Shield, Clock, Archive, Video } from 'lucide-react';
 import { VMSEvent, useVmsDataStore } from '../store/vmsDataStore';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useLocation } from 'wouter';
+import { Link, useLocation } from 'wouter';
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
   motion_detected: 'Movimento Detectado',
@@ -306,10 +306,10 @@ export default function EventosPage() {
                   <div className="text-[10px] font-mono uppercase tracking-[0.18em] text-[hsl(var(--muted-foreground))]">Contexto da câmera</div>
                   <h3 className="mt-1 text-[14px] font-semibold">{currentCamera?.name ?? 'Câmera associada'}</h3>
                 </div>
-                <button onClick={() => currentCamera && setLocation('/live')} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-[11px] hover:bg-[hsl(var(--accent))] transition-colors">
+                <Link href="/live" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-[11px] hover:bg-[hsl(var(--accent))] transition-colors">
                   <ExternalLink className="w-3.5 h-3.5" />
                   Abrir ao vivo
-                </button>
+                </Link>
               </div>
 
               <div className="p-4 space-y-4 overflow-y-auto">
@@ -381,10 +381,17 @@ export default function EventosPage() {
                     <CheckCheck className="w-4 h-4" />
                     {isAcknowledged(current) ? 'Reconhecido' : 'Reconhecer'}
                   </button>
-                  <button onClick={() => current && setLocation(`/evidence?eventId=${current.id}`)} disabled={!current} className="flex-1 h-9 rounded-xl border border-border text-[11px] hover:bg-[hsl(var(--accent))] transition-colors flex items-center justify-center gap-2 disabled:opacity-45">
-                    <Archive className="w-4 h-4" />
-                    Evidência
-                  </button>
+                  {current ? (
+                    <Link href={`/evidence?eventId=${current.id}`} className="flex-1 h-9 rounded-xl border border-border text-[11px] hover:bg-[hsl(var(--accent))] transition-colors flex items-center justify-center gap-2">
+                      <Archive className="w-4 h-4" />
+                      Evidência
+                    </Link>
+                  ) : (
+                    <button disabled className="flex-1 h-9 rounded-xl border border-border text-[11px] flex items-center justify-center gap-2 opacity-45">
+                      <Archive className="w-4 h-4" />
+                      Evidência
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

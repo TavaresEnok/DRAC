@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes, type MouseEvent, type ReactNode, type SelectHTMLAttributes, type WheelEvent as ReactWheelEvent } from 'react';
-import { useLocation, useParams } from 'wouter';
+import { Link, useLocation, useParams } from 'wouter';
 import {
   ArrowDown,
   ArrowLeft,
@@ -1211,13 +1211,13 @@ export default function CameraDetailPage() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex shrink-0 items-center gap-3 border-b border-border bg-background/95 px-6 py-3">
-        <button
-          onClick={() => setLocation('/cameras')}
+        <Link
+          href="/cameras"
           className="inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <ChevronLeft className="h-3.5 w-3.5" />
           Câmeras
-        </button>
+        </Link>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <span className="truncate text-sm font-semibold">{cam.name}</span>
@@ -1417,14 +1417,13 @@ export default function CameraDetailPage() {
                   <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Reprodução</p>
                   <p className="mt-1 text-sm font-semibold">Revisão forense desta câmera</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setLocation(`/playback?cameraId=${encodeURIComponent(cam.id)}`)}
+                <Link
+                  href={`/playback?cameraId=${encodeURIComponent(cam.id)}`}
                   className="inline-flex h-9 items-center gap-2 rounded-xl border border-border px-3 text-xs hover:bg-[hsl(var(--accent))]"
                 >
                   Abrir reprodução
                   <ExternalLink className="h-3.5 w-3.5" />
-                </button>
+                </Link>
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-3">
                 <div className="rounded-xl border border-border bg-background/55 p-4">

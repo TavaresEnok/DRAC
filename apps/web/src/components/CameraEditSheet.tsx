@@ -40,6 +40,7 @@ type Form = {
   audioEnabled: boolean;
   aiEnabled: boolean;
   alarmsEnabled: boolean;
+  enabled: boolean;
 };
 
 const RECORDING_MODES = [
@@ -91,6 +92,7 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
           audioEnabled: Boolean(data.audioEnabled),
           aiEnabled: data.aiEnabled !== false,
           alarmsEnabled: data.alarmsEnabled !== false,
+          enabled: data.enabled !== false,
         });
       })
       .catch((err) => {
@@ -135,6 +137,7 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
           audioEnabled: form.audioEnabled,
           aiEnabled: form.aiEnabled,
           alarmsEnabled: form.alarmsEnabled,
+          enabled: form.enabled,
         },
         { headers: { Authorization: `Bearer ${accessToken}` } },
       );
@@ -193,6 +196,27 @@ export function CameraEditSheet({ camera, open, onClose, onDeleted }: CameraEdit
 
                 {/* GERAL */}
                 <TabsContent value="geral" className="px-5 py-4 space-y-4 mt-0">
+                  {/* Liga/desliga da câmera — em destaque no topo. Desativada:
+                      para de exibir e gravar, sem apagar o cadastro. */}
+                  <div className={cn(
+                    'flex items-center justify-between gap-3 rounded-lg border px-3.5 py-3 transition-colors',
+                    form.enabled
+                      ? 'border-[hsl(var(--status-online)_/_0.35)] bg-[hsl(var(--status-online)_/_0.08)]'
+                      : 'border-amber-500/40 bg-amber-500/10',
+                  )}>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={cn('h-2 w-2 shrink-0 rounded-full', form.enabled ? 'bg-[hsl(var(--status-online))]' : 'bg-amber-500')} />
+                        <p className="text-[13px] font-semibold">{form.enabled ? 'Câmera ativa' : 'Câmera desativada'}</p>
+                      </div>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                        {form.enabled
+                          ? 'Transmitindo e gravando normalmente. Desligue para pausar sem apagar o cadastro nem as gravações.'
+                          : 'Não está transmitindo nem gravando. As gravações antigas e o cadastro continuam salvos.'}
+                      </p>
+                    </div>
+                    <Switch checked={form.enabled} onCheckedChange={(v) => upd('enabled', v)} />
+                  </div>
                   <FormField label="Nome da câmera" required>
                     <Input value={form.name} onChange={(e) => upd('name', e.target.value)} className="text-sm" />
                   </FormField>

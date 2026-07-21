@@ -20,7 +20,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { useLocation } from 'wouter';
+import { Link, useLocation } from 'wouter';
 import { getApiBaseUrl } from '../lib/api-base';
 import { useAuthStore } from '../store/authStore';
 import { toast } from '../hooks/use-toast';
@@ -1350,10 +1350,11 @@ export default function CamerasPage() {
             <div className="grid gap-4 p-5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
               {filtered.map(cam => {
                 const isOffline = ['offline', 'no_signal'].includes(cam.status);
+                const isDisabled = cam.enabled === false;
                 return (
                 <div
                   key={cam.id}
-                  className="ops-card overflow-hidden hover:-translate-y-px transition-transform cursor-pointer"
+                  className={`ops-card overflow-hidden hover:-translate-y-px transition-transform cursor-pointer ${isDisabled ? 'opacity-70' : ''}`}
                   onClick={() => setEditCamera(cam)}
                 >
                   <div className="relative h-36 overflow-hidden bg-[hsl(220_18%_8%)]">
@@ -1378,7 +1379,12 @@ export default function CamerasPage() {
                     <div className={`absolute inset-0 flex items-center justify-center ${posterUrls[cam.id] && !isOffline ? 'opacity-0' : ''}`}>
                       <CameraIcon className="h-8 w-8 text-white/25" />
                     </div>
-                    {isOffline ? (
+                    {isDisabled ? (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/65">
+                        <CameraIcon className="w-5 h-5 text-white/35" />
+                        <span className="text-[9px] text-amber-400/90 font-mono uppercase tracking-widest">Desativada</span>
+                      </div>
+                    ) : isOffline ? (
                       <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/55">
                         <CameraIcon className="w-5 h-5 text-white/35" />
                         <span className="text-[9px] text-muted-foreground/60 font-mono uppercase tracking-widest">
@@ -1399,8 +1405,8 @@ export default function CamerasPage() {
                           <span className="text-[10px] text-muted-foreground">{formatCameraStatus(cam.status)}</span>
                         </div>
                       </div>
-                      <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${STATUS_BADGE[cam.status] ?? STATUS_BADGE.offline}`}>
-                        {formatCameraStatus(cam.status)}
+                      <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${isDisabled ? 'border-amber-500/40 bg-amber-500/10 text-amber-500' : STATUS_BADGE[cam.status] ?? STATUS_BADGE.offline}`}>
+                        {isDisabled ? 'Desativada' : formatCameraStatus(cam.status)}
                       </span>
                     </div>
                     <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
@@ -1409,9 +1415,9 @@ export default function CamerasPage() {
                       <span>{cam.ipAddress}</span>
                     </div>
                     <div className="flex items-center gap-2 pt-0.5" onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => setLocation(`/playback?cameraId=${cam.id}`)} className="flex-1 h-7 rounded-md text-[11px] flex items-center justify-center gap-1.5 text-muted-foreground hover:text-foreground hover:bg-[hsl(var(--accent))] transition-colors">
+                      <Link href={`/playback?cameraId=${cam.id}`} className="flex-1 h-7 rounded-md text-[11px] flex items-center justify-center gap-1.5 text-muted-foreground hover:text-foreground hover:bg-[hsl(var(--accent))] transition-colors">
                         <PlaySquare className="w-3.5 h-3.5" /> Playback
-                      </button>
+                      </Link>
                       <button onClick={() => setEditCamera(cam)} className="flex-1 h-7 rounded-md text-[11px] flex items-center justify-center gap-1.5 text-muted-foreground hover:text-foreground hover:bg-[hsl(var(--accent))] transition-colors">
                         <Edit className="w-3.5 h-3.5" /> Editar
                       </button>
@@ -1547,19 +1553,19 @@ export default function CamerasPage() {
                   <span className="font-semibold text-foreground">Regra atual:</span> {recordingModeCopy.detail}
                   {recordingActive ? ' Está gravando agora.' : ' Não está gravando agora.'}
                 </div>
-                <button onClick={() => setLocation(`/cameras/${selectedCam.id}?tab=settings`)} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors">
+                <Link href={`/cameras/${selectedCam.id}?tab=settings`} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors">
                   <Edit className="w-4 h-4" /> Editar Câmera
-                </button>
+                </Link>
                 <button onClick={() => setDeleteTarget(selectedCam)} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors text-[hsl(var(--destructive))]">
                   <Trash2 className="w-4 h-4" /> Excluir Câmera
                 </button>
-                <button onClick={() => setLocation('/playback')} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors">
+                <Link href="/playback" className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors">
                   <PlaySquare className="w-4 h-4" /> Abrir Reprodução
-                </button>
+                </Link>
                 {selectedCam.ptzCapable && (
-                  <button onClick={() => setLocation(`/ptz?cameraId=${encodeURIComponent(selectedCam.id)}`)} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors">
+                  <Link href={`/ptz?cameraId=${encodeURIComponent(selectedCam.id)}`} className="w-full h-9 rounded border border-border text-xs flex items-center justify-center gap-2 hover:bg-[hsl(var(--accent))] transition-colors">
                     <Crosshair className="w-4 h-4" /> Controle PTZ
-                  </button>
+                  </Link>
                 )}
                 {selectedCam.ptzCapable && (
                   <button

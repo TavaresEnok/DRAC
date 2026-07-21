@@ -47,6 +47,12 @@ const LIVE_RECONNECT_DEBOUNCE_MS = 2500;
 const LIVE_FAST_RETRY_BASE_MS = 1200;
 const LIVE_FAST_RETRY_MAX_MS = 7000;
 const LIVE_EDGE_OFFSET_SECONDS = 0.35;
+// Recuperação de latência sem salto (técnica do Frigate): acima de 1,2s de
+// deriva a reprodução acelera suavemente (teto 1,5×) até reencostar no ao vivo;
+// só deriva grande (8s+, ex.: volta de aba oculta) justifica o salto seco.
+const LIVE_DRIFT_CATCHUP_SECONDS = 1.2;
+const LIVE_DRIFT_HARD_SEEK_SECONDS = 8;
+const LIVE_DRIFT_MAX_RATE = 1.5;
 // Tempo sem NENHUM frame novo apresentado (rVFC) antes de reconectar. É o único
 // detector de congelamento real agora, então precisa tolerar câmeras com "smart
 // codec" que reduzem muito a taxa de quadros em cena 100% estática (alguns enviam
@@ -57,9 +63,57 @@ const LIVE_BLACK_FRAME_FAILOVER_MS = 6000;
 const LIVE_VIEW_LEASE_TTL_SECONDS = 20;
 const LIVE_VIEW_HEARTBEAT_MS = 7000;
 const LIVE_PROTOCOL_STORAGE_PREFIX = 'drac-live-protocol';
+const LIVE_QUALITY_STORAGE_PREFIX = 'drac-live-quality';
 const STREAM_URL_CACHE_TTL_MS = 60 * 1000;
 type ActiveLiveProtocol = 'WEBRTC' | 'LL-HLS' | 'HLS';
 type LiveProtocol = 'auto' | 'flv' | 'hls' | 'webrtc' | 'mjpeg' | 'llhls';
+// Qualidade escolhida pelo operador na visualização de câmera única (1x1):
+//  - instant  → sub-stream (mesmo da grade): latência mínima, zero CPU, imagem reduzida
+//  - balanced → principal transcodificado H.264: latência mínima, 1080p, ~0,6 núcleo
+//  - max      → principal ORIGINAL sem transcode (HEVC incluso): zero CPU, qualidade
+//               idêntica à câmera; WebRTC quando o navegador decodifica H.265, senão
+//               LL-HLS/HLS (~1–3s de atraso); sem suporte nenhum → volta a balanced.
+type LiveQualityMode = 'instant' | 'balanced' | 'max';
+type LiveDeliveryMode = 'selected' | 'grid' | 'original';
+
+function getStoredLiveQuality(cameraId: string): LiveQualityMode {
+  try {
+    const stored = window.localStorage.getItem(`${LIVE_QUALITY_STORAGE_PREFIX}:${cameraId}`);
+    return stored === 'instant' || stored === 'max' ? stored : 'balanced';
+  } catch {
+    return 'balanced';
+  }
+}
+
+function storeLiveQuality(cameraId: string, quality: LiveQualityMode) {
+  try {
+    window.localStorage.setItem(`${LIVE_QUALITY_STORAGE_PREFIX}:${cameraId}`, quality);
+  } catch {
+  }
+}
+
+// Suporte do navegador a H.265 para o modo "Máxima qualidade" (avaliado uma vez).
+const WEBRTC_DECODES_HEVC = (() => {
+  try {
+    const codecs = RTCRtpReceiver.getCapabilities?.('video')?.codecs ?? [];
+    return codecs.some((codec) => /h265|hevc/i.test(codec.mimeType));
+  } catch {
+    return false;
+  }
+})();
+const MSE_DECODES_HEVC = (() => {
+  try {
+    return typeof MediaSource !== 'undefined' && (
+      MediaSource.isTypeSupported('video/mp4; codecs="hvc1.1.6.L123.B0"')
+      || MediaSource.isTypeSupported('video/mp4; codecs="hev1.1.6.L123.B0"')
+    );
+  } catch {
+    return false;
+  }
+})();
+// Este navegador consegue exibir H.265 por ALGUM caminho? Se não, o modo "Máxima"
+// (H.265 original) cai automaticamente para "Equilibrado" (H.264) — o seletor avisa.
+const BROWSER_DECODES_HEVC = WEBRTC_DECODES_HEVC || MSE_DECODES_HEVC;
 export type LivePlayerStatus = {
   activeProtocol: ActiveLiveProtocol | null;
   state: 'loading' | 'playing' | 'fallback' | 'error';
@@ -120,6 +174,17 @@ type LiveDetection = {
   overlayMode?: string | null;
   trackId?: number | null;
 };
+
+// Mensagens internas de falha citam protocolo/infra (WebRTC, WHEP, MediaMTX…).
+// Isso é útil em log/diagnóstico, mas NUNCA deve ser a mensagem principal para o
+// operador — ele não é técnico. Na UI mostramos um texto humano e o detalhe
+// técnico fica recolhido em "Detalhes técnicos".
+const TECHNICAL_LIVE_MESSAGE_REGEX = /protocolo|webrtc|whep|hls|mediamtx|codec|sdp|token|stream|ffmpeg|ice|manifesto/i;
+
+function friendlyLiveText(raw: string | null, fallback: string) {
+  if (!raw) return fallback;
+  return TECHNICAL_LIVE_MESSAGE_REGEX.test(raw) ? fallback : raw;
+}
 
 function normalizeCodec(codec?: string | null) {
   return String(codec ?? '').trim().toLowerCase();
@@ -314,6 +379,14 @@ export function LiveStreamPlayer({
   const [detections, setDetections] = useState<LiveDetection[]>([]);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [protocolReason, setProtocolReason] = useState<string | null>(null);
+  // Aviso VISÍVEL e temporário para o usuário (ex.: "Máxima caiu p/ H.264 — sem HEVC").
+  // Diferente do protocolReason (que só sobe pro pai); este aparece na tela e some só.
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 7000);
+    return () => window.clearTimeout(t);
+  }, [notice]);
   const [displayFps, setDisplayFps] = useState<number | null>(null);
   const [sourceVideoCodec, setSourceVideoCodec] = useState<string | null>(null);
   const [isTranscodedForBrowser, setIsTranscodedForBrowser] = useState(false);
@@ -325,11 +398,48 @@ export function LiveStreamPlayer({
   const suspendedRef = useRef(false);
   const suspendTimerRef = useRef<number | null>(null);
   const [zoom, setZoom] = useState(1);
+  // Qualidade da câmera única (1x1): persistida por câmera; na grade é sempre 'grid'.
+  const [qualityMode, setQualityMode] = useState<LiveQualityMode>(() => getStoredLiveQuality(cameraId));
+  useEffect(() => {
+    setQualityMode(getStoredLiveQuality(cameraId));
+  }, [cameraId]);
+  const deliveryMode: LiveDeliveryMode = liveViewMode === 'selected'
+    ? (qualityMode === 'instant' ? 'grid' : qualityMode === 'max' ? 'original' : 'selected')
+    : 'grid';
+
+  const changeQuality = useCallback((next: LiveQualityMode) => {
+    // Guard: "Máxima" numa câmera H.265 + navegador sem HEVC não pode funcionar.
+    // Evita o "pulo" do botão e uma reconexão inútil — avisa e mantém o modo atual.
+    if (
+      next === 'max'
+      && !BROWSER_DECODES_HEVC
+      && /h265|hevc|hvc1|265/i.test(String(sourceVideoCodec ?? ''))
+    ) {
+      setNotice('Máxima indisponível neste navegador (não reproduz H.265). Mantido em H.264. No Safari, a Máxima mostra o H.265 original.');
+      return;
+    }
+    setQualityMode((current) => {
+      if (current === next) return current;
+      storeLiveQuality(cameraId, next);
+      failedProtocolsRef.current.clear();
+      retryAttemptRef.current = 0;
+      setRetryMessage(next === 'max' ? 'Abrindo vídeo original da câmera…' : 'Ajustando qualidade…');
+      // Mantém o último frame na tela durante a renegociação (sem tela preta).
+      if (hasFrameRef.current) preserveFrameOnReloadRef.current = true;
+      return next;
+    });
+  }, [cameraId, sourceVideoCodec]);
+
   const compactLiveOverlay = liveViewMode === 'grid';
-  const loadingLabel = compactLiveOverlay ? 'Conectando…' : retryMessage ?? 'Aguardando vídeo';
-  const compactErrorLabel = error && /Nenhum protocolo|WebRTC|WHEP|HLS|MediaMTX|codec/i.test(error)
+  const loadingLabel = compactLiveOverlay
+    ? 'Conectando…'
+    : retryMessage
+      ? friendlyLiveText(retryMessage, 'Reconectando à câmera…')
+      : 'Aguardando vídeo';
+  const compactErrorLabel = error && TECHNICAL_LIVE_MESSAGE_REGEX.test(error)
     ? 'Reconectando…'
     : 'Sem vídeo';
+  const errorIsTechnical = Boolean(error && TECHNICAL_LIVE_MESSAGE_REGEX.test(error));
 
   const tokenHeaders = useMemo(
     () => (accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined),
@@ -402,14 +512,17 @@ export function LiveStreamPlayer({
     if (previousLiveViewModeRef.current === liveViewMode) return;
     previousLiveViewModeRef.current = liveViewMode;
     failedProtocolsRef.current.clear();
-    requestFreshLiveBoot(
-      liveViewMode === 'selected'
-        ? 'Abrindo câmera individual na resolução original...'
-        : 'Ajustando câmera para o grid padrão...',
-      true,
-      true,
-    );
-  }, [liveViewMode, requestFreshLiveBoot]);
+    // O reboot do stream acontece pelo próprio effect de boot (deliveryMode nas
+    // dependências). Aqui só preparamos a transição: mensagem amigável e
+    // preservação do último frame — sem bump de nonce, senão o boot rodaria DUAS
+    // vezes na troca grade↔individual (piscada).
+    setRetryMessage(liveViewMode === 'selected' ? 'Abrindo câmera individual…' : 'Ajustando para a grade…');
+    setError(null);
+    if (hasFrameRef.current) {
+      preserveFrameOnReloadRef.current = true;
+      setIsLoading(false);
+    }
+  }, [liveViewMode]);
 
   const isLikelyBlackFrame = useCallback((element: HTMLVideoElement) => {
     if (element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || element.videoWidth <= 0 || element.videoHeight <= 0) {
@@ -558,7 +671,7 @@ export function LiveStreamPlayer({
         // A chave usa câmera + modo de visualização. Grid e câmera individual
         // precisam perfis diferentes, mas ainda evitamos incluir o JWT para não
         // deixar entradas órfãs no cache.
-        const cacheKey = `stream-urls:${authUserId}:${cameraId}:${liveViewMode}`;
+        const cacheKey = `stream-urls:${authUserId}:${cameraId}:${deliveryMode}`;
         const data = await streamUrlsCache.getOrFetch(
           cacheKey,
           () => axios.get<{
@@ -585,7 +698,7 @@ export function LiveStreamPlayer({
             `${API_URL}/camera-stream/${cameraId}/urls`,
             {
               headers: tokenHeaders,
-              params: { viewMode: liveViewMode },
+              params: { viewMode: deliveryMode },
             },
           ).then(res => res.data),
           STREAM_URL_CACHE_TTL_MS,
@@ -616,6 +729,28 @@ export function LiveStreamPlayer({
           failedProtocolsRef.current.clear();
           protocolOrder = orderedProtocols;
           setProtocolReason('Reconectando transmissão.');
+        }
+
+        // Modo "Máxima qualidade" com fonte H.265: só protocolos que este navegador
+        // decodifica (WebRTC-HEVC quando disponível — latência mínima; senão
+        // LL-HLS/HLS via MSE). Sem nenhum suporte → volta sozinho ao equilibrado.
+        if (deliveryMode === 'original' && /h265|hevc/i.test(String(sourceCodec ?? ''))) {
+          const capable: LiveProtocol[] = [];
+          if (WEBRTC_DECODES_HEVC) capable.push('webrtc');
+          if (MSE_DECODES_HEVC) capable.push('llhls', 'hls');
+          if (!capable.length) {
+            storeLiveQuality(cameraId, 'balanced');
+            setQualityMode('balanced');
+            failedProtocolsRef.current.clear();
+            setProtocolReason('Este navegador não decodifica H.265 — usando o modo equilibrado (H.264).');
+            setNotice('Máxima indisponível neste navegador (não reproduz H.265). Exibindo em H.264. No Safari, a Máxima mostra o H.265 original.');
+            return;
+          }
+          protocolOrder = capable.filter((protocol) => !failedProtocolsRef.current.has(protocol));
+          if (!protocolOrder.length) {
+            failedProtocolsRef.current.clear();
+            protocolOrder = capable;
+          }
         }
 
         if (rawPosterUrl && streamToken) {
@@ -1251,7 +1386,7 @@ export function LiveStreamPlayer({
         element.load();
       }
     };
-  }, [accessToken, authUserId, autoPlay, cameraId, failActiveProtocol, getFastRetryDelay, isLikelyBlackFrame, requestFreshLiveBoot, startDelayMs, tokenHeaders, reloadNonce, suspended]);
+  }, [accessToken, authUserId, autoPlay, cameraId, deliveryMode, failActiveProtocol, getFastRetryDelay, isLikelyBlackFrame, requestFreshLiveBoot, startDelayMs, tokenHeaders, reloadNonce, suspended]);
 
   useEffect(() => {
     const element = videoRef.current;
@@ -1610,16 +1745,35 @@ export function LiveStreamPlayer({
         };
       }
 
-      // Latency Drift Watchdog: force sync if we fall behind the live edge
+      // Recuperação de latência (HLS/LL-HLS). Antes: SALTO seco para a borda ao
+      // vivo sempre que a deriva passava de 3,5s — visível como "pulo" na imagem.
+      // Agora, técnica do Frigate: deriva moderada é absorvida ACELERANDO a
+      // reprodução suavemente (curva exponencial, teto 1,5×) até reencostar no
+      // ao vivo — o operador não percebe o ajuste. O salto seco fica só para
+      // deriva grande (ex.: aba oculta), onde acelerar demoraria demais.
       if (protocol === 'HLS' || protocol === 'LL-HLS') {
         const ranges = element.seekable;
         if (ranges.length > 0) {
           const liveEdge = ranges.end(ranges.length - 1);
           const drift = liveEdge - element.currentTime;
-          if (Number.isFinite(drift) && drift > 3.5) {
-            seekVideoToLiveEdge(element);
+          if (Number.isFinite(drift)) {
+            if (drift > LIVE_DRIFT_HARD_SEEK_SECONDS) {
+              element.playbackRate = 1;
+              seekVideoToLiveEdge(element);
+            } else if (drift > LIVE_DRIFT_CATCHUP_SECONDS) {
+              const rate = Math.min(
+                LIVE_DRIFT_MAX_RATE,
+                1 + 0.2 * Math.exp(0.5 * (drift - LIVE_DRIFT_CATCHUP_SECONDS)),
+              );
+              if (Math.abs(element.playbackRate - rate) > 0.02) element.playbackRate = rate;
+            } else if (element.playbackRate !== 1) {
+              element.playbackRate = 1; // reencostou: volta ao tempo normal
+            }
           }
         }
+      } else if (element.playbackRate !== 1) {
+        // WebRTC não acumula buffer: nunca deve ficar acelerado.
+        element.playbackRate = 1;
       }
     }, LIVE_STALL_CHECK_INTERVAL_MS);
 
@@ -1801,9 +1955,15 @@ export function LiveStreamPlayer({
           <div className="max-w-[85%] rounded-lg border border-[hsl(var(--destructive)_/_0.3)] bg-[hsl(var(--destructive)_/_0.1)] px-4 py-3 text-center text-xs text-[hsl(var(--destructive))]">
             <div className="mb-2 flex items-center justify-center gap-2">
               <AlertTriangle className="h-4 w-4" />
-              Stream indisponível
+              Sem imagem da câmera
             </div>
-            <div>{error}</div>
+            <div>{friendlyLiveText(error, 'Não foi possível conectar à câmera agora. A reconexão é automática — verifique se a câmera está ligada e com rede.')}</div>
+            {errorIsTechnical && (
+              <details className="mt-2 text-left text-[10px] text-[hsl(var(--destructive))]/70">
+                <summary className="cursor-pointer select-none">Detalhes técnicos</summary>
+                <div className="mt-1 break-words font-mono text-[9px]">{error}</div>
+              </details>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -1819,26 +1979,90 @@ export function LiveStreamPlayer({
         </div>
       )}
 
+      {notice && !error && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-4">
+          <div
+            role="status"
+            className="pointer-events-auto flex max-w-[92%] items-start gap-2 rounded-lg border border-amber-400/40 bg-black/80 px-3 py-2 text-[11.5px] leading-snug text-amber-100 shadow-lg backdrop-blur-sm"
+          >
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+            <span>{notice}</span>
+            <button
+              type="button"
+              aria-label="Fechar aviso"
+              onClick={() => setNotice(null)}
+              className="ml-1 shrink-0 rounded px-1 text-amber-200/70 hover:text-white focus-visible:outline focus-visible:outline-1 focus-visible:outline-amber-300"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {zoom > 1 && (
         <div className="absolute top-2 left-2 z-30 rounded-sm border border-white/10 bg-black/45 px-1.5 py-0.5 text-[9px] font-mono text-white/70">
           {zoom.toFixed(1)}×
         </div>
       )}
 
-      {showOverlay && (activeProtocol || displayFps != null) && (
-        <div className="absolute top-2 right-2 z-30 flex max-w-[70%] flex-wrap items-center justify-end gap-1.5 opacity-60 transition-opacity hover:opacity-95">
+      {showOverlay && (activeProtocol || displayFps != null || liveViewMode === 'selected') && (
+        <div className="absolute top-2 right-2 z-30 flex max-w-[78%] flex-wrap items-center justify-end gap-1.5 opacity-85 transition-opacity hover:opacity-100">
+          {liveViewMode === 'selected' && (
+            <span
+              role="group"
+              aria-label="Qualidade da transmissão ao vivo"
+              className="inline-flex items-center gap-0.5 rounded-md border border-white/15 bg-black/60 p-0.5 backdrop-blur-sm shadow-sm"
+            >
+              {([
+                ['instant', 'Instantâneo', 'Substream da câmera: imagem menor, menor latência e menos banda. Use em redes lentas ou muitas câmeras.'],
+                ['balanced', 'Equilibrado', 'Resolução original convertida para H.264 — compatível com todos os navegadores. Padrão recomendado.'],
+                [
+                  'max',
+                  'Máxima',
+                  BROWSER_DECODES_HEVC
+                    ? 'Vídeo original da câmera sem conversão (preserva o H.265 quando a câmera usa esse codec). Pode ter 1–3 s de atraso.'
+                    : 'Vídeo original sem conversão. Este navegador NÃO reproduz H.265 — em câmeras H.265 a exibição volta automaticamente ao Equilibrado (H.264). No Safari, mostra o H.265 real.',
+                ],
+              ] as const).map(([mode, label, hint]) => {
+                const isActive = qualityMode === mode;
+                // Máxima só "degrada" quando a câmera ATUAL é H.265 E o navegador não a
+                // decodifica → aí a Máxima cai para H.264. Numa câmera H.264, a Máxima
+                // (passthrough) funciona em qualquer navegador, então não marca nada.
+                const cameraIsHevc = /h265|hevc|hvc1|265/i.test(String(sourceVideoCodec ?? ''));
+                const maxDegraded = mode === 'max' && !BROWSER_DECODES_HEVC && cameraIsHevc;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    title={hint}
+                    aria-pressed={isActive}
+                    aria-label={`Qualidade ${label}`}
+                    onClick={() => changeQuality(mode)}
+                    className={`inline-flex h-6 items-center gap-1 rounded px-2 text-[10.5px] font-semibold tracking-wide transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-white ${
+                      isActive
+                        ? 'bg-[hsl(var(--primary))] text-white shadow'
+                        : 'text-white/75 hover:bg-white/15 hover:text-white'
+                    }`}
+                  >
+                    {label}
+                    {maxDegraded ? <span className="text-[8px] font-normal opacity-70" aria-hidden="true">H.265</span> : null}
+                  </button>
+                );
+              })}
+            </span>
+          )}
           {!compactLiveOverlay && videoRef.current?.videoWidth ? (
-            <span className="inline-flex h-4 items-center rounded-sm border border-white/10 bg-black/40 px-1.5 text-[8px] font-medium tracking-wider text-white/70">
+            <span className="inline-flex h-6 items-center rounded border border-white/15 bg-black/55 px-2 text-[10px] font-semibold tracking-wide text-white/80">
               {videoRef.current.videoWidth}×{videoRef.current.videoHeight}
             </span>
           ) : null}
           {!compactLiveOverlay && sourceVideoCodec ? (
-            <span className="inline-flex h-4 items-center rounded-sm border border-white/10 bg-black/40 px-1.5 text-[8px] font-medium uppercase tracking-wider text-white/70">
+            <span className="inline-flex h-6 items-center rounded border border-white/15 bg-black/55 px-2 text-[10px] font-semibold uppercase tracking-wide text-white/80">
               {sourceVideoCodec}{isTranscodedForBrowser ? ' → H.264' : ''}
             </span>
           ) : null}
           {!compactLiveOverlay && measuredBitrateKbps != null ? (
-            <span className="inline-flex h-4 items-center rounded-sm border border-white/10 bg-black/40 px-1.5 text-[8px] font-medium tracking-wider text-white/70">
+            <span className="inline-flex h-6 items-center rounded border border-white/15 bg-black/55 px-2 text-[10px] font-semibold tracking-wide text-white/80">
               {measuredBitrateKbps >= 1000
                 ? `${(measuredBitrateKbps / 1000).toFixed(1)} Mbps`
                 : `${measuredBitrateKbps} kbps`}
